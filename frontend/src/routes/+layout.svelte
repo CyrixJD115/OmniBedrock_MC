@@ -10,13 +10,13 @@
   let { children }: { children: import('svelte').Snippet } = $props();
 
   let sidebarOpen = $state(true);
-  let authToken = $state(localStorage.getItem('auth_token') || '');
+  let authToken = $state(typeof localStorage !== 'undefined' ? localStorage.getItem('auth_token') || '' : '');
   let showAuthPrompt = $derived(!authToken);
 
   function handleAuth(token: string) {
     authToken = token;
     showAuthPrompt = false;
-    localStorage.setItem('auth_token', token);
+    if (typeof localStorage !== 'undefined') localStorage.setItem('auth_token', token);
     setToken(token);
     initConnections();
   }

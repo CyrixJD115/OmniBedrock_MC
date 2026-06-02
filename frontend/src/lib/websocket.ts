@@ -1,6 +1,9 @@
 import { api, setToken } from '$lib/api/client';
 
-const WS_BASE = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}`;
+function getWsBase(): string {
+  if (typeof location === 'undefined') return 'ws://localhost:17754';
+  return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}`;
+}
 
 type MessageHandler = (data: Record<string, unknown>) => void;
 
@@ -11,7 +14,8 @@ class WebSocketManager {
     const key = path;
 
     if (!this.connections.has(key)) {
-      const url = `${WS_BASE}${path}`;
+      const wsBase = getWsBase();
+      const url = `${wsBase}${path}`;
       const ws = new WebSocket(url);
       const handlers = new Set<MessageHandler>([onMessage]);
       const entry = { ws, handlers };
