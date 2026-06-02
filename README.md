@@ -1,4 +1,8 @@
-# OmniBedrock MC
+<p align="center">
+  <img src="assets/OmniBedrock_Icon.png" alt="OmniBedrock" width="120">
+</p>
+
+# OmniBedrock
 
 A modern, powerful web-based Minecraft Bedrock server control panel. Migrated from PySide6 to a full-stack FastAPI + SvelteKit architecture.
 
