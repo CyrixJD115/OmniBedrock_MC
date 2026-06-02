@@ -31,7 +31,8 @@ def start_backend(reload: bool = True) -> subprocess.Popen:
         venv_python = ROOT / ".venv" / "Scripts" / "python.exe"
     if not venv_python.exists():
         venv_python = "python3"
-    cmd = [str(venv_python), "-m", "uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    port = os.getenv("OMNI_PORT", "17755")
+    cmd = [str(venv_python), "-m", "uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", port]
     if reload:
         cmd.append("--reload")
     print(f"[backend] Starting: {' '.join(cmd)}")
