@@ -1,4 +1,3 @@
-import { api, setToken } from '$lib/api/client';
 
 function getWsBase(): string {
   if (typeof location === 'undefined') return 'ws://localhost:17754';
@@ -18,7 +17,7 @@ class WebSocketManager {
       const url = `${wsBase}${path}`;
       const ws = new WebSocket(url);
       const handlers = new Set<MessageHandler>([onMessage]);
-      const entry = { ws, handlers };
+      const entry: { ws: WebSocket; handlers: Set<MessageHandler>; reconnectTimer?: ReturnType<typeof setTimeout> } = { ws, handlers };
 
       ws.onopen = () => {
         if (entry.reconnectTimer) {

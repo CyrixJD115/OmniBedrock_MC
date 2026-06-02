@@ -4,7 +4,6 @@ import asyncio
 import logging
 import time
 
-from backend.app.core.config import settings
 from backend.app.models.server import ServerStatus
 
 logger = logging.getLogger("performance_collector")
@@ -66,7 +65,6 @@ class PerformanceCollector:
                 logger.debug("Metrics collection error: %s", e)
 
     def _collect(self) -> dict:
-        import os
         import psutil
 
         status = self._server_manager.status if self._server_manager else ServerStatus.stopped

@@ -1,73 +1,70 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api } from '$lib/api/client';
+  import { addToast } from '$stores/toast';
   import { formatBytes } from '$lib/utils';
-  import { Globe, FolderOpen, RefreshCw } from '@lucide/svelte';
+  import { Globe } from '@lucide/svelte';
 
   let worlds = $state<string[]>([]);
-  let selectedWorld = $state('');
-  let worldInfo = $state<any>(null);
+  let selected = $state('');
+  let info: any = $state(null);
   let loading = $state(true);
 
   onMount(async () => {
     try {
       worlds = await api.listWorldsInfo();
-      if (worlds.length > 0) {
-        selectedWorld = worlds[0];
-        worldInfo = await api.getWorldInfo(selectedWorld);
-      }
-    } catch { /* ignore */ }
+      if (worlds.length) { selected = worlds[0]; info = await api.getWorldInfo(selected); }
+    } catch (e: any) { addToast(`Failed: ${e.message}`, 'error'); }
     loading = false;
   });
 
-  async function selectWorld(name: string) {
-    selectedWorld = name;
-    worldInfo = await api.getWorldInfo(name);
+  async function select(name: string) {
+    selected = name;
+    try { info = await api.getWorldInfo(name); }
+    catch (e: any) { addToast(`Failed: ${e.message}`, 'error'); }
   }
 </script>
 
 <div class="space-y-4">
-  <div class="flex items-center justify-between">
-    <h1 class="text-2xl font-bold text-white">Worlds</h1>
+  <div>
+    <h1 class="text-lg font-bold text-white uppercase tracking-widest">Worlds</h1>
+    <div class="pixel-divider mt-2 w-24"></div>
   </div>
 
   <div class="grid grid-cols-1 lg:grid-cols-4 gap-4">
     <div class="card lg:col-span-1">
-      <h2 class="card-header">Available Worlds</h2>
-      <div class="space-y-2">
+      <h2 class="card-header">Available</h2>
+      <div class="space-y-1">
         {#each worlds as w}
-          <button onclick={() => selectWorld(w)}
-                  class={"w-full text-left flex items-center gap-3 p-2.5 rounded-lg transition-colors " + (selectedWorld === w ? "bg-bedrock-600/20 text-bedrock-300" : "hover:bg-surface-800")}>
-            <Globe size={16} class="text-bedrock-400" />
-            <span class="text-sm font-medium">{w}</span>
-          </button>
-        {:else}
-          <p class="text-surface-500 text-sm">No worlds found</p>
-        {/each}
+          <div onclick={() => select(w)} onkeydown={(e) => e.key === 'Enter' && select(w)}
+               role="button" tabindex="0"
+               class={"flex items-center gap-2 p-2 text-xs uppercase tracking-wider cursor-pointer border-l-2 transition-all " + (selected === w ? 'bg-bedrock-500/10 border-bedrock-400 text-bedrock-300' : 'border-transparent hover:border-deep-500 text-deep-300 hover:bg-deep-800/50')}>
+            <Globe size={14} class="shrink-0 text-bedrock-400" />
+            <span>{w}</span>
+          </div>
+        {:else}<p class="text-deep-500 text-xs py-4">No worlds</p>{/each}
       </div>
     </div>
 
     <div class="card lg:col-span-3">
-      {#if worldInfo}
-        <h2 class="card-header">{worldInfo.name}</h2>
-        <div class="grid grid-cols-3 gap-4 mb-4">
-          <div class="bg-surface-800 rounded-lg p-3">
-            <p class="text-xs text-surface-400 mb-1">Size</p>
-            <p class="text-lg font-bold text-white">{formatBytes(worldInfo.size_bytes)}</p>
+      {#if info}
+        <h2 class="card-header">{info.name}</h2>
+        <div class="grid grid-cols-3 gap-3 mb-4">
+          <div class="bg-deep-900/80 border border-deep-600/30 p-3">
+            <p class="text-[10px] text-deep-400 uppercase tracking-wider mb-1">Size</p>
+            <p class="text-sm font-bold text-white font-mono">{formatBytes(info.size_bytes)}</p>
           </div>
-          <div class="bg-surface-800 rounded-lg p-3">
-            <p class="text-xs text-surface-400 mb-1">Files</p>
-            <p class="text-lg font-bold text-white">{worldInfo.files.toLocaleString()}</p>
+          <div class="bg-deep-900/80 border border-deep-600/30 p-3">
+            <p class="text-[10px] text-deep-400 uppercase tracking-wider mb-1">Files</p>
+            <p class="text-sm font-bold text-white font-mono">{info.files.toLocaleString()}</p>
           </div>
-          <div class="bg-surface-800 rounded-lg p-3">
-            <p class="text-xs text-surface-400 mb-1">Path</p>
-            <p class="text-sm font-mono text-surface-300 truncate">{worldInfo.path}</p>
+          <div class="bg-deep-900/80 border border-deep-600/30 p-3">
+            <p class="text-[10px] text-deep-400 uppercase tracking-wider mb-1">Path</p>
+            <p class="text-xs font-mono text-deep-300 truncate">{info.path}</p>
           </div>
         </div>
       {:else}
-        <div class="flex items-center justify-center h-48 text-surface-500">
-          Select a world to view details
-        </div>
+        <div class="flex items-center justify-center h-48 text-deep-500 text-xs uppercase tracking-wider">Select a world</div>
       {/if}
     </div>
   </div>

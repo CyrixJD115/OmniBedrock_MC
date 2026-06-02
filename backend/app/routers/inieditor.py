@@ -6,12 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from backend.app.core.config import settings
 from backend.app.core.security import verify_token
+from backend.app.models.user import User
 
 router = APIRouter(prefix="/files", tags=["files"])
 
 
 @router.get("/")
-async def list_ini_files(auth: str = Depends(verify_token)) -> list[dict]:
+async def list_ini_files(_user: User = Depends(verify_token)) -> list[dict]:
     ini_dir = Path(settings.ini_dir)
     if not ini_dir.exists():
         return []
@@ -28,7 +29,7 @@ async def list_ini_files(auth: str = Depends(verify_token)) -> list[dict]:
 
 
 @router.get("/{filename}")
-async def read_file(filename: str, auth: str = Depends(verify_token)) -> dict:
+async def read_file(filename: str, _user: User = Depends(verify_token)) -> dict:
     file_path = Path(settings.ini_dir) / filename
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
@@ -39,7 +40,7 @@ async def read_file(filename: str, auth: str = Depends(verify_token)) -> dict:
 
 
 @router.put("/{filename}")
-async def write_file(filename: str, body: dict, auth: str = Depends(verify_token)) -> dict:
+async def write_file(filename: str, body: dict, _user: User = Depends(verify_token)) -> dict:
     file_path = Path(settings.ini_dir) / filename
     content = body.get("content", "")
     file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -48,7 +49,7 @@ async def write_file(filename: str, body: dict, auth: str = Depends(verify_token
 
 
 @router.delete("/{filename}")
-async def delete_file(filename: str, auth: str = Depends(verify_token)) -> dict:
+async def delete_file(filename: str, _user: User = Depends(verify_token)) -> dict:
     file_path = Path(settings.ini_dir) / filename
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File not found")

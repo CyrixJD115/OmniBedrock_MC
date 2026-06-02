@@ -6,9 +6,10 @@ venv/
 node_modules/
 .env
 *.log
-backend/bedrock_server/
+bedrock_server/
 backend/backups/
 backend/ini/
+backend/logs/
 dist/
 build/
 .DS_Store

@@ -3,7 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 
 from backend.app.core.security import verify_token
-from backend.app.schemas.addon import AddonListResponse, AddonReorderRequest, ManifestUpdateRequest
+from backend.app.models.user import User
+from backend.app.schemas.addon import AddonReorderRequest, ManifestUpdateRequest
 from backend.app.services.addon_service import AddonService
 
 router = APIRouter(prefix="/addons", tags=["addons"])
@@ -12,12 +13,12 @@ _service = AddonService()
 
 
 @router.get("/")
-async def list_addons(auth: str = Depends(verify_token)) -> dict:
+async def list_addons(_user: User = Depends(verify_token)) -> dict:
     return _service.list_addons()
 
 
 @router.get("/manifest")
-async def get_manifest(path: str, auth: str = Depends(verify_token)) -> dict:
+async def get_manifest(path: str, _user: User = Depends(verify_token)) -> dict:
     manifest = _service.get_manifest(path)
     if manifest is None:
         raise HTTPException(status_code=404, detail="Manifest not found")
@@ -25,7 +26,7 @@ async def get_manifest(path: str, auth: str = Depends(verify_token)) -> dict:
 
 
 @router.put("/manifest")
-async def update_manifest(req: ManifestUpdateRequest, auth: str = Depends(verify_token)) -> dict:
+async def update_manifest(req: ManifestUpdateRequest, _user: User = Depends(verify_token)) -> dict:
     ok = _service.update_manifest(req.path, req.manifest)
     if not ok:
         raise HTTPException(status_code=500, detail="Failed to update manifest")
@@ -33,12 +34,14 @@ async def update_manifest(req: ManifestUpdateRequest, auth: str = Depends(verify
 
 
 @router.get("/order/{world}/{pack_type}")
-async def get_pack_order(world: str, pack_type: str, auth: str = Depends(verify_token)) -> list[dict]:
+async def get_pack_order(world: str, pack_type: str, _user: User = Depends(verify_token)) -> list[dict]:
     return _service.get_pack_order(world, pack_type)
 
 
 @router.put("/order/{world}/{pack_type}")
-async def set_pack_order(world: str, pack_type: str, req: AddonReorderRequest, auth: str = Depends(verify_token)) -> dict:
+async def set_pack_order(
+    world: str, pack_type: str, req: AddonReorderRequest, _user: User = Depends(verify_token)
+) -> dict:
     ok = _service.set_pack_order(world, pack_type, req.uuids)
     if not ok:
         raise HTTPException(status_code=500, detail="Failed to update pack order")

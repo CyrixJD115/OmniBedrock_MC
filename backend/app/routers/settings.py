@@ -3,13 +3,15 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from backend.app.core.security import verify_token
-from backend.app.core.config import settings
+from backend.app.core.config import settings as app_settings
+from backend.app.core.dependencies import server_manager
+from backend.app.core.security import require_role, verify_token
+from backend.app.models.user import User, UserRole
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
 
-class SettingsResponse(BaseModel):
+class AppSettingsResponse(BaseModel):
     app_name: str
     debug: bool
     bedrock_server_dir: str
@@ -18,13 +20,61 @@ class SettingsResponse(BaseModel):
     logs_dir: str
 
 
+class ServerSettingsRequest(BaseModel):
+    auto_restart: bool | None = None
+    auto_restart_delay: int | None = None
+    max_crashes: int | None = None
+    stop_timeout: int | None = None
+    kill_timeout: int | None = None
+
+
+class ServerSettingsResponse(BaseModel):
+    auto_restart: bool
+    auto_restart_delay: int
+    max_crashes: int
+    stop_timeout: int
+    kill_timeout: int
+    crash_count: int
+
+
 @router.get("/")
-async def get_settings(auth: str = Depends(verify_token)) -> SettingsResponse:
-    return SettingsResponse(
-        app_name=settings.app_name,
-        debug=settings.debug,
-        bedrock_server_dir=settings.bedrock_server_dir,
-        backups_dir=settings.backups_dir,
-        ini_dir=settings.ini_dir,
-        logs_dir=settings.logs_dir,
+async def get_settings(_user: User = Depends(verify_token)) -> AppSettingsResponse:
+    return AppSettingsResponse(
+        app_name=app_settings.app_name,
+        debug=app_settings.debug,
+        bedrock_server_dir=app_settings.bedrock_server_dir,
+        backups_dir=app_settings.backups_dir,
+        ini_dir=app_settings.ini_dir,
+        logs_dir=app_settings.logs_dir,
     )
+
+
+@router.get("/server")
+async def get_server_settings(_user: User = Depends(verify_token)) -> ServerSettingsResponse:
+    return ServerSettingsResponse(
+        auto_restart=server_manager.auto_restart,
+        auto_restart_delay=server_manager._auto_restart_delay,
+        max_crashes=server_manager._max_crashes,
+        stop_timeout=server_manager._stop_timeout,
+        kill_timeout=server_manager._kill_timeout,
+        crash_count=server_manager.crash_count,
+    )
+
+
+@router.put("/server")
+async def update_server_settings(
+    req: ServerSettingsRequest,
+    _user: User = Depends(require_role(UserRole.admin, UserRole.owner)),
+) -> dict:
+    if req.auto_restart is not None or req.auto_restart_delay is not None or req.max_crashes is not None:
+        server_manager.set_auto_restart(
+            enabled=req.auto_restart if req.auto_restart is not None else server_manager.auto_restart,
+            delay=req.auto_restart_delay,
+            max_crashes=req.max_crashes,
+        )
+    if req.stop_timeout is not None or req.kill_timeout is not None:
+        server_manager.set_grace_periods(
+            stop_timeout=req.stop_timeout if req.stop_timeout is not None else server_manager._stop_timeout,
+            kill_timeout=req.kill_timeout if req.kill_timeout is not None else server_manager._kill_timeout,
+        )
+    return {"success": True, "message": "Server settings updated"}

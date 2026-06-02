@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import aiofiles
 import asyncio
 import json
 import logging
 from pathlib import Path
 
+import aiofiles
 from fastapi import WebSocket
 
 from backend.app.core.config import settings

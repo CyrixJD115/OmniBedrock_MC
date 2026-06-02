@@ -6,12 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from backend.app.core.config import settings
 from backend.app.core.security import verify_token
+from backend.app.models.user import User
 
 router = APIRouter(prefix="/worlds", tags=["worlds"])
 
 
 @router.get("/")
-async def list_worlds(auth: str = Depends(verify_token)) -> list[str]:
+async def list_worlds(_user: User = Depends(verify_token)) -> list[str]:
     worlds_dir = Path(settings.bedrock_server_dir) / "worlds"
     if not worlds_dir.exists():
         return []
@@ -19,7 +20,7 @@ async def list_worlds(auth: str = Depends(verify_token)) -> list[str]:
 
 
 @router.get("/{world}")
-async def get_world_info(world: str, auth: str = Depends(verify_token)) -> dict:
+async def get_world_info(world: str, _user: User = Depends(verify_token)) -> dict:
     world_path = Path(settings.bedrock_server_dir) / "worlds" / world
     if not world_path.exists():
         raise HTTPException(status_code=404, detail="World not found")
@@ -36,7 +37,7 @@ async def get_world_info(world: str, auth: str = Depends(verify_token)) -> dict:
 
 
 @router.get("/{world}/contents")
-async def get_world_contents(world: str, auth: str = Depends(verify_token)) -> dict:
+async def get_world_contents(world: str, _user: User = Depends(verify_token)) -> dict:
     world_path = Path(settings.bedrock_server_dir) / "worlds" / world
     if not world_path.exists():
         raise HTTPException(status_code=404, detail="World not found")

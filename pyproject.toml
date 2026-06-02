@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "Modern web-based Minecraft Bedrock server control panel"
 requires-python = ">=3.11"
 dependencies = [
+    "endstone>=0.11.0",
+    "pyjwt>=2.13.0",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
     "websockets>=14.0",

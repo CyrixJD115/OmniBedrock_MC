@@ -3,27 +3,27 @@
   import { api } from '$lib/api/client';
   import { Settings as SettingsIcon } from '@lucide/svelte';
 
-  let appSettings = $state<Record<string, unknown>>({});
-  let loading = $state(true);
+  let s = $state<Record<string, unknown>>({});
 
   onMount(async () => {
-    try {
-      appSettings = await api.getSettings();
-    } catch { /* ignore */ }
-    loading = false;
+    try { s = await api.getSettings(); }
+    catch { /* silent */ }
   });
 </script>
 
 <div class="space-y-4">
-  <h1 class="text-2xl font-bold text-white">Settings</h1>
+  <div>
+    <h1 class="text-lg font-bold text-white uppercase tracking-widest">Settings</h1>
+    <div class="pixel-divider mt-2 w-24"></div>
+  </div>
 
   <div class="card">
-    <h2 class="card-header">Application Settings</h2>
-    <div class="space-y-4">
-      {#each Object.entries(appSettings) as [key, value]}
-        <div class="flex items-center justify-between py-2 border-b border-surface-800 last:border-0">
-          <span class="text-sm text-surface-300 font-mono">{key}</span>
-          <span class="text-sm text-surface-400">{String(value)}</span>
+    <h2 class="card-header">Application</h2>
+    <div class="space-y-3">
+      {#each Object.entries(s) as [k, v]}
+        <div class="flex items-center justify-between py-2 border-b border-deep-600/20 last:border-0">
+          <span class="text-xs font-mono text-deep-300">{k}</span>
+          <span class="text-xs text-deep-400">{String(v)}</span>
         </div>
       {/each}
     </div>

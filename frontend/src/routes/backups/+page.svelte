@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api } from '$lib/api/client';
+  import { addToast } from '$stores/toast';
   import { formatBytes } from '$lib/utils';
   import { HardDrive, Download, Trash2, Plus, RefreshCw } from '@lucide/svelte';
 
@@ -9,111 +10,113 @@
   let selectedWorld = $state('');
   let loading = $state(true);
   let creating = $state(false);
-  let schedulerEnabled = $state(false);
+  let schedEnabled = $state(false);
 
   onMount(async () => {
     try {
       worlds = await api.listWorlds();
-      if (worlds.length > 0) selectedWorld = worlds[0];
-      const res = await api.listBackups();
-      backups = res.backups;
-      const sched = await api.getSchedulerConfig();
-      schedulerEnabled = sched.enabled;
-    } catch { /* ignore */ }
+      if (worlds.length) selectedWorld = worlds[0];
+      const r = await api.listBackups();
+      backups = r.backups;
+      const s = await api.getSchedulerConfig();
+      schedEnabled = s.enabled;
+    } catch (e: any) { addToast(`Failed to load: ${e.message}`, 'error'); }
     loading = false;
   });
 
-  async function loadBackups() {
-    const res = await api.listBackups(selectedWorld || undefined);
-    backups = res.backups;
+  async function reload() {
+    try { const r = await api.listBackups(selectedWorld || undefined); backups = r.backups; } catch {}
   }
 
-  async function createBackup() {
+  async function create() {
+    if (!selectedWorld) return;
     creating = true;
-    await api.createBackup(selectedWorld, 'manual');
-    await loadBackups();
+    try {
+      await api.createBackup(selectedWorld, 'manual');
+      addToast('Backup created', 'success');
+      await reload();
+    } catch (e: any) { addToast(`Backup failed: ${e.message}`, 'error'); }
     creating = false;
   }
 
-  async function deleteBackup(world: string, filename: string) {
-    await api.deleteBackup(world, filename);
-    await loadBackups();
+  async function del(world: string, file: string) {
+    try {
+      await api.deleteBackup(world, file);
+      await reload();
+      addToast('Backup moved to trash', 'info', 6000, {
+        label: 'Undo',
+        callback: async () => {
+          try {
+            await api.restoreBackup(world, file);
+            addToast('Backup restored', 'success');
+            await reload();
+          } catch (e: any) { addToast(`Restore failed: ${e.message}`, 'error'); }
+        },
+      });
+    } catch (e: any) { addToast(`Delete failed: ${e.message}`, 'error'); }
   }
 
-  async function downloadBackup(world: string, filename: string) {
-    const token = (await import('$lib/api/client')).getToken();
-    window.open(`/api/v1/backups/${world}/${filename}/download?token=${token}`, '_blank');
+  function download(world: string, file: string) {
+    const token = (() => { const m = /omb_token=([^;]+)/.exec(document.cookie); return ''; })();
+    window.open(`/api/v1/backups/${world}/${file}/download`, '_blank');
   }
 
-  async function toggleScheduler() {
-    schedulerEnabled = !schedulerEnabled;
-    await api.updateScheduler({ enabled: schedulerEnabled, interval_minutes: 30, keep_count: 10 });
+  async function toggleSched() {
+    schedEnabled = !schedEnabled;
+    try {
+      await api.updateScheduler({ enabled: schedEnabled, interval_minutes: 30, keep_count: 10 });
+      addToast(schedEnabled ? 'Auto-backup on' : 'Auto-backup off', 'success');
+    } catch (e: any) { addToast(`Scheduler update failed: ${e.message}`, 'error'); schedEnabled = !schedEnabled; }
   }
 </script>
 
 <div class="space-y-4">
   <div class="flex items-center justify-between">
-    <h1 class="text-2xl font-bold text-white">Backups</h1>
+    <div>
+      <h1 class="text-lg font-bold text-white uppercase tracking-widest">Backups</h1>
+      <div class="pixel-divider mt-2 w-32"></div>
+    </div>
     <div class="flex gap-2">
-      <select bind:value={selectedWorld} onchange={loadBackups} class="input w-48">
-        {#each worlds as w}
-          <option value={w}>{w}</option>
-        {/each}
+      <select bind:value={selectedWorld} onchange={reload} class="input w-36 text-xs py-1.5">
+        {#each worlds as w}<option value={w}>{w}</option>{/each}
       </select>
-      <button onclick={createBackup} disabled={creating || !selectedWorld}
-              class="btn-primary flex items-center gap-2">
-        <Plus size={16} /> {creating ? 'Creating...' : 'Backup Now'}
+      <button onclick={create} disabled={creating || !selectedWorld}
+              class="btn-primary flex items-center gap-2 text-xs">
+        <Plus size={14} /> {creating ? '...' : 'Backup'}
       </button>
-      <button onclick={loadBackups} class="btn-ghost p-2">
-        <RefreshCw size={16} />
-      </button>
+      <button onclick={reload} class="btn-ghost p-2"><RefreshCw size={14} /></button>
     </div>
   </div>
 
   <div class="card">
     <div class="flex items-center justify-between mb-4">
-      <h2 class="card-header mb-0">Backup Archive</h2>
-      <label class="flex items-center gap-2 text-sm text-surface-400 cursor-pointer">
-        <input type="checkbox" checked={schedulerEnabled} onchange={toggleScheduler}
-               class="accent-bedrock-500" />
-        Auto-backup (30 min)
+      <h2 class="card-header mb-0">Archive</h2>
+      <label class="flex items-center gap-2 text-xs text-deep-400 uppercase tracking-wider cursor-pointer select-none">
+        <input type="checkbox" checked={schedEnabled} onchange={toggleSched} class="accent-bedrock-500" />
+        Auto (30m)
       </label>
     </div>
     <div class="overflow-x-auto">
-      <table class="w-full text-sm">
-        <thead>
-          <tr class="text-surface-400 border-b border-surface-700">
-            <th class="text-left py-2 px-3 font-medium">Filename</th>
-            <th class="text-left py-2 px-3 font-medium">World</th>
-            <th class="text-right py-2 px-3 font-medium">Size</th>
-            <th class="text-right py-2 px-3 font-medium">Modified</th>
-            <th class="text-right py-2 px-3 font-medium">Actions</th>
-          </tr>
-        </thead>
+      <table class="w-full text-xs">
+        <thead><tr class="text-deep-400 border-b border-deep-600/30 uppercase tracking-wider">
+          <th class="text-left py-2 px-3 font-medium">File</th>
+          <th class="text-right py-2 px-3 font-medium">Size</th>
+          <th class="text-right py-2 px-3 font-medium">Modified</th>
+          <th class="text-right py-2 px-3 font-medium"></th>
+        </tr></thead>
         <tbody>
-          {#each backups as backup}
-            <tr class="border-b border-surface-800 hover:bg-surface-800/50">
-              <td class="py-2 px-3 font-mono text-sm">{backup.filename}</td>
-              <td class="py-2 px-3">{backup.world}</td>
-              <td class="py-2 px-3 text-right">{formatBytes(backup.size_bytes)}</td>
-              <td class="py-2 px-3 text-right text-surface-400">{new Date(backup.modified).toLocaleString()}</td>
-              <td class="py-2 px-3 text-right">
-                <div class="flex justify-end gap-1">
-                  <button onclick={() => downloadBackup(backup.world, backup.filename)}
-                          class="btn-ghost p-1.5" title="Download">
-                    <Download size={14} />
-                  </button>
-                  <button onclick={() => deleteBackup(backup.world, backup.filename)}
-                          class="btn-ghost p-1.5 text-red-400 hover:text-red-300" title="Delete">
-                    <Trash2 size={14} />
-                  </button>
-                </div>
+          {#each backups as b}
+            <tr class="border-b border-deep-700/20 hover:bg-deep-800/30">
+              <td class="py-1.5 px-3 font-mono">{b.filename}</td>
+              <td class="py-1.5 px-3 text-right">{formatBytes(b.size_bytes)}</td>
+              <td class="py-1.5 px-3 text-right text-deep-400">{new Date(b.modified).toLocaleString()}</td>
+              <td class="py-1.5 px-3 text-right">
+                <button onclick={() => download(b.world, b.filename)} class="btn-ghost p-1"><Download size={12} /></button>
+                <button onclick={() => del(b.world, b.filename)} class="btn-ghost p-1 text-red-400"><Trash2 size={12} /></button>
               </td>
             </tr>
           {:else}
-            <tr>
-              <td colspan="5" class="text-center py-8 text-surface-500">No backups found</td>
-            </tr>
+            <tr><td colspan="4" class="text-center py-8 text-deep-500">No backups</td></tr>
           {/each}
         </tbody>
       </table>

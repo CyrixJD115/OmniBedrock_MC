@@ -1,98 +1,70 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api } from '$lib/api/client';
-  import { Users, Ban, UserCheck, Shield, ShieldOff } from '@lucide/svelte';
+  import { addToast } from '$stores/toast';
+  import { Users, Ban, Shield, ShieldOff } from '@lucide/svelte';
 
   let players = $state<{ name: string }[]>([]);
   let count = $state(0);
   let loading = $state(true);
-  let actionFeedback = $state('');
 
   onMount(async () => {
     try {
-      const res = await api.listPlayers();
-      players = res.players;
-      count = res.count;
-    } catch { /* ignore */ }
+      const r = await api.listPlayers();
+      players = r.players || [];
+      count = r.count || 0;
+    } catch (e: any) { addToast(`Failed: ${e.message}`, 'error'); }
     loading = false;
   });
 
-  async function playerAction(action: string, target: string) {
-    await api.playerAction(action, target);
-    actionFeedback = `${action} ${target}`;
-    setTimeout(() => actionFeedback = '', 3000);
+  async function act(action: string, target: string) {
+    try {
+      await api.playerAction(action, target);
+      addToast(`${action} ${target}`, 'success');
+    } catch (e: any) { addToast(`${action} failed: ${e.message}`, 'error'); }
   }
 
   async function refresh() {
     loading = true;
-    const res = await api.listPlayers();
-    players = res.players;
-    count = res.count;
+    try { const r = await api.listPlayers(); players = r.players || []; count = r.count || 0; }
+    catch (e: any) { addToast(`Failed: ${e.message}`, 'error'); }
     loading = false;
   }
 </script>
 
 <div class="space-y-4">
   <div class="flex items-center justify-between">
-    <h1 class="text-2xl font-bold text-white">Players</h1>
-    <button onclick={refresh} class="btn-secondary">Refresh</button>
-  </div>
-
-  {#if actionFeedback}
-    <div class="bg-bedrock-600/20 border border-bedrock-500/30 text-bedrock-300 px-4 py-2 rounded-lg text-sm">
-      Sent: {actionFeedback}
+    <div>
+      <h1 class="text-lg font-bold text-white uppercase tracking-widest">Players</h1>
+      <div class="pixel-divider mt-2 w-24"></div>
     </div>
-  {/if}
+    <button onclick={refresh} class="btn-secondary text-xs">Refresh</button>
+  </div>
 
   <div class="card">
     <div class="flex items-center gap-2 mb-4">
-      <Users size={16} class="text-neon-purple" />
-      <span class="text-sm text-surface-400">{count} player{count !== 1 ? 's' : ''} online</span>
+      <Users size={14} class="text-bedrock-400" />
+      <span class="text-xs text-deep-400 uppercase tracking-wider">{count} online</span>
     </div>
-
     <div class="overflow-x-auto">
-      <table class="w-full text-sm">
-        <thead>
-          <tr class="text-surface-400 border-b border-surface-700">
-            <th class="text-left py-2 px-3 font-medium">Name</th>
-            <th class="text-right py-2 px-3 font-medium">Actions</th>
-          </tr>
-        </thead>
+      <table class="w-full text-xs">
+        <thead><tr class="text-deep-400 border-b border-deep-600/30 uppercase tracking-wider">
+          <th class="text-left py-2 px-3 font-medium">Name</th>
+          <th class="text-right py-2 px-3 font-medium">Actions</th>
+        </tr></thead>
         <tbody>
-          {#each players as player}
-            <tr class="border-b border-surface-800 hover:bg-surface-800/50">
-              <td class="py-2 px-3 font-medium">{player.name}</td>
-              <td class="py-2 px-3 text-right">
-                <div class="flex justify-end gap-1">
-                  <button onclick={() => playerAction('kick', player.name)}
-                          class="btn-ghost p-1.5 text-yellow-400" title="Kick">
-                    <Ban size={14} />
-                  </button>
-                  <button onclick={() => playerAction('ban', player.name)}
-                          class="btn-ghost p-1.5 text-red-400" title="Ban">
-                    <ShieldOff size={14} />
-                  </button>
-                  <button onclick={() => playerAction('op', player.name)}
-                          class="btn-ghost p-1.5 text-neon-green" title="OP">
-                    <Shield size={14} />
-                  </button>
-                  <button onclick={() => playerAction('deop', player.name)}
-                          class="btn-ghost p-1.5 text-surface-400" title="DeOP">
-                    <UserCheck size={14} />
-                  </button>
-                </div>
+          {#each players as p}
+            <tr class="border-b border-deep-700/20 hover:bg-deep-800/30">
+              <td class="py-1.5 px-3 font-medium">{p.name}</td>
+              <td class="py-1.5 px-3 text-right">
+                <button onclick={() => act('kick', p.name)} class="btn-ghost p-1 text-yellow-400" title="Kick"><Ban size={12} /></button>
+                <button onclick={() => act('ban', p.name)} class="btn-ghost p-1 text-red-400" title="Ban"><ShieldOff size={12} /></button>
+                <button onclick={() => act('op', p.name)} class="btn-ghost p-1 text-teal-400" title="OP"><Shield size={12} /></button>
+                <button onclick={() => act('deop', p.name)} class="btn-ghost p-1 text-deep-400" title="DeOP"><ShieldOff size={12} /></button>
               </td>
             </tr>
           {:else}
-            <tr>
-              <td colspan="2" class="text-center py-8 text-surface-500">
-                {#if loading}
-                  Loading...
-                {:else}
-                  No players online. Start the server to see connected players.
-                {/if}
-              </td>
-            </tr>
+            <tr><td colspan="2" class="text-center py-8 text-deep-500">{loading ? 'Loading...' : 'No players online'}</td></tr>
           {/each}
         </tbody>
       </table>

@@ -11,6 +11,8 @@ export function getToken(): string {
   return authToken;
 }
 
+type Method = 'GET' | 'POST' | 'PUT' | 'DELETE';
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -34,6 +36,27 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
+  // Auth
+  login: (username: string, password: string) =>
+    request<{ token: string; user: Record<string, unknown> }>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    }),
+  getMe: () => request<Record<string, unknown>>('/auth/me'),
+  listUsers: () => request<Array<Record<string, unknown>>>('/auth/users'),
+  createUser: (data: { username: string; password: string; role: string; display_name?: string }) =>
+    request<Record<string, unknown>>('/auth/users', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateUser: (username: string, data: Record<string, unknown>) =>
+    request<Record<string, unknown>>(`/auth/users/${username}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  deleteUser: (username: string) =>
+    request<{ success: boolean }>(`/auth/users/${username}`, { method: 'DELETE' }),
+
   // Server
   getServerStatus: () => request<ServerStatus>('/server/status'),
   serverAction: (action: string) =>
@@ -73,6 +96,9 @@ export const api = {
     }),
   deleteBackup: (world: string, filename: string) =>
     request<{ success: boolean }>(`/backups/${world}/${filename}`, { method: 'DELETE' }),
+  restoreBackup: (world: string, filename: string) =>
+    request<{ success: boolean }>(`/backups/restore/${world}/${filename}`, { method: 'POST' }),
+  listTrash: (world?: string) => request<Array<any>>(`/backups/trash${world ? `?world=${world}` : ''}`),
   getSchedulerConfig: () => request<{ enabled: boolean }>('/backups/scheduler'),
   updateScheduler: (cfg: { enabled: boolean; interval_minutes?: number; keep_count?: number }) =>
     request<{ success: boolean }>('/backups/scheduler', {

@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from backend.app.core.dependencies import server_manager
 from backend.app.core.security import verify_token
 from backend.app.managers.performance_collector import PerformanceCollector
+from backend.app.models.user import User
 from backend.app.websocket.metrics import MetricsWebSocket
 
 router = APIRouter(prefix="/performance", tags=["performance"])
@@ -27,7 +28,7 @@ def get_ws_handler() -> MetricsWebSocket:
 
 
 @router.get("/metrics")
-async def get_metrics(auth: str = Depends(verify_token)) -> dict:
+async def get_metrics(_user: User = Depends(verify_token)) -> dict:
     collector = get_collector()
     # force a single collection
     return collector._collect()

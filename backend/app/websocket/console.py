@@ -4,11 +4,9 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any
 
 from fastapi import WebSocket
 
-from backend.app.core.config import settings
 from backend.app.services.server_manager import ServerManager
 
 logger = logging.getLogger("ws_console")
@@ -26,10 +24,14 @@ class ConsoleWebSocket:
 
         stdout_q = self._manager.subscribe_stdout()
         status_q = self._manager.subscribe_status()
+        stop_event = asyncio.Event()
+
+        for line in self._manager.get_history():
+            await ws.send_text(json.dumps({"type": "console", "line": line, "timestamp": time.time()}))
 
         async def reader():
             try:
-                while True:
+                while not stop_event.is_set():
                     data = await ws.receive_text()
                     msg = json.loads(data)
                     cmd = msg.get("command", "")
@@ -38,35 +40,47 @@ class ConsoleWebSocket:
             except Exception:
                 pass
             finally:
-                self._manager.unsubscribe_stdout(stdout_q)
-                self._manager.unsubscribe_status(status_q)
-                self._connections.discard(ws)
-                logger.info("Console WS disconnected (%d remaining)", len(self._connections))
+                stop_event.set()
 
         async def writer():
             try:
-                while True:
-                    line = await asyncio.wait_for(stdout_q.get(), timeout=30)
-                    await ws.send_text(json.dumps({"type": "console", "line": line, "timestamp": time.time()}))
-            except asyncio.TimeoutError:
-                try:
-                    await ws.send_text(json.dumps({"type": "ping"}))
-                except Exception:
-                    pass
+                while not stop_event.is_set():
+                    try:
+                        line = await asyncio.wait_for(stdout_q.get(), timeout=1)
+                        await ws.send_text(json.dumps({"type": "console", "line": line, "timestamp": time.time()}))
+                    except asyncio.TimeoutError:
+                        try:
+                            await ws.send_text(json.dumps({"type": "ping"}))
+                        except Exception:
+                            stop_event.set()
             except Exception:
                 pass
 
         async def status_writer():
             try:
-                while True:
+                while not stop_event.is_set():
                     status = await status_q.get()
                     await ws.send_text(json.dumps({"type": "status", "status": status.value}))
             except Exception:
                 pass
+            finally:
+                stop_event.set()
+
+        tasks = [
+            asyncio.create_task(reader()),
+            asyncio.create_task(writer()),
+            asyncio.create_task(status_writer()),
+        ]
 
         try:
-            await asyncio.gather(reader(), writer(), status_writer())
-        except Exception:
-            pass
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            stop_event.set()
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
         finally:
+            self._manager.unsubscribe_stdout(stdout_q)
+            self._manager.unsubscribe_status(status_q)
             self._connections.discard(ws)
+            logger.info("Console WS disconnected (%d remaining)", len(self._connections))

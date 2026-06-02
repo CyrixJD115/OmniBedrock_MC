@@ -6,39 +6,42 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
+from backend.app.core.auth import init_users
 from backend.app.core.config import settings
-from backend.app.core.logging import setup_logging
-from backend.app.core.security import generate_token
-from backend.app.routers import (
-    server,
-    console,
-    properties,
-    backups,
-    addons,
-    worlds,
-    players,
-    inieditor,
-    settings as settings_router,
-    performance,
-)
-from backend.app.managers.performance_collector import PerformanceCollector
 from backend.app.core.dependencies import server_manager
+from backend.app.core.logging import setup_logging
+from backend.app.managers.performance_collector import PerformanceCollector
+from backend.app.routers import (
+    addons,
+    audit,
+    auth,
+    backups,
+    console,
+    inieditor,
+    performance,
+    players,
+    properties,
+    server,
+    worlds,
+)
+from backend.app.routers import (
+    settings as settings_router,
+)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging()
+    init_users()
     collector = PerformanceCollector()
     collector.set_server_manager(server_manager)
     await collector.start()
 
-    token = generate_token()
     print(f"\n{'='*50}")
-    print(f"  OmniBedrock MC Panel")
+    print("  OmniBedrock MC Panel")
     import os
     port = os.getenv("OMNI_PORT", "17754")
     print(f"  API: http://localhost:{port}{settings.api_prefix}")
-    print(f"  Auth Token: {token}")
     print(f"{'='*50}\n")
 
     yield
@@ -63,6 +66,8 @@ def create_app() -> FastAPI:
     )
 
     prefix = settings.api_prefix
+    app.include_router(auth.router, prefix=prefix)
+    app.include_router(audit.router, prefix=prefix)
     app.include_router(server.router, prefix=prefix)
     app.include_router(console.router, prefix=prefix)
     app.include_router(properties.router, prefix=prefix)
@@ -82,40 +87,143 @@ def create_app() -> FastAPI:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>OmniBedrock MC</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      background: #020617; color: #e2e8f0;
-      font-family: system-ui, -apple-system, sans-serif;
-      display: flex; align-items: center; justify-content: center;
+      background: #020617;
+      color: #e2e8f0;
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       min-height: 100vh;
+      background-image:
+        radial-gradient(ellipse at 50% 0%, rgba(6, 145, 178, 0.04) 0%, transparent 60%),
+        radial-gradient(ellipse at 50% 100%, rgba(45, 212, 191, 0.03) 0%, transparent 60%);
     }
     .card {
-      background: #0f172a; border: 1px solid #334155;
-      border-radius: 16px; padding: 48px; text-align: center;
-      max-width: 480px;
+      background: #0f172a;
+      border: 2px solid #1a3050;
+      padding: 48px;
+      max-width: 420px;
+      text-align: center;
+      box-shadow:
+        inset 2px 2px 0 rgba(255,255,255,0.03),
+        inset -1px -1px 0 rgba(0,0,0,0.3),
+        6px 6px 0 rgba(0,0,0,0.5);
     }
-    .logo {
-      width: 48px; height: 48px; border-radius: 50%;
-      background: #22c55e; margin: 0 auto 24px;
-      box-shadow: 0 0 24px #39ff14;
+    .pixel-divider {
+      height: 2px;
+      margin: 28px 0;
+      background: repeating-linear-gradient(
+        90deg,
+        #1a3050 0px,
+        #1a3050 4px,
+        transparent 4px,
+        transparent 8px
+      );
     }
-    h1 { font-size: 28px; font-weight: 700; color: #fff; margin-bottom: 8px; }
-    p { color: #94a3b8; margin-bottom: 24px; line-height: 1.6; }
-    .url { color: #22c55e; font-family: monospace; font-size: 14px; }
+    .icon-grid {
+      width: 56px;
+      height: 56px;
+      margin: 0 auto 20px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 2px;
+    }
+    .icon-grid div {
+      border-radius: 2px;
+    }
+    .icon-grid .tl { background: #2dd4bf; box-shadow: 0 0 12px rgba(45,212,191,0.4); }
+    .icon-grid .tr { background: #0e7490; }
+    .icon-grid .bl { background: #0891b2; }
+    .icon-grid .br { background: #14b8a6; }
+    h1 {
+      font-family: 'Montserrat', system-ui, sans-serif;
+      font-size: 26px;
+      font-weight: 800;
+      color: #fff;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      text-shadow: 0 0 20px rgba(34, 211, 238, 0.15);
+    }
+    .subtitle {
+      font-size: 12px;
+      color: #5a7184;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      margin-top: 6px;
+      font-weight: 600;
+    }
+    p {
+      color: #5a7184;
+      font-size: 13px;
+      line-height: 1.7;
+      margin-bottom: 0;
+    }
+    .url {
+      color: #2dd4bf;
+      font-family: 'Inter', monospace;
+      font-size: 13px;
+      font-weight: 600;
+      display: inline-block;
+      margin-top: 16px;
+      padding: 8px 16px;
+      border: 1px solid #2dd4bf20;
+      background: rgba(45,212,191,0.06);
+    }
     .badge {
-      display: inline-block; padding: 4px 12px;
-      border-radius: 999px; font-size: 12px; font-weight: 600;
-      background: #22c55e20; color: #4ade80; border: 1px solid #22c55e40;
+      display: inline-block;
+      padding: 5px 14px;
+      font-family: 'Montserrat', system-ui, sans-serif;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      background: rgba(6, 182, 212, 0.1);
+      color: #67e8f9;
+      border: 1px solid rgba(6, 182, 212, 0.2);
+    }
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      display: inline-block;
+      margin-right: 6px;
+      background: #2dd4bf;
+      box-shadow: 0 0 8px rgba(45,212,191,0.6);
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+    .footer {
+      margin-top: 32px;
+      font-size: 10px;
+      color: #334155;
+      text-transform: uppercase;
+      letter-spacing: 0.2em;
     }
   </style>
 </head>
 <body>
   <div class="card">
-    <div class="logo"></div>
+    <div class="icon-grid">
+      <div class="tl"></div>
+      <div class="tr"></div>
+      <div class="bl"></div>
+      <div class="br"></div>
+    </div>
     <h1>OmniBedrock MC</h1>
-    <p>Backend API running.<br>Point your browser to the frontend dev server at <span class="url">http://localhost:17755</span></p>
-    <span class="badge">API v0.1.0</span>
+    <div class="subtitle">Server Control Panel</div>
+    <div class="pixel-divider"></div>
+    <p>Backend API is running.</p>
+    <span class="url">http://localhost:17755</span>
+    <div class="pixel-divider"></div>
+    <span class="badge"><span class="status-dot"></span>API v0.1.0</span>
+    <div class="footer">Point your browser to the frontend</div>
   </div>
 </body>
 </html>"""

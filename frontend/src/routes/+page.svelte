@@ -2,143 +2,142 @@
   import { onMount } from 'svelte';
   import { serverStatus, metrics, isServerRunning } from '$stores/index';
   import { api } from '$lib/api/client';
-  import { formatUptime, formatBytes } from '$lib/utils';
-  import { Power, Play, RotateCw, Terminal, Users, HardDrive, Globe, Activity } from '@lucide/svelte';
+  import { addToast } from '$stores/toast';
+  import { Play, Square, RotateCw, Terminal, Users, HardDrive, Globe, Cpu, Clock, Activity } from '@lucide/svelte';
 
   let loading = $state(true);
+  let acting = $state<string | null>(null);
+
+  function formatUptime(seconds: number): string {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  }
 
   onMount(async () => {
     try {
-      const status = await api.getServerStatus();
-      serverStatus.set(status);
-    } catch { /* ignore */ }
+      const s = await api.getServerStatus();
+      serverStatus.set(s);
+    } catch {
+      addToast('Could not reach backend', 'error');
+    }
     loading = false;
   });
 
-  async function handleAction(action: string) {
-    const res = await api.serverAction(action);
-    if (res.success) {
-      setTimeout(async () => {
-        const status = await api.getServerStatus();
-        serverStatus.set(status);
-      }, 2000);
+  async function act(action: string) {
+    acting = action;
+    try {
+      const res = await api.serverAction(action);
+      addToast(res.message, res.success ? 'success' : 'error');
+      if (res.success) {
+        setTimeout(async () => {
+          try {
+            const s = await api.getServerStatus();
+            serverStatus.set(s);
+          } catch { /* ignore */ }
+        }, 1500);
+      }
+    } catch (e: any) {
+      addToast(`Action failed: ${e.message}`, 'error');
     }
+    acting = null;
   }
 </script>
 
 <div class="space-y-6">
-  <div class="flex items-center justify-between">
-    <h1 class="text-2xl font-bold text-white">Dashboard</h1>
+  <!-- Header -->
+  <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+    <div>
+      <h1 class="text-lg font-bold text-white uppercase tracking-widest">Dashboard</h1>
+      <div class="pixel-divider mt-2 w-48"></div>
+    </div>
     <div class="flex gap-2">
-      <button onclick={() => handleAction('start')} disabled={$isServerRunning}
-              class="btn-primary flex items-center gap-2">
-        <Play size={16} /> Start
+      <button onclick={() => act('start')} disabled={$isServerRunning || acting !== null}
+              class="btn-success flex items-center gap-2 text-xs">
+        <Play size={14} /> {acting === 'start' ? 'Starting...' : 'Start'}
       </button>
-      <button onclick={() => handleAction('restart')} disabled={!$isServerRunning}
-              class="btn-secondary flex items-center gap-2">
-        <RotateCw size={16} /> Restart
+      <button onclick={() => act('restart')} disabled={!$isServerRunning || acting !== null}
+              class="btn-secondary flex items-center gap-2 text-xs">
+        <RotateCw size={14} /> {acting === 'restart' ? 'Restarting...' : 'Restart'}
       </button>
-      <button onclick={() => handleAction('stop')} disabled={!$isServerRunning}
-              class="btn-danger flex items-center gap-2">
-        <Power size={16} /> Stop
+      <button onclick={() => act('stop')} disabled={!$isServerRunning || acting !== null}
+              class="btn-danger flex items-center gap-2 text-xs">
+        <Square size={14} /> {acting === 'stop' ? 'Stopping...' : 'Stop'}
       </button>
     </div>
   </div>
 
+  <!-- Status Cards -->
   <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
     <div class="card">
-      <div class="flex items-center justify-between mb-2">
-        <span class="text-surface-400 text-sm">Server Status</span>
-        <Activity size={18} class={$isServerRunning ? 'text-neon-green' : 'text-red-400'} />
+      <div class="flex items-center justify-between mb-3">
+        <span class="text-deep-400 text-xs uppercase tracking-wider">Status</span>
+        <span class="status-dot {$serverStatus.status}"></span>
       </div>
-      <p class="text-2xl font-bold {$isServerRunning ? 'text-neon-green' : 'text-red-400'}">
-        {$serverStatus.status.toUpperCase()}
+      <p class="text-xl font-bold {$isServerRunning ? 'text-teal-400' : 'text-red-400'} uppercase tracking-wider">
+        {$serverStatus.status}
       </p>
       {#if $serverStatus.pid}
-        <p class="text-xs text-surface-500 mt-1">PID: {$serverStatus.pid}</p>
+        <p class="text-deep-500 text-xs mt-1 font-mono">PID {$serverStatus.pid}</p>
       {/if}
     </div>
 
     <div class="card">
-      <div class="flex items-center justify-between mb-2">
-        <span class="text-surface-400 text-sm">Uptime</span>
-        <Terminal size={18} class="text-neon-cyan" />
+      <div class="flex items-center justify-between mb-3">
+        <span class="text-deep-400 text-xs uppercase tracking-wider">Uptime</span>
+        <Clock size={16} class="text-bedrock-400" />
       </div>
-      <p class="text-2xl font-bold text-white">
-        {formatUptime($serverStatus.uptime)}
+      <p class="text-xl font-bold text-white font-mono">
+        {$serverStatus.uptime > 0 ? formatUptime($serverStatus.uptime) : '--:--:--'}
       </p>
-      {#if $serverStatus.version}
-        <p class="text-xs text-surface-500 mt-1">v{$serverStatus.version}</p>
-      {/if}
     </div>
 
     <div class="card">
-      <div class="flex items-center justify-between mb-2">
-        <span class="text-surface-400 text-sm">Players</span>
-        <Users size={18} class="text-neon-purple" />
+      <div class="flex items-center justify-between mb-3">
+        <span class="text-deep-400 text-xs uppercase tracking-wider">CPU</span>
+        <Cpu size={16} class="text-teal-400" />
       </div>
-      <p class="text-2xl font-bold text-white">--</p>
-      <p class="text-xs text-surface-500 mt-1">RCON-based</p>
+      <p class="text-xl font-bold text-white font-mono">{$metrics?.cpu_percent?.toFixed(1) ?? '--'}</p>
+      <div class="mt-2 h-1.5 bg-deep-900 rounded overflow-hidden">
+        <div class="h-full bg-teal-500 transition-all duration-500" style="width: {Math.min($metrics?.cpu_percent ?? 0, 100)}%"></div>
+      </div>
     </div>
 
     <div class="card">
-      <div class="flex items-center justify-between mb-2">
-        <span class="text-surface-400 text-sm">TPS</span>
-        <Activity size={18} class="text-neon-green" />
+      <div class="flex items-center justify-between mb-3">
+        <span class="text-deep-400 text-xs uppercase tracking-wider">Memory</span>
+        <Activity size={16} class="text-bedrock-400" />
       </div>
-      <p class="text-2xl font-bold {$metrics?.tps && $metrics.tps >= 15 ? 'text-neon-green' : 'text-yellow-400'}">
-        {$metrics?.tps?.toFixed(1) ?? '--'}
-      </p>
+      <p class="text-xl font-bold text-white font-mono">{$metrics?.memory_mb ? $metrics.memory_mb.toFixed(0) + ' MB' : '--'}</p>
+      <div class="mt-2 h-1.5 bg-deep-900 rounded overflow-hidden">
+        <div class="h-full bg-bedrock-500 transition-all duration-500" style="width: {Math.min($metrics?.memory_percent ?? 0, 100)}%"></div>
+      </div>
     </div>
   </div>
 
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-    <div class="card">
-      <h2 class="card-header">Performance</h2>
-      <div class="space-y-4">
-        <div>
-          <div class="flex justify-between text-sm mb-1">
-            <span class="text-surface-400">CPU</span>
-            <span class="text-white font-medium">{$metrics?.cpu_percent?.toFixed(1) ?? '0'}%</span>
-          </div>
-          <div class="h-2 bg-surface-800 rounded-full overflow-hidden">
-            <div class="h-full bg-neon-green rounded-full transition-all duration-500"
-                 style="width: {Math.min($metrics?.cpu_percent ?? 0, 100)}%"></div>
-          </div>
-        </div>
-        <div>
-          <div class="flex justify-between text-sm mb-1">
-            <span class="text-surface-400">Memory</span>
-            <span class="text-white font-medium">{$metrics?.memory_mb?.toFixed(0) ?? '0'} MB</span>
-          </div>
-          <div class="h-2 bg-surface-800 rounded-full overflow-hidden">
-            <div class="h-full bg-neon-purple rounded-full transition-all duration-500"
-                 style="width: {Math.min($metrics?.memory_percent ?? 0, 100)}%"></div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2 class="card-header">Quick Actions</h2>
-      <div class="grid grid-cols-2 gap-3">
-        <a href="/console" class="flex items-center gap-3 p-3 rounded-lg bg-surface-800 hover:bg-surface-700 transition-colors">
-          <Terminal size={20} class="text-neon-cyan" />
-          <span class="text-sm font-medium">Console</span>
-        </a>
-        <a href="/backups" class="flex items-center gap-3 p-3 rounded-lg bg-surface-800 hover:bg-surface-700 transition-colors">
-          <HardDrive size={20} class="text-bedrock-400" />
-          <span class="text-sm font-medium">Backups</span>
-        </a>
-        <a href="/players" class="flex items-center gap-3 p-3 rounded-lg bg-surface-800 hover:bg-surface-700 transition-colors">
-          <Users size={20} class="text-neon-purple" />
-          <span class="text-sm font-medium">Players</span>
-        </a>
-        <a href="/worlds" class="flex items-center gap-3 p-3 rounded-lg bg-surface-800 hover:bg-surface-700 transition-colors">
-          <Globe size={20} class="text-blue-400" />
-          <span class="text-sm font-medium">Worlds</span>
-        </a>
-      </div>
+  <!-- Quick Actions -->
+  <div class="card">
+    <h2 class="card-header">Quick Actions</h2>
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <a href="/console" class="flex items-center gap-3 p-3 border border-deep-600/30 hover:border-bedrock-500/30 bg-deep-900/50 hover:bg-deep-800 transition-all">
+        <Terminal size={18} class="text-bedrock-400" />
+        <span class="text-xs uppercase tracking-wider font-semibold">Console</span>
+      </a>
+      <a href="/backups" class="flex items-center gap-3 p-3 border border-deep-600/30 hover:border-bedrock-500/30 bg-deep-900/50 hover:bg-deep-800 transition-all">
+        <HardDrive size={18} class="text-teal-400" />
+        <span class="text-xs uppercase tracking-wider font-semibold">Backups</span>
+      </a>
+      <a href="/players" class="flex items-center gap-3 p-3 border border-deep-600/30 hover:border-bedrock-500/30 bg-deep-900/50 hover:bg-deep-800 transition-all">
+        <Users size={18} class="text-bedrock-400" />
+        <span class="text-xs uppercase tracking-wider font-semibold">Players</span>
+      </a>
+      <a href="/worlds" class="flex items-center gap-3 p-3 border border-deep-600/30 hover:border-bedrock-500/30 bg-deep-900/50 hover:bg-deep-800 transition-all">
+        <Globe size={18} class="text-teal-400" />
+        <span class="text-xs uppercase tracking-wider font-semibold">Worlds</span>
+      </a>
     </div>
   </div>
 </div>
+
+

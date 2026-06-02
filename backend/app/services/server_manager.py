@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import shlex
+import re
 import shutil
 import subprocess
 import sys
@@ -13,6 +13,8 @@ from backend.app.core.config import settings
 from backend.app.models.server import ServerStatus
 
 logger = logging.getLogger("server_manager")
+
+_TPS_RE = re.compile(r"(?:tps|mspt)[:\s]*([0-9.]+)", re.IGNORECASE)
 
 
 class ServerManager:
@@ -26,9 +28,22 @@ class ServerManager:
         self._stdin_queue: asyncio.Queue[str] = asyncio.Queue()
         self._stdout_handler: list[asyncio.Queue[str]] = []
         self._status_listeners: list[asyncio.Queue[ServerStatus]] = []
+        self._history: list[str] = []
+        self._max_history: int = 2000
 
         self._reader_task: asyncio.Task | None = None
         self._writer_task: asyncio.Task | None = None
+        self._watchdog_task: asyncio.Task | None = None
+
+        self._auto_restart: bool = True
+        self._auto_restart_delay: int = 5
+        self._max_crashes: int = 3
+        self._crash_count: int = 0
+        self._stop_timeout: int = 8
+        self._kill_timeout: int = 4
+        self._was_intentional_stop: bool = False
+
+        self._last_tps: float | None = None
 
         self._ini_dir = Path(settings.ini_dir)
         self._ini_dir.mkdir(parents=True, exist_ok=True)
@@ -52,17 +67,42 @@ class ServerManager:
     def server_version(self) -> str | None:
         return self._server_version
 
-    def _resolve_endstone(self) -> str:
+    @property
+    def last_tps(self) -> float | None:
+        return self._last_tps
+
+    @property
+    def crash_count(self) -> int:
+        return self._crash_count
+
+    @property
+    def auto_restart(self) -> bool:
+        return self._auto_restart
+
+    def set_auto_restart(self, enabled: bool, delay: int | None = None, max_crashes: int | None = None) -> None:
+        self._auto_restart = enabled
+        if delay is not None:
+            self._auto_restart_delay = max(1, delay)
+        if max_crashes is not None:
+            self._max_crashes = max(0, max_crashes)
+        if not enabled:
+            self._crash_count = 0
+
+    def set_grace_periods(self, stop_timeout: int, kill_timeout: int) -> None:
+        self._stop_timeout = max(1, stop_timeout)
+        self._kill_timeout = max(1, kill_timeout)
+
+    def _resolve_endstone(self) -> list[str]:
         endstone = shutil.which("endstone")
         if endstone:
-            return endstone
+            return [endstone]
         result = subprocess.run(
             [sys.executable, "-m", "endstone", "--version"],
             capture_output=True, text=True, timeout=10
         )
         if result.returncode == 0:
             self._server_version = result.stdout.strip()
-            return f"{sys.executable} -m endstone"
+            return [sys.executable, "-m", "endstone"]
         msg = "endstone binary not found and `python -m endstone` failed"
         raise RuntimeError(msg)
 
@@ -84,7 +124,7 @@ class ServerManager:
                 self._notify_status()
                 return str(e)
 
-            cmd = shlex.split(endstone_cmd)
+            cmd = list(endstone_cmd)
             if "--no-confirm" not in cmd:
                 cmd.append("--no-confirm")
             cmd.extend(["-s", str(server_dir)])
@@ -106,6 +146,7 @@ class ServerManager:
             loop = asyncio.get_event_loop()
             self._reader_task = loop.create_task(self._reader_loop())
             self._writer_task = loop.create_task(self._writer_loop())
+            self._watchdog_task = loop.create_task(self._watchdog_loop())
 
             self._status = ServerStatus.running
             self._notify_status()
@@ -118,12 +159,13 @@ class ServerManager:
 
             self._status = ServerStatus.stopping
             self._notify_status()
+            self._was_intentional_stop = True
 
             logger.info("Stopping server gracefully...")
             await self._send_command("stop")
 
             wait_start = time.time()
-            while time.time() - wait_start < 8:
+            while time.time() - wait_start < self._stop_timeout:
                 if self._process and self._process.returncode is not None:
                     break
                 await asyncio.sleep(0.5)
@@ -132,7 +174,7 @@ class ServerManager:
                 logger.warning("Server did not stop gracefully, terminating...")
                 self._process.terminate()
                 try:
-                    self._process.wait(timeout=4)
+                    self._process.wait(timeout=self._kill_timeout)
                 except subprocess.TimeoutExpired:
                     logger.error("Server still alive, killing...")
                     self._process.kill()
@@ -149,6 +191,7 @@ class ServerManager:
             if not self._process or self._process.returncode is not None:
                 return "No running server to kill"
 
+            self._was_intentional_stop = True
             logger.warning("Force killing server...")
             self._process.kill()
             self._process.wait()
@@ -196,6 +239,9 @@ class ServerManager:
         for q in self._status_listeners:
             q.put_nowait(self._status)
 
+    def get_history(self) -> list[str]:
+        return list(self._history)
+
     async def _reader_loop(self) -> None:
         assert self._process and self._process.stdout
         try:
@@ -204,6 +250,14 @@ class ServerManager:
                 if not line:
                     break
                 line = line.rstrip("\n\r")
+
+                m = _TPS_RE.search(line)
+                if m:
+                    self._last_tps = float(m.group(1))
+
+                self._history.append(line)
+                if len(self._history) > self._max_history:
+                    self._history.pop(0)
                 for q in self._stdout_handler:
                     q.put_nowait(line)
         except (ValueError, OSError) as e:
@@ -219,12 +273,58 @@ class ServerManager:
         except Exception as e:
             logger.debug("Writer loop ended: %s", e)
 
+    async def _watchdog_loop(self) -> None:
+        try:
+            while self._process and self._process.returncode is None:
+                await asyncio.sleep(1)
+
+            returncode = self._process.poll() if self._process else None
+            if returncode is not None and not self._was_intentional_stop:
+                self._crash_count += 1
+                logger.warning("Server exited unexpectedly (code %s, crash #%d)", returncode, self._crash_count)
+
+                if self._auto_restart and self._crash_count <= self._max_crashes:
+                    logger.info("Auto-restarting in %d seconds...", self._auto_restart_delay)
+                    msg = (
+                        f"[local] Server crashed (exit code {returncode})."
+                        f" Restarting in {self._auto_restart_delay}s..."
+                    )
+                    self._history.append(msg)
+                    for q in self._stdout_handler:
+                        q.put_nowait(msg)
+
+                    await asyncio.sleep(self._auto_restart_delay)
+                    async with self._lock:
+                        if self._process and self._process.returncode is not None:
+                            self._cleanup()
+                    await self.start()
+                else:
+                    if self._crash_count > self._max_crashes:
+                        reason = f"crashed (max {self._max_crashes})"
+                    else:
+                        reason = "auto-restart disabled"
+                    logger.warning("Server %s. Not restarting.", reason)
+                    async with self._lock:
+                        self._cleanup()
+                        self._status = ServerStatus.crashed
+                        self._write_lock_state("unlocked")
+                        self._notify_status()
+            elif returncode is not None:
+                self._crash_count = 0
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error("Watchdog error: %s", e)
+
     def _cleanup(self) -> None:
         if self._reader_task and not self._reader_task.done():
             self._reader_task.cancel()
         if self._writer_task and not self._writer_task.done():
             self._writer_task.cancel()
+        if self._watchdog_task and not self._watchdog_task.done():
+            self._watchdog_task.cancel()
         self._process = None
+        self._history.clear()
 
     def _write_lock_state(self, state: str) -> None:
         try:
@@ -240,5 +340,7 @@ class ServerManager:
             "pid": self.pid,
             "uptime": self.uptime,
             "version": self._server_version,
+            "tps": self._last_tps,
+            "crash_count": self._crash_count,
+            "auto_restart": self._auto_restart,
         }
-

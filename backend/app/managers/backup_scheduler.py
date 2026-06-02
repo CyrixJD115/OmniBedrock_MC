@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 
-from backend.app.core.config import settings
 from backend.app.services.backup_service import BackupService
 
 logger = logging.getLogger("backup_scheduler")
@@ -23,7 +21,9 @@ class BackupScheduler:
     def enabled(self) -> bool:
         return self._enabled
 
-    def configure(self, enabled: bool, interval_minutes: int = 30, keep_count: int = 10, worlds: list[str] | None = None) -> None:
+    def configure(
+        self, enabled: bool, interval_minutes: int = 30, keep_count: int = 10, worlds: list[str] | None = None
+    ) -> None:
         self._enabled = enabled
         self._interval = interval_minutes
         self._keep = keep_count

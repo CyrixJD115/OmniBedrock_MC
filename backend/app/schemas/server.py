@@ -8,6 +8,9 @@ class ServerStatusResponse(BaseModel):
     pid: int | None = None
     uptime: float | None = None
     version: str | None = None
+    tps: float | None = None
+    crash_count: int | None = None
+    auto_restart: bool | None = None
 
 
 class ServerActionRequest(BaseModel):

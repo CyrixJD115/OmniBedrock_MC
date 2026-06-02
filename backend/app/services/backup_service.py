@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import json
-import zipfile
 import asyncio
-import subprocess
+import shutil
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -110,12 +109,44 @@ class BackupService:
             progress.put_nowait(msg)
         return msg
 
+    def _trash_dir(self, world: str) -> Path:
+        return self._backup_root / world / ".trash"
+
     def delete_backup(self, world: str, filename: str) -> bool:
         path = self._backup_root / world / filename
-        if path.exists():
-            path.unlink()
-            return True
-        return False
+        if not path.exists():
+            return False
+        trash = self._trash_dir(world)
+        trash.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(path), str(trash / filename))
+        return True
+
+    def restore_backup(self, world: str, filename: str) -> bool:
+        trash_path = self._trash_dir(world) / filename
+        if not trash_path.exists():
+            return False
+        shutil.move(str(trash_path), str(self._backup_root / world / filename))
+        return True
+
+    def list_trash(self, world: str | None = None) -> list[dict]:
+        items: list[dict] = []
+        if world is None:
+            dirs = [self._backup_root / w / ".trash" for w in self.list_worlds()]
+        else:
+            dirs = [self._trash_dir(world)]
+        for d in dirs:
+            if not d.exists():
+                continue
+            for f in d.iterdir():
+                if f.is_file():
+                    stat = f.stat()
+                    items.append({
+                        "filename": f.name,
+                        "world": d.parent.name,
+                        "size_bytes": stat.st_size,
+                        "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+                    })
+        return sorted(items, key=lambda x: x["modified"], reverse=True)
 
     def get_backup_path(self, world: str, filename: str) -> Path | None:
         path = self._backup_root / world / filename
