@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/OmniBedrock_Icon.png" alt="OmniBedrock" width="120">
+  <img src="assets/OmniBedrock_Icon.png" alt="OmniBedrock" width="200">
 </p>
 
 # OmniBedrock
