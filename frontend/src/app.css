@@ -1,0 +1,79 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #334155 #0f172a;
+  }
+
+  body {
+    @apply bg-surface-950 text-surface-100;
+    font-family: system-ui, -apple-system, sans-serif;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-surface-900 border border-surface-700 rounded-xl p-5;
+  }
+
+  .card-header {
+    @apply text-lg font-semibold text-white mb-3;
+  }
+
+  .btn {
+    @apply px-4 py-2 rounded-lg font-medium transition-all duration-150 
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-primary {
+    @apply btn bg-bedrock-600 hover:bg-bedrock-500 text-white;
+  }
+
+  .btn-secondary {
+    @apply btn bg-surface-700 hover:bg-surface-600 text-surface-100;
+  }
+
+  .btn-danger {
+    @apply btn bg-red-600 hover:bg-red-500 text-white;
+  }
+
+  .btn-ghost {
+    @apply btn bg-transparent hover:bg-surface-800 text-surface-300;
+  }
+
+  .input {
+    @apply bg-surface-800 border border-surface-600 rounded-lg px-3 py-2 
+           text-surface-100 placeholder:text-surface-500
+           focus:outline-none focus:border-neon-green focus:ring-1 focus:ring-neon-green/30
+           transition-colors;
+  }
+
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  .badge-green {
+    @apply badge bg-neon-green/10 text-neon-green border border-neon-green/20;
+  }
+
+  .badge-red {
+    @apply badge bg-red-500/10 text-red-400 border border-red-500/20;
+  }
+
+  .badge-yellow {
+    @apply badge bg-yellow-500/10 text-yellow-400 border border-yellow-500/20;
+  }
+
+  .badge-blue {
+    @apply badge bg-blue-500/10 text-blue-400 border border-blue-500/20;
+  }
+}
+
+.terminal-line-error { color: #ef4444; }
+.terminal-line-warn { color: #f97316; }
+.terminal-line-info { color: #38bdf8; }
+.terminal-line-debug { color: #4ade80; }
+.terminal-line-local { color: #a78bfa; }

@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info
+.venv
+venv/
+node_modules/
+.env
+*.log
+backend/bedrock_server/
+backend/backups/
+backend/ini/
+dist/
+build/
+.DS_Store
+.svelte-kit/
