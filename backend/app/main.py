@@ -36,7 +36,7 @@ async def lifespan(app: FastAPI):
     print(f"\n{'='*50}")
     print(f"  OmniBedrock MC Panel")
     import os
-    port = os.getenv("OMNI_PORT", "17755")
+    port = os.getenv("OMNI_PORT", "17754")
     print(f"  API: http://localhost:{port}{settings.api_prefix}")
     print(f"  Auth Token: {token}")
     print(f"{'='*50}\n")
@@ -114,7 +114,7 @@ def create_app() -> FastAPI:
   <div class="card">
     <div class="logo"></div>
     <h1>OmniBedrock MC</h1>
-    <p>Backend API running.<br>Point your browser to the frontend dev server at <span class="url">http://localhost:5173</span></p>
+    <p>Backend API running.<br>Point your browser to the frontend dev server at <span class="url">http://localhost:17755</span></p>
     <span class="badge">API v0.1.0</span>
   </div>
 </body>
