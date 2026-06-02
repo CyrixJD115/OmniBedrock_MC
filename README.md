@@ -1,7 +1,7 @@
+<h1 align="center">OmniBedrock</h1>
 <p align="center">
   <img src="assets/OmniBedrock_Icon.png" alt="OmniBedrock" width="250">
 </p>
-<h1 align="center">OmniBedrock</h1>
 
 A modern, powerful web-based Minecraft Bedrock server control panel. Migrated from PySide6 to a full-stack FastAPI + SvelteKit architecture.
 
