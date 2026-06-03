@@ -3,7 +3,7 @@
   <img src="assets/OmniBedrock_Icon.png" alt="OmniBedrock" width="250">
 </p>
 
-A modern, powerful web-based Minecraft Bedrock server control panel. Migrated from PySide6 to a full-stack FastAPI + SvelteKit architecture.
+A modern, powerful web-based Minecraft Bedrock server control panel.
 
 ## Features
 
@@ -23,25 +23,27 @@ A modern, powerful web-based Minecraft Bedrock server control panel. Migrated fr
 
 ```
 OmniBedrock_MC/
+├── assets/           # Branding assets (logo, etc.)
 ├── backend/          # FastAPI + Python (server logic, API, WebSockets)
 │   ├── app/
-│   │   ├── core/         # Config, security, logging, DI
+│   │   ├── core/         # Config, security, logging, auth, DI
 │   │   ├── routers/      # REST API endpoints
 │   │   ├── services/     # Business logic
 │   │   ├── managers/     # Server state, backup scheduler, performance
-│   │   ├── models/       # Pydantic data models
+│   │   ├── models/       # Data models
 │   │   ├── schemas/      # Request/response schemas
 │   │   ├── websocket/    # WebSocket handlers
 │   │   └── utils/        # Helpers
-│   └── requirements.txt
+│   └── ini/              # Runtime data (users, config)
 ├── frontend/         # SvelteKit + TypeScript + TailwindCSS
 │   └── src/
 │       ├── routes/       # Page components (dashboard, console, etc.)
-│       ├── lib/          # API client, WebSocket, utilities
-│       ├── components/   # Reusable UI components
+│       ├── lib/          # API client, WebSocket, utilities, UI components
 │       ├── stores/       # Svelte stores
 │       └── types/        # TypeScript interfaces
-├── docker-compose.yml
+├── start.py          # Dual launcher (backend + frontend)
+├── pyproject.toml    # Python project config
+├── uv.lock           # Locked dependencies
 └── .env.example
 ```
 
@@ -51,8 +53,8 @@ OmniBedrock_MC/
 
 - Python 3.11+
 - Node.js 20+
-- uv (Python package manager) or pip
-- A Minecraft Bedrock server setup with Endstone
+- [uv](https://docs.astral.sh/uv/) (Python package manager)
+- A Minecraft Bedrock server setup with [Endstone](https://endstone.dev/)
 
 ### Backend
 
@@ -69,11 +71,11 @@ uv sync
 # Copy env config
 cp .env.example .env
 
-# Start the backend
-uv run uvicorn backend.app.main:app --reload --port 8000
+# Start
+uv run uvicorn backend.app.main:app --port 17754
 ```
 
-The backend prints an auth token on first startup. Copy it — you'll need it to log into the frontend.
+On first startup, the backend creates a default admin account and prints the password to the console. Use it to log in at the frontend.
 
 ### Frontend
 
@@ -83,23 +85,36 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173 in your browser and enter the auth token from the backend.
+Open http://localhost:17755 and log in.
+
+### Quick Start (both at once)
+
+```bash
+uv run python start.py
+```
 
 ## API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
+| POST | `/api/v1/auth/login` | Login (returns JWT) |
+| GET | `/api/v1/auth/me` | Current user |
+| GET/POST | `/api/v1/auth/users` | List / create users |
+| PUT/DEL | `/api/v1/auth/users/{username}` | Update / delete user |
 | GET | `/api/v1/server/status` | Server status |
 | POST | `/api/v1/server/action` | Start/stop/restart/kill |
 | POST | `/api/v1/console/command` | Send console command |
 | WS | `/api/v1/console/ws` | Console WebSocket stream |
 | GET | `/api/v1/properties/` | Server properties |
 | PUT | `/api/v1/properties/{key}` | Update property |
-| GET/POST | `/api/v1/backups/` | List/create backups |
+| GET/POST | `/api/v1/backups/` | List / create backups |
 | GET | `/api/v1/addons/` | List behavior/resource packs |
-| GET/POST | `/api/v1/players/` | List players / send action |
+| GET/POST | `/api/v1/players/` | List / manage players |
 | GET | `/api/v1/worlds/` | List worlds |
-| WS | `/api/v1/performance/ws` | Real-time metrics |
+| GET | `/api/v1/audit` | Audit log (filterable) |
+| GET/PUT | `/api/v1/settings/server` | Auto-restart & grace period settings |
+| WS | `/api/v1/performance/ws` | Real-time CPU, RAM, TPS metrics |
+| WS | `/api/v1/logs/ws` | Backend log stream |
 
 ## Migration from PySide6
 
@@ -112,7 +127,7 @@ The original PySide6 desktop app has been fully refactored:
 - **Backup engine** → `backend/app/services/backup_service.py`
 - **Addon management** → `backend/app/services/addon_service.py`
 - **Configuration** → `backend/app/core/config.py` (pydantic-settings)
-- **Auth** → Simple token-based (see `backend/app/core/security.py`)
+- **Auth** → JWT multi-user with role-based access (see `backend/app/core/auth.py`)
 
 ## License
 
