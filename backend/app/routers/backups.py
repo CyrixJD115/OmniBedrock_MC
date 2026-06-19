@@ -1,18 +1,28 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
+from backend.app.core.dependencies import backup_service
 from backend.app.core.security import verify_token
 from backend.app.managers.backup_scheduler import BackupScheduler
 from backend.app.models.user import User
 from backend.app.schemas.backup import BackupCreateRequest, BackupListResponse, BackupScheduleConfig
-from backend.app.services.backup_service import BackupService
+from backend.app.websocket.backup import BackupWebSocket
 
 router = APIRouter(prefix="/backups", tags=["backups"])
 
-_service = BackupService()
+_service = backup_service
 _scheduler = BackupScheduler()
+
+_ws_handler: BackupWebSocket | None = None
+
+
+def get_ws_handler() -> BackupWebSocket:
+    global _ws_handler
+    if _ws_handler is None:
+        _ws_handler = BackupWebSocket(backup_service)
+    return _ws_handler
 
 
 @router.get("/worlds")
@@ -87,3 +97,11 @@ async def update_scheduler_config(cfg: BackupScheduleConfig, _user: User = Depen
     else:
         await _scheduler.stop()
     return {"success": True, "message": "Scheduler updated"}
+
+
+@router.websocket("/ws")
+async def backup_websocket(ws: WebSocket):
+    try:
+        await get_ws_handler().handle(ws)
+    except WebSocketDisconnect:
+        pass
