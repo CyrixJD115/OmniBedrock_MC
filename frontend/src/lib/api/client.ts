@@ -1,4 +1,4 @@
-import type { ServerStatus, ServerActionResponse, Backup, AddonList, Addon, Player, PropertyEntry, IniFile, WorldInfo } from '$types/index';
+import type { ServerStatus, ServerActionResponse, Backup, AddonList, Addon, Player, PropertyEntry, IniFile, WorldInfo, BackupSettings, SchedulerConfig, CommandEntry, IncludeItem, FolderEntry } from '$types/index';
 
 const API_BASE = '/api/v1';
 let authToken = '';
@@ -89,22 +89,44 @@ export const api = {
   // Backups
   listWorlds: () => request<string[]>('/backups/worlds'),
   listBackups: (world?: string) => request<{ backups: Backup[]; total: number }>(`/backups/${world ? `?world=${world}` : ''}`),
-  createBackup: (world: string, tag?: string, fullBackup?: boolean) =>
-    request<{ success: boolean }>('/backups/create', {
+  createBackup: (data: {
+    world: string; tag?: string; full_backup?: boolean; zip_prefix?: string;
+    export_folder?: string; compression?: string; include_items?: string[]; dry_run?: boolean;
+  }) =>
+    request<{ success: boolean; filename?: string }>('/backups/create', {
       method: 'POST',
-      body: JSON.stringify({ world, tag, full_backup: fullBackup ?? true }),
+      body: JSON.stringify(data),
     }),
   deleteBackup: (world: string, filename: string) =>
     request<{ success: boolean }>(`/backups/${world}/${filename}`, { method: 'DELETE' }),
   restoreBackup: (world: string, filename: string) =>
     request<{ success: boolean }>(`/backups/restore/${world}/${filename}`, { method: 'POST' }),
   listTrash: (world?: string) => request<Array<any>>(`/backups/trash${world ? `?world=${world}` : ''}`),
-  getSchedulerConfig: () => request<{ enabled: boolean }>('/backups/scheduler'),
-  updateScheduler: (cfg: { enabled: boolean; interval_minutes?: number; keep_count?: number }) =>
+  downloadBackup: (world: string, filename: string) => {
+    const url = `${API_BASE}/backups/${world}/${filename}/download`;
+    window.open(url, '_blank');
+  },
+  getBackupSettings: () => request<BackupSettings>('/backups/settings'),
+  updateBackupSettings: (data: Partial<BackupSettings>) =>
+    request<{ success: boolean }>('/backups/settings', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  getSchedulerConfig: () => request<SchedulerConfig>('/backups/scheduler'),
+  updateScheduler: (cfg: SchedulerConfig) =>
     request<{ success: boolean }>('/backups/scheduler', {
       method: 'PUT',
       body: JSON.stringify(cfg),
     }),
+  testCommand: (entry: CommandEntry) =>
+    request<{ kind: string; output: string; exit_code: number }>('/backups/test-command', {
+      method: 'POST',
+      body: JSON.stringify({ entry }),
+    }),
+  getIncludeItems: (world: string) =>
+    request<{ items: IncludeItem[] }>(`/backups/include-items?world=${encodeURIComponent(world)}`),
+  listFolders: (base?: string) =>
+    request<{ base: string; dirs: FolderEntry[] }>(`/backups/folders${base ? `?base=${encodeURIComponent(base)}` : ''}`),
 
   // Addons
   listAddons: () => request<AddonList>('/addons/'),

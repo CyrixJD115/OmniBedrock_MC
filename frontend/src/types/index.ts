@@ -74,3 +74,52 @@ export interface WorldInfo {
   size_bytes: number;
   files: number;
 }
+
+// --- Backup types ---
+
+export interface CommandEntry {
+  type: 'command' | 'wait' | 'comment' | 'send';
+  value: string | number;
+}
+
+export interface PrePostConfig {
+  before: CommandEntry[];
+  after: CommandEntry[];
+}
+
+export interface BackupSettings {
+  manual: Record<string, unknown>;
+  auto: Record<string, unknown>;
+  pre_post: PrePostConfig;
+}
+
+export interface BackupEvent {
+  type: string;
+  phase?: string;
+  message?: string;
+  percent?: number;
+  stream?: string;
+  line?: string;
+  success?: boolean;
+  filename?: string | null;
+  active?: boolean;
+}
+
+export interface IncludeItem {
+  name: string;
+  is_dir: boolean;
+}
+
+export interface FolderEntry {
+  name: string;
+  path: string;
+}
+
+export interface SchedulerConfig {
+  enabled: boolean;
+  interval_minutes?: number;
+  keep_count?: number;
+  full_backup?: boolean;
+  compression?: string;
+  worlds?: string[];
+}

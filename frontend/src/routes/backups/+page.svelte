@@ -32,7 +32,7 @@
     if (!selectedWorld) return;
     creating = true;
     try {
-      await api.createBackup(selectedWorld, 'manual');
+      await api.createBackup({world: selectedWorld, tag: 'manual'});
       addToast('Backup created', 'success');
       await reload();
     } catch (e: any) { addToast(`Backup failed: ${e.message}`, 'error'); }
