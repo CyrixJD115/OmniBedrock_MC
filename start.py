@@ -78,7 +78,18 @@ def main():
     parser.add_argument("--backend", action="store_true", help="Run only the backend")
     parser.add_argument("--frontend", action="store_true", help="Run only the frontend")
     parser.add_argument("--no-reload", action="store_true", help="Disable backend hot reload")
+    parser.add_argument(
+        "--reset-admin",
+        action="store_true",
+        help="Clear the admin user store so a fresh admin is generated on next startup",
+    )
     args = parser.parse_args()
+
+    if args.reset_admin:
+        from backend.app.core.auth import reset_admin_store
+
+        reset_admin_store()
+        print("[reset] Admin user store cleared. A new admin + password will print on startup.")
 
     signal.signal(signal.SIGINT, cleanup)
     signal.signal(signal.SIGTERM, cleanup)
