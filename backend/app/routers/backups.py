@@ -3,9 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
-from backend.app.core.dependencies import backup_service
+from backend.app.core.dependencies import backup_scheduler, backup_service
 from backend.app.core.security import verify_token
-from backend.app.managers.backup_scheduler import BackupScheduler
 from backend.app.models.user import User
 from backend.app.schemas.backup import BackupCreateRequest, BackupListResponse, BackupScheduleConfig
 from backend.app.websocket.backup import BackupWebSocket
@@ -13,7 +12,7 @@ from backend.app.websocket.backup import BackupWebSocket
 router = APIRouter(prefix="/backups", tags=["backups"])
 
 _service = backup_service
-_scheduler = BackupScheduler()
+_scheduler = backup_scheduler
 
 _ws_handler: BackupWebSocket | None = None
 

@@ -4,25 +4,31 @@ import asyncio
 import logging
 
 from backend.app.services.backup_service import BackupService
+from backend.app.services.backup_settings_service import BackupSettingsService
 
 logger = logging.getLogger("backup_scheduler")
 
 
 class BackupScheduler:
-    def __init__(self) -> None:
+    def __init__(self, backup_service: BackupService, settings_service: BackupSettingsService) -> None:
         self._task: asyncio.Task | None = None
         self._enabled = False
         self._interval = 30
         self._keep = 10
         self._worlds: list[str] = []
-        self._backup_service = BackupService()
+        self._backup_service = backup_service
+        self._settings_service = settings_service
 
     @property
     def enabled(self) -> bool:
         return self._enabled
 
     def configure(
-        self, enabled: bool, interval_minutes: int = 30, keep_count: int = 10, worlds: list[str] | None = None
+        self,
+        enabled: bool,
+        interval_minutes: int = 30,
+        keep_count: int = 10,
+        worlds: list[str] | None = None,
     ) -> None:
         self._enabled = enabled
         self._interval = interval_minutes
@@ -32,17 +38,18 @@ class BackupScheduler:
     async def start(self) -> None:
         if self._task and not self._task.done():
             return
+        self._enabled = True
         self._task = asyncio.create_task(self._run())
         logger.info("Backup scheduler started (interval=%d min, keep=%d)", self._interval, self._keep)
 
     async def stop(self) -> None:
+        self._enabled = False
         if self._task and not self._task.done():
             self._task.cancel()
             try:
                 await self._task
             except asyncio.CancelledError:
                 pass
-        self._enabled = False
         logger.info("Backup scheduler stopped")
 
     async def _run(self) -> None:
@@ -51,26 +58,44 @@ class BackupScheduler:
                 await asyncio.sleep(self._interval * 60)
                 if not self._enabled:
                     break
-                worlds = self._worlds or self._backup_service.list_worlds()
-                for world in worlds:
-                    await self._backup_service.create_backup(world, tag="auto")
-                self._cleanup_old()
+                await self.tick_once()
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                logger.error("Auto-backup error: %s", e)
+            except Exception:
+                logger.exception("Auto-backup error")
 
-    def _cleanup_old(self) -> None:
+    async def tick_once(self) -> None:
+        settings = self._settings_service.load()
+        auto = settings["auto"]
+        pre_post = settings["pre_post"]
+        worlds = self._worlds or self._backup_service.list_worlds()
+        for world in worlds:
+            async def _discard(e: dict) -> None:
+                pass
+            try:
+                await self._backup_service.run_backup(
+                    world,
+                    tag="auto",
+                    full_backup=auto.get("full_backup", True),
+                    zip_prefix="auto_backup",
+                    export_folder=auto.get("export_folder", ""),
+                    compression=auto.get("compression", "deflate"),
+                    include_items=auto.get("include_items") or None,
+                    pre_post=pre_post,
+                    dry_run=False,
+                    notify=_discard,
+                )
+            except Exception:
+                logger.exception("Auto-backup failed for world %s", world)
+        self._cleanup_old(worlds)
+
+    def _cleanup_old(self, worlds: list[str]) -> None:
         try:
-            all_backups = self._backup_service.list_backups()
-            backups_by_world: dict[str, list[dict]] = {}
-            for b in all_backups:
-                backups_by_world.setdefault(b["world"], []).append(b)
-            for world, backups in backups_by_world.items():
+            for world in worlds:
+                backups = self._backup_service.list_backups(world)
                 if len(backups) > self._keep:
-                    to_delete = backups[self._keep:]
-                    for b in to_delete:
+                    for b in backups[self._keep:]:
                         self._backup_service.delete_backup(b["world"], b["filename"])
                         logger.info("Deleted old backup: %s/%s", b["world"], b["filename"])
-        except Exception as e:
-            logger.error("Cleanup error: %s", e)
+        except Exception:
+            logger.exception("Cleanup error")

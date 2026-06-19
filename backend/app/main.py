@@ -8,7 +8,7 @@ from fastapi.responses import HTMLResponse
 
 from backend.app.core.auth import init_users
 from backend.app.core.config import settings
-from backend.app.core.dependencies import server_manager
+from backend.app.core.dependencies import backup_scheduler, server_manager
 from backend.app.core.logging import setup_logging
 from backend.app.managers.performance_collector import PerformanceCollector
 from backend.app.routers import (
@@ -35,6 +35,7 @@ async def lifespan(app: FastAPI):
     collector = PerformanceCollector()
     collector.set_server_manager(server_manager)
     await collector.start()
+    await backup_scheduler.start()
 
     print(f"\n{'='*50}")
     print("  OmniBedrock MC Panel")
@@ -45,6 +46,7 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    await backup_scheduler.stop()
     await collector.stop()
     await server_manager.kill()
 
