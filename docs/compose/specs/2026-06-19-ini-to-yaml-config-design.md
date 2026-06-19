@@ -1,5 +1,10 @@
 # Panel Config: INI → YAML Restructure
 
+> [!NOTE]
+> This document may not reflect the current implementation.
+> See the final report for up-to-date state:
+> [Final Report](../reports/ini-to-yaml-config.md)
+
 **Status:** Approved
 **Date:** 2026-06-19
 
