@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import os
 import secrets
@@ -10,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import jwt
+import yaml
 
 from backend.app.core.config import settings
 from backend.app.models.user import User, UserRole
@@ -19,7 +19,7 @@ logger = logging.getLogger("auth")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_SECONDS = 86400 * 7  # 7 days
 
-_user_file: Path = Path(settings.ini_dir) / "users.json"
+_user_file: Path = Path(settings.data_dir) / "users.yaml"
 _users: dict[str, User] = {}
 
 
@@ -27,9 +27,11 @@ def _load_users() -> dict[str, User]:
     if not _user_file.exists():
         return {}
     try:
-        data = json.loads(_user_file.read_text(encoding="utf-8"))
+        data = yaml.safe_load(_user_file.read_text(encoding="utf-8"))
+        if not data:
+            return {}
         return {u: User.from_dict(d) for u, d in data.items()}
-    except (json.JSONDecodeError, OSError, KeyError) as e:
+    except (yaml.YAMLError, OSError, KeyError) as e:
         logger.error("Failed to load users: %s", e)
         return {}
 
@@ -37,7 +39,17 @@ def _load_users() -> dict[str, User]:
 def _save_users() -> None:
     _user_file.parent.mkdir(parents=True, exist_ok=True)
     data = {u: user.to_dict() | {"password_hash": user.password_hash} for u, user in _users.items()}
-    _user_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    _user_file.write_text(yaml.safe_dump(data, default_flow_style=False, sort_keys=False), encoding="utf-8")
+
+
+def reset_admin_store() -> None:
+    global _users
+    _users = {}
+    try:
+        if _user_file.exists():
+            _user_file.unlink()
+    except OSError as e:
+        logger.error("Failed to remove user store: %s", e)
 
 
 def init_users() -> None:
@@ -56,11 +68,12 @@ def init_users() -> None:
         )
         _users[username] = user
         _save_users()
-        print(f"\n{'='*50}")
-        print("  Default admin account created")
-        print(f"  Username: {username}")
-        print(f"  Password: {password}")
-        print(f"{'='*50}\n")
+        logger.info("Default admin account created — Username: %s, Password: %s", username, password)
+        print(f"\n{'='*50}", flush=True)
+        print("  Default admin account created", flush=True)
+        print(f"  Username: {username}", flush=True)
+        print(f"  Password: {password}", flush=True)
+        print(f"{'='*50}\n", flush=True)
 
 
 def _hash_password(password: str) -> str:

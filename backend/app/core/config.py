@@ -14,7 +14,7 @@ class Settings(BaseSettings):
 
     bedrock_server_dir: str = str(Path(__file__).resolve().parent.parent.parent.parent / "bedrock_server")
     backups_dir: str = str(Path(__file__).resolve().parent.parent.parent / "backups")
-    ini_dir: str = str(Path(__file__).resolve().parent.parent.parent / "ini")
+    data_dir: str = str(Path(__file__).resolve().parent.parent.parent / "data")
     logs_dir: str = str(Path(__file__).resolve().parent.parent.parent / "logs")
 
     ws_heartbeat_interval: int = 30

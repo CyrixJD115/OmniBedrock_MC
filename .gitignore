@@ -9,6 +9,7 @@ node_modules/
 bedrock_server/
 backend/backups/
 backend/ini/
+backend/data/
 backend/logs/
 dist/
 build/

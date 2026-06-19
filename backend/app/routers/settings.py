@@ -16,7 +16,7 @@ class AppSettingsResponse(BaseModel):
     debug: bool
     bedrock_server_dir: str
     backups_dir: str
-    ini_dir: str
+    data_dir: str
     logs_dir: str
 
 
@@ -44,7 +44,7 @@ async def get_settings(_user: User = Depends(verify_token)) -> AppSettingsRespon
         debug=app_settings.debug,
         bedrock_server_dir=app_settings.bedrock_server_dir,
         backups_dir=app_settings.backups_dir,
-        ini_dir=app_settings.ini_dir,
+        data_dir=app_settings.data_dir,
         logs_dir=app_settings.logs_dir,
     )
 
