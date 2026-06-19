@@ -1,18 +1,19 @@
 <script lang="ts">
   import CommandEntryEditor from './CommandEntryEditor.svelte';
+  import type { CommandEntry } from '$types/index';
 
   let { label = 'Pre/Post Commands', before = [], after = [], onchange }: {
     label?: string;
-    before: { type: string; value: string | number }[];
-    after: { type: string; value: string | number }[];
-    onchange: (b: { type: string; value: string | number }[], a: { type: string; value: string | number }[]) => void;
+    before: CommandEntry[];
+    after: CommandEntry[];
+    onchange: (b: CommandEntry[], a: CommandEntry[]) => void;
   } = $props();
 
   let activeTab = $state<'before' | 'after'>('before');
   let addingTo = $state<'before' | 'after'>('before');
 
   function addEntry() {
-    const entry = { type: 'send', value: '' };
+    const entry: CommandEntry = { type: 'send', value: '' };
     if (activeTab === 'before') {
       onchange([...before, entry], after);
     } else {
@@ -20,7 +21,7 @@
     }
   }
 
-  function updateEntry(index: number, entry: { type: string; value: string | number }) {
+  function updateEntry(index: number, entry: CommandEntry) {
     if (activeTab === 'before') {
       const copy = [...before];
       copy[index] = entry;

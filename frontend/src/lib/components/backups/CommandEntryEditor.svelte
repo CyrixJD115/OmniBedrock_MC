@@ -1,18 +1,20 @@
 <script lang="ts">
+  import type { CommandEntry } from '$types/index';
+
   let { entry, onchange, ondelete }: {
-    entry: { type: string; value: string | number };
-    onchange: (e: { type: string; value: string | number }) => void;
+    entry: CommandEntry;
+    onchange: (e: CommandEntry) => void;
     ondelete: () => void;
   } = $props();
 
-  let typeOptions = ['command', 'wait', 'comment', 'send'];
+  let typeOptions: CommandEntry['type'][] = ['command', 'wait', 'comment', 'send'];
 
   function handleTypeChange(t: string) {
-    onchange({ type: t, value: t === 'wait' ? 5 : '' });
+    onchange({ type: t as CommandEntry['type'], value: t === 'wait' ? 5 : '' });
   }
 
   function handleValueChange(v: string | number) {
-    onchange({ ...entry, value: v });
+    onchange({ type: entry.type, value: v });
   }
 </script>
 
