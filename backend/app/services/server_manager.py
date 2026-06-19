@@ -45,9 +45,9 @@ class ServerManager:
 
         self._last_tps: float | None = None
 
-        self._ini_dir = Path(settings.ini_dir)
-        self._ini_dir.mkdir(parents=True, exist_ok=True)
-        self._lock_file = self._ini_dir / "console_lock_state.ini"
+        self._data_dir = Path(settings.data_dir)
+        self._data_dir.mkdir(parents=True, exist_ok=True)
+        self._lock_file = self._data_dir / "console_lock_state.ini"
 
     @property
     def status(self) -> ServerStatus:

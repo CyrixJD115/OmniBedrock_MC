@@ -19,7 +19,7 @@ logger = logging.getLogger("auth")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_SECONDS = 86400 * 7  # 7 days
 
-_user_file: Path = Path(settings.ini_dir) / "users.json"
+_user_file: Path = Path(settings.data_dir) / "users.json"
 _users: dict[str, User] = {}
 
 
@@ -56,11 +56,12 @@ def init_users() -> None:
         )
         _users[username] = user
         _save_users()
-        print(f"\n{'='*50}")
-        print("  Default admin account created")
-        print(f"  Username: {username}")
-        print(f"  Password: {password}")
-        print(f"{'='*50}\n")
+        logger.info("Default admin account created — Username: %s, Password: %s", username, password)
+        print(f"\n{'='*50}", flush=True)
+        print("  Default admin account created", flush=True)
+        print(f"  Username: {username}", flush=True)
+        print(f"  Password: {password}", flush=True)
+        print(f"{'='*50}\n", flush=True)
 
 
 def _hash_password(password: str) -> str:
