@@ -9,6 +9,8 @@ import sys
 import time
 from pathlib import Path
 
+import yaml
+
 from backend.app.core.config import settings
 from backend.app.models.server import ServerStatus
 
@@ -47,7 +49,7 @@ class ServerManager:
 
         self._data_dir = Path(settings.data_dir)
         self._data_dir.mkdir(parents=True, exist_ok=True)
-        self._lock_file = self._data_dir / "console_lock_state.ini"
+        self._lock_file = self._data_dir / "console_lock_state.yaml"
 
     @property
     def status(self) -> ServerStatus:
@@ -328,9 +330,12 @@ class ServerManager:
 
     def _write_lock_state(self, state: str) -> None:
         try:
-            self._lock_file.write_text(
-                f"[console]\nstate = {state}\ntimestamp = {time.time():.0f}\n"
+            payload = yaml.safe_dump(
+                {"console": {"state": state, "timestamp": int(time.time())}},
+                default_flow_style=False,
+                sort_keys=False,
             )
+            self._lock_file.write_text(payload)
         except OSError as e:
             logger.error("Failed to write lock state: %s", e)
 
