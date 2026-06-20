@@ -17,6 +17,7 @@ from backend.app.routers import (
     auth,
     backups,
     console,
+    files,
     performance,
     players,
     properties,
@@ -77,6 +78,7 @@ def create_app() -> FastAPI:
     app.include_router(worlds.router, prefix=prefix)
     app.include_router(players.router, prefix=prefix)
     app.include_router(settings_router.router, prefix=prefix)
+    app.include_router(files.router, prefix=prefix)
     app.include_router(performance.router, prefix=prefix)
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)

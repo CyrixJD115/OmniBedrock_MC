@@ -155,6 +155,10 @@ def list_users() -> list[User]:
     return list(_users.values())
 
 
+def _jwt_key() -> bytes:
+    return hashlib.sha256(settings.secret_key.encode()).digest()
+
+
 def create_access_token(user: User) -> str:
     payload = {
         "sub": user.username,
@@ -162,12 +166,12 @@ def create_access_token(user: User) -> str:
         "iat": int(time.time()),
         "exp": int(time.time()) + ACCESS_TOKEN_EXPIRE_SECONDS,
     }
-    return jwt.encode(payload, settings.secret_key, algorithm=ALGORITHM)
+    return jwt.encode(payload, _jwt_key(), algorithm=ALGORITHM)
 
 
 def decode_access_token(token: str) -> dict | None:
     try:
-        payload = jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, _jwt_key(), algorithms=[ALGORITHM])
         return payload
     except jwt.ExpiredSignatureError:
         return None

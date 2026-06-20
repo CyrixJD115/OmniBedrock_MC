@@ -7,8 +7,9 @@
     onconfirm: (items: string[]) => void; oncancel: () => void;
   } = $props();
 
+  // svelte-ignore state_referenced_locally
+  let checked = $state(new Set(selected));
   let items = $state<IncludeItem[]>([]);
-  let checked = $state<Set<string>>(new Set(selected));
   let loading = $state(false);
 
   $effect(() => {
@@ -41,6 +42,7 @@
   <div class="fixed inset-0 z-50 flex items-center justify-center p-4 modal-bg"
        style="background: rgba(3,8,16,0.85); backdrop-filter: blur(4px);"
        onclick={(e) => { if ((e.target as HTMLElement).classList.contains('modal-bg')) oncancel(); }}
+       onkeydown={(e) => e.key === 'Escape' && oncancel()}
        role="dialog" aria-modal="true" tabindex="-1">
     <div class="bg-deep-900 border-2 border-deep-600/50 p-4 w-full max-w-lg shadow-block-lg shadow-black/50"
          style="box-shadow: inset 2px 2px 0 rgba(255,255,255,0.03), inset -1px -1px 0 rgba(0,0,0,0.3), 6px 6px 0 rgba(0,0,0,0.5);">

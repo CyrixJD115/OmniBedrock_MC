@@ -46,7 +46,7 @@
   // --- logs tab ---
   let logFilter = $state('');
   let logAutoScroll = $state(true);
-  let logEl: HTMLDivElement;
+  let logEl: HTMLDivElement | undefined = $state(undefined);
 
   // --- pre/post command state ---
   let cmdBefore = $state<CommandEntry[]>([]);
@@ -163,8 +163,9 @@
   );
 
   $effect(() => {
-    if (logAutoScroll && logEl && filteredEvents.length > 0) {
-      requestAnimationFrame(() => { logEl.scrollTop = logEl.scrollHeight; });
+    if (logAutoScroll && filteredEvents.length > 0) {
+      const el = logEl;
+      if (el) requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
     }
   });
 </script>
@@ -207,18 +208,18 @@
           <h2 class="card-header">Configuration</h2>
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label class="block text-deep-400 text-xs uppercase tracking-wider mb-1">World</label>
-              <select bind:value={selWorld} class="input w-full text-xs py-1.5">
+              <label for="bk-manual-world" class="block text-deep-400 text-xs uppercase tracking-wider mb-1">World</label>
+              <select id="bk-manual-world" bind:value={selWorld} class="input w-full text-xs py-1.5">
                 {#each worlds as w}<option value={w}>{w}</option>{/each}
               </select>
             </div>
             <div>
-              <label class="block text-deep-400 text-xs uppercase tracking-wider mb-1">Zip Prefix</label>
-              <input bind:value={zipPrefix} class="input w-full text-xs py-1.5" placeholder="(auto)" />
+              <label for="bk-zip-prefix" class="block text-deep-400 text-xs uppercase tracking-wider mb-1">Zip Prefix</label>
+              <input id="bk-zip-prefix" bind:value={zipPrefix} class="input w-full text-xs py-1.5" placeholder="(auto)" />
             </div>
             <div>
-              <label class="block text-deep-400 text-xs uppercase tracking-wider mb-1">Compression</label>
-              <select bind:value={compression} class="input w-full text-xs py-1.5">
+              <label for="bk-compression" class="block text-deep-400 text-xs uppercase tracking-wider mb-1">Compression</label>
+              <select id="bk-compression" bind:value={compression} class="input w-full text-xs py-1.5">
                 <option value="zip">Zip</option>
                 <option value="7z">7z</option>
               </select>
@@ -303,16 +304,16 @@
           </label>
           <div class="grid grid-cols-3 gap-3">
             <div>
-              <label class="block text-deep-400 text-xs uppercase tracking-wider mb-1">Interval (min)</label>
-              <input type="number" bind:value={schedInterval} min="5" max="1440" class="input w-full text-xs py-1.5" />
+              <label for="bk-interval" class="block text-deep-400 text-xs uppercase tracking-wider mb-1">Interval (min)</label>
+              <input id="bk-interval" type="number" bind:value={schedInterval} min="5" max="1440" class="input w-full text-xs py-1.5" />
             </div>
             <div>
-              <label class="block text-deep-400 text-xs uppercase tracking-wider mb-1">Keep Count</label>
-              <input type="number" bind:value={schedKeep} min="1" max="100" class="input w-full text-xs py-1.5" />
+              <label for="bk-keep" class="block text-deep-400 text-xs uppercase tracking-wider mb-1">Keep Count</label>
+              <input id="bk-keep" type="number" bind:value={schedKeep} min="1" max="100" class="input w-full text-xs py-1.5" />
             </div>
             <div>
-              <label class="block text-deep-400 text-xs uppercase tracking-wider mb-1">Compression</label>
-              <select bind:value={schedCompression} class="input w-full text-xs py-1.5">
+              <label for="bk-auto-compression" class="block text-deep-400 text-xs uppercase tracking-wider mb-1">Compression</label>
+              <select id="bk-auto-compression" bind:value={schedCompression} class="input w-full text-xs py-1.5">
                 <option value="zip">Zip</option>
                 <option value="7z">7z</option>
               </select>
@@ -323,7 +324,7 @@
             <span class="text-deep-200">Full backup (world folder)</span>
           </label>
           <div>
-            <label class="block text-deep-400 text-xs uppercase tracking-wider mb-2">Worlds</label>
+            <span class="block text-deep-400 text-xs uppercase tracking-wider mb-2">Worlds</span>
             <div class="flex flex-wrap gap-2">
               {#each worlds as w}
                 <label class="flex items-center gap-1 text-xs cursor-pointer px-2 py-1 rounded bg-deep-800/40 border border-deep-600/20 hover:bg-deep-700/40">
@@ -480,6 +481,7 @@
   <div class="fixed inset-0 z-50 flex items-center justify-center p-4 modal-bg"
        style="background: rgba(3,8,16,0.85); backdrop-filter: blur(4px);"
        onclick={(e) => { if ((e.target as HTMLElement).classList.contains('modal-bg')) showTrash = false; }}
+       onkeydown={(e) => e.key === 'Escape' && (showTrash = false)}
        role="dialog" aria-modal="true" tabindex="-1">
     <div class="bg-deep-900 border-2 border-deep-600/50 p-4 w-full max-w-lg shadow-block-lg shadow-black/50">
       <h2 class="text-sm font-bold text-white uppercase tracking-widest mb-3">Trash — {selBkWorld || 'All'}</h2>
