@@ -35,6 +35,8 @@ def start_backend(reload: bool = True) -> subprocess.Popen:
     cmd = [str(venv_python), "-m", "uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", port]
     if reload:
         cmd.append("--reload")
+        cmd.append("--reload-exclude")
+        cmd.append("bedrock_server/**")
     print(f"[backend] Starting: {' '.join(cmd)}")
     return subprocess.Popen(
         cmd,
