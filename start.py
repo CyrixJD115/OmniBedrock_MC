@@ -57,6 +57,12 @@ def ensure_dependencies():
             print("[frontend] npm install failed!")
             sys.exit(1)
         print("[frontend] Dependencies installed.")
+    svelte_kit = FRONTEND_DIR / ".svelte-kit"
+    if svelte_kit.exists():
+        shutil.rmtree(svelte_kit)
+        print("[frontend] Cleared stale .svelte-kit cache.")
+    print("[frontend] Syncing SvelteKit...")
+    subprocess.run(["npx", "svelte-kit", "sync"], cwd=str(FRONTEND_DIR), check=True)
 
 
 def start_frontend() -> subprocess.Popen | None:
