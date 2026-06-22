@@ -11,6 +11,7 @@
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { initShortcuts, registerShortcut } from '$lib/shortcuts';
+  import type { ConsoleLine } from '$types/index';
 
   let { children }: { children: import('svelte').Snippet } = $props();
 
@@ -90,17 +91,33 @@
     unsubs.push(wsManager.connect('/api/v1/performance/ws', onMetricsMessage));
   }
 
+  const consoleBuffer: ConsoleLine[] = [];
+  let flushPending = false;
+
+  function flushLines() {
+    flushPending = false;
+    if (consoleBuffer.length === 0) return;
+    const batch = consoleBuffer.splice(0);
+    import('$stores/index').then(m => {
+      m.consoleLines.update(lines => {
+        for (const item of batch) {
+          lines.push(item);
+        }
+        if (lines.length > 2000) lines.splice(0, lines.length - 2000);
+        return lines;
+      });
+    });
+  }
+
   function onConsoleMessage(data: Record<string, unknown>) {
     if (data.type !== 'console') return;
     import('$lib/console').then(c => {
-      import('$stores/index').then(m => {
-        const level = (data.level as string) || c.detectLevel(data.line as string);
-        m.consoleLines.update(lines => {
-          lines.push({ text: data.line as string, level: level as never, timestamp: data.timestamp as number });
-          if (lines.length > 2000) lines.splice(0, lines.length - 2000);
-          return lines;
-        });
-      });
+      const level = (data.level as string) || c.detectLevel(data.line as string);
+      consoleBuffer.push({ text: data.line as string, level: level as never, timestamp: data.timestamp as number });
+      if (!flushPending) {
+        flushPending = true;
+        requestAnimationFrame(flushLines);
+      }
     });
   }
 

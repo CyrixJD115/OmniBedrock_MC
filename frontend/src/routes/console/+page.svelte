@@ -13,6 +13,7 @@
   let useRegex = $state(false);
   let levelFilter = $state('');
   let terminalEl: HTMLDivElement;
+  let maxLines = $state(2000);
   let commandHistory: string[] = [];
   let historyIdx = $state(-1);
   let showErrors = $state(false);
@@ -161,6 +162,10 @@
     outline: 2px solid rgba(6, 182, 212, 0.6);
     outline-offset: -2px;
   }
+  .terminal-line {
+    content-visibility: auto;
+    contain-intrinsic-size: 1.2em;
+  }
   .filter-btn {
     @apply flex items-center justify-center w-7 h-7 rounded text-deep-400 hover:text-white hover:bg-deep-700/50 transition-colors text-[11px] font-mono;
   }
@@ -239,7 +244,8 @@
          class="terminal-container h-[55vh] overflow-y-auto p-4 font-terminal text-base leading-relaxed">
       {#each filtered as line, i (i)}
         {@const lineIdx = lines.indexOf(line)}
-        <div data-line-idx={lineIdx} class={"leading-snug " + (
+        <div data-line-idx={lineIdx}
+             class={"terminal-line leading-snug " + (
                line.level === 'error' ? 'terminal-line-error' :
                line.level === 'warn' ? 'terminal-line-warn' :
                line.level === 'debug' ? 'terminal-line-debug' :
