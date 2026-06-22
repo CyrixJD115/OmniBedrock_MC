@@ -8,6 +8,18 @@ import sys
 import time
 from pathlib import Path
 
+VITE_CONFIG = Path(__file__).resolve().parent / "frontend" / "vite.config.ts"
+VITE_CONFIG_EXAMPLE = VITE_CONFIG.with_suffix(".ts.example")
+
+
+def ensure_vite_config():
+    if not VITE_CONFIG_EXAMPLE.exists():
+        return
+    if not VITE_CONFIG.exists():
+        shutil.copy2(VITE_CONFIG_EXAMPLE, VITE_CONFIG)
+        print(f"[frontend] Created {VITE_CONFIG.name} from {VITE_CONFIG_EXAMPLE.name}")
+        print(f"[frontend] Edit {VITE_CONFIG.name} to customize ports, hosts, etc.")
+
 ROOT = Path(__file__).resolve().parent
 FRONTEND_DIR = ROOT / "frontend"
 
@@ -87,6 +99,7 @@ def main():
         processes.append(start_backend())
 
     if run_frontend:
+        ensure_vite_config()
         p = start_frontend()
         if p:
             processes.append(p)
