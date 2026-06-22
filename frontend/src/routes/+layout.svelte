@@ -64,16 +64,19 @@
           currentUser.set(JSON.parse(savedUser));
         } catch { /* ignore */ }
       }
-      try {
-        const user = await api.getMe();
-        currentUser.set(user as any);
-        localStorage.setItem('omb_user', JSON.stringify(user));
-        await boot();
-        checkingAuth = false;
-        return;
-      } catch {
-        logout();
+      for (let attempt = 0; attempt < 30; attempt++) {
+        try {
+          const user = await api.getMe();
+          currentUser.set(user as any);
+          localStorage.setItem('omb_user', JSON.stringify(user));
+          await boot();
+          checkingAuth = false;
+          return;
+        } catch {
+          if (attempt < 29) await new Promise(r => setTimeout(r, 1000));
+        }
       }
+      logout();
     }
     checkingAuth = false;
     if (!isLoginPage) {
