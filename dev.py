@@ -34,6 +34,9 @@ def start_backend() -> subprocess.Popen:
         venv_python = "python3"
     port = os.getenv("OMNI_PORT", "17754")
     cmd = [str(venv_python), "-m", "uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", port]
+    cmd.append("--reload")
+    cmd.append("--reload-exclude")
+    cmd.append("bedrock_server/**")
     print(f"[backend] Starting: {' '.join(cmd)}")
     return subprocess.Popen(
         cmd,

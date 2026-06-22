@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -7,6 +8,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+FRONTEND_DIR = ROOT / "frontend"
 
 processes: list[subprocess.Popen] = []
 
@@ -23,6 +25,21 @@ def start_backend() -> subprocess.Popen:
     return subprocess.Popen(
         cmd,
         cwd=str(ROOT),
+        stdout=sys.stdout,
+        stderr=sys.stderr,
+    )
+
+
+def start_frontend() -> subprocess.Popen:
+    cmd = ["npm", "run", "dev"]
+    node = shutil.which("node")
+    if not node:
+        print("[frontend] Node.js not found. Skipping frontend.")
+        return None
+    print(f"[frontend] Starting: npm run dev (in {FRONTEND_DIR})")
+    return subprocess.Popen(
+        cmd,
+        cwd=str(FRONTEND_DIR),
         stdout=sys.stdout,
         stderr=sys.stderr,
     )
@@ -47,6 +64,9 @@ def main():
     signal.signal(signal.SIGTERM, cleanup)
 
     processes.append(start_backend())
+    p = start_frontend()
+    if p:
+        processes.append(p)
 
     try:
         while True:
