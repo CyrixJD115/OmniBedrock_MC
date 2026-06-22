@@ -17,3 +17,4 @@ build/
 .svelte-kit/
 .worktrees/
 vite.config.ts
+docs/
