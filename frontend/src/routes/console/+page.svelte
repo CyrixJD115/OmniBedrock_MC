@@ -3,20 +3,35 @@
   import { consoleLines, errorStats } from '$stores/index';
   import { api } from '$lib/api/client';
   import { addToast } from '$stores/toast';
-  import { Send, Trash2, Filter, AlertTriangle, ChevronDown, ChevronRight, ArrowUp, ArrowDown, Binary } from '@lucide/svelte';
+  import { Send, Trash2, Filter, AlertTriangle, ChevronDown, ChevronRight, ArrowUp, ArrowDown, Binary, Download } from '@lucide/svelte';
   import { parseAnsi, highlightMatches, matchesQuery } from '$lib/console';
   import type { ErrorStat } from '$types/index';
 
+  function loadSetting<T>(key: string, def: T): T {
+    if (typeof localStorage === 'undefined') return def;
+    try { return JSON.parse(localStorage.getItem(key) || 'null') ?? def; }
+    catch { return def; }
+  }
+  function saveSetting(key: string, value: unknown) {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(key, JSON.stringify(value));
+  }
+
   let input = $state('');
-  let autoScroll = $state(true);
-  let filterText = $state('');
-  let useRegex = $state(false);
-  let levelFilter = $state('');
+  let autoScroll = $state(loadSetting('omb_console_scroll', true));
+  let filterText = $state(loadSetting('omb_console_filter', ''));
+  let useRegex = $state(loadSetting('omb_console_regex', false));
+  let levelFilter = $state(loadSetting('omb_console_level', ''));
+  let showErrors = $state(loadSetting('omb_console_errors', false));
+
+  $effect(() => { saveSetting('omb_console_filter', filterText); });
+  $effect(() => { saveSetting('omb_console_regex', useRegex); });
+  $effect(() => { saveSetting('omb_console_level', levelFilter); });
+  $effect(() => { saveSetting('omb_console_errors', showErrors); });
+  $effect(() => { saveSetting('omb_console_scroll', autoScroll); });
+
   let terminalEl: HTMLDivElement;
-  let maxLines = $state(2000);
   let commandHistory: string[] = [];
   let historyIdx = $state(-1);
-  let showErrors = $state(false);
   let errorSortKey = $state<'count' | 'signature' | 'last_seen'>('count');
   let errorSortDir = $state<'desc' | 'asc'>('desc');
   let currentMatch = $state(-1);
@@ -38,6 +53,17 @@
   });
 
   onDestroy(() => { unsubLines(); unsubErrors(); });
+
+  function downloadLog() {
+    const text = lines.map(l => l.text).join('\n');
+    const blob = new Blob([text], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `console-${new Date().toISOString().slice(0, 19)}.log`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 
   let errorCount = $derived(errors.reduce((a, e) => a + e.count, 0));
 
@@ -220,6 +246,9 @@
         </div>
       {/if}
 
+      <button onclick={downloadLog} class="btn-ghost p-2 text-xs" title="Download Log">
+        <Download size={14} />
+      </button>
       <button onclick={clearLines} class="btn-ghost p-2 text-xs" title="Clear">
         <Trash2 size={14} />
       </button>
