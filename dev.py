@@ -2,16 +2,16 @@
 import argparse
 import os
 import shutil
-import signal
 import subprocess
 import sys
-import time
 from pathlib import Path
+
+import launcher
 
 FRONTEND_DIR = Path(__file__).resolve().parent / "frontend"
 VITE_CONFIG = FRONTEND_DIR / "vite.config.ts"
 VITE_CONFIG_EXAMPLE = FRONTEND_DIR / "vite.config.example.ts"
-LOCK_FILE = Path(__file__).resolve().parent / "backend" / "data" / "console_lock_state.yaml"
+ROOT = Path(__file__).resolve().parent
 
 
 def ensure_vite_config():
@@ -21,28 +21,6 @@ def ensure_vite_config():
         shutil.copy2(VITE_CONFIG_EXAMPLE, VITE_CONFIG)
         print(f"[frontend] Created {VITE_CONFIG.name} from {VITE_CONFIG_EXAMPLE.name}")
         print(f"[frontend] Edit {VITE_CONFIG.name} to customize ports, hosts, etc.")
-
-
-ROOT = Path(__file__).resolve().parent
-
-processes: list[subprocess.Popen] = []
-
-
-def _spawn_kwargs() -> dict:
-    if os.name == "nt":
-        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
-    return {"preexec_fn": os.setpgrp}
-
-
-def _server_is_running() -> bool:
-    try:
-        import yaml
-        if LOCK_FILE.exists():
-            data = yaml.safe_load(LOCK_FILE.read_text())
-            return data.get("console", {}).get("state") == "locked"
-    except Exception:
-        pass
-    return False
 
 
 def start_backend() -> subprocess.Popen:
@@ -62,11 +40,11 @@ def start_backend() -> subprocess.Popen:
         cwd=str(ROOT),
         stdout=sys.stdout,
         stderr=sys.stderr,
-        **_spawn_kwargs(),
+        **launcher.spawn_kwargs(),
     )
 
 
-def start_frontend() -> subprocess.Popen:
+def start_frontend() -> subprocess.Popen | None:
     cmd = ["npm", "run", "dev"]
     node = shutil.which("node")
     if not node:
@@ -78,70 +56,8 @@ def start_frontend() -> subprocess.Popen:
         cwd=str(FRONTEND_DIR),
         stdout=sys.stdout,
         stderr=sys.stderr,
-        **_spawn_kwargs(),
+        **launcher.spawn_kwargs(),
     )
-
-
-_arm_state = {"armed": False, "time": 0.0}
-_ARM_MIN_DELAY = 5
-_ARM_TIMEOUT = 10
-_shutting_down = False
-
-
-def _shutdown_all() -> None:
-    global _shutting_down
-    if _shutting_down:
-        return
-    _shutting_down = True
-    signal.signal(signal.SIGINT, signal.default_int_handler)
-    print("\nShutting down...")
-    for p in processes:
-        if p and p.poll() is None:
-            p.terminate()
-    for p in processes:
-        if p:
-            try:
-                p.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                p.kill()
-    sys.exit(0)
-
-
-def cleanup(*_) -> None:
-    if _shutting_down:
-        return
-
-    if _server_is_running():
-        now = time.time()
-        arm = _arm_state
-
-        if not arm["armed"]:
-            arm["armed"] = True
-            arm["time"] = now
-            print("\n" + "!" * 60)
-            print("  WARNING: Minecraft server is still running!")
-            print("  Shutdown is ARMED. Press Ctrl+C again to confirm.")
-            print(f"  Wait at least {_ARM_MIN_DELAY}s between presses. Pressing sooner cancels.")
-            print(f"  Arm expires in {_ARM_TIMEOUT}s.")
-            print("!" * 60 + "\n")
-            signal.signal(signal.SIGINT, signal.default_int_handler)
-            return
-
-        elapsed = now - arm["time"]
-        if elapsed < _ARM_MIN_DELAY:
-            arm["armed"] = False
-            signal.signal(signal.SIGINT, cleanup)
-            print("Shutdown cancelled (too fast — protection triggered).")
-            return
-        if elapsed > _ARM_TIMEOUT:
-            arm["armed"] = False
-            signal.signal(signal.SIGINT, cleanup)
-            print("Shutdown cancelled (timed out).")
-            return
-
-        arm["armed"] = False
-
-    _shutdown_all()
 
 
 def main():
@@ -161,15 +77,12 @@ def main():
         reset_admin_store()
         print("[reset] Admin user store cleared. A new admin + password will print on startup.")
 
-    signal.signal(signal.SIGINT, cleanup)
-    signal.signal(signal.SIGTERM, cleanup)
-
     run_backend = args.backend or not args.frontend
     run_frontend = args.frontend or not args.backend
 
+    processes: list[subprocess.Popen] = []
     if run_backend:
         processes.append(start_backend())
-
     if run_frontend:
         ensure_vite_config()
         p = start_frontend()
@@ -180,16 +93,7 @@ def main():
         print("No servers to run.")
         return
 
-    while True:
-        try:
-            time.sleep(1)
-        except KeyboardInterrupt:
-            cleanup()
-            continue
-        for p in processes:
-            if p and p.poll() is not None:
-                print(f"Process exited with code {p.returncode}")
-                _shutdown_all()
+    launcher.run("OmniBedrock MC Panel (dev)", processes)
 
 
 if __name__ == "__main__":
