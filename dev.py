@@ -3,6 +3,7 @@ import argparse
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -37,6 +38,18 @@ def _server_is_running() -> bool:
     except Exception:
         pass
     return False
+
+
+def wait_for_backend(port: int = 17754, timeout: int = 60) -> None:
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=1):
+                print(f"[backend] Ready (port {port})")
+                return
+        except (OSError, ConnectionRefusedError):
+            time.sleep(0.5)
+    print(f"[backend] Timed out waiting for port {port}")
 
 
 def start_backend() -> subprocess.Popen:
@@ -143,6 +156,7 @@ def main():
 
     if run_backend:
         processes.append(start_backend())
+        wait_for_backend()
 
     if run_frontend:
         ensure_vite_config()
