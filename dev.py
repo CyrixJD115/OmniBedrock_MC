@@ -180,15 +180,16 @@ def main():
         print("No servers to run.")
         return
 
-    try:
-        while True:
+    while True:
+        try:
             time.sleep(1)
-            for p in processes:
-                if p and p.poll() is not None:
-                    print(f"Process exited with code {p.returncode}")
-                    _shutdown_all()
-    except KeyboardInterrupt:
-        cleanup()
+        except KeyboardInterrupt:
+            cleanup()
+            continue
+        for p in processes:
+            if p and p.poll() is not None:
+                print(f"Process exited with code {p.returncode}")
+                _shutdown_all()
 
 
 if __name__ == "__main__":
