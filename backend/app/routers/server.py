@@ -3,7 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from backend.app.core.dependencies import server_manager
-from backend.app.core.security import verify_token
+from backend.app.core.permissions import SERVER_MANAGE
+from backend.app.core.security import require_permission, verify_token
 from backend.app.models.user import User
 from backend.app.schemas.server import ServerActionRequest, ServerActionResponse, ServerStatusResponse
 from backend.app.services.audit_service import log_action
@@ -17,7 +18,9 @@ async def get_status(_user: User = Depends(verify_token)) -> ServerStatusRespons
 
 
 @router.post("/action")
-async def server_action(req: ServerActionRequest, _user: User = Depends(verify_token)) -> ServerActionResponse:
+async def server_action(
+    req: ServerActionRequest, _user: User = Depends(require_permission(SERVER_MANAGE))
+) -> ServerActionResponse:
     actions = {
         "start": server_manager.start,
         "stop": server_manager.stop,

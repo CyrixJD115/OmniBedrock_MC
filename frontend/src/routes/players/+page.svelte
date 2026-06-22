@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { api } from '$lib/api/client';
   import { addToast } from '$stores/toast';
+  import { userPermissions } from '$stores/auth';
   import { Users, Ban, Shield, ShieldOff } from '@lucide/svelte';
 
   let players = $state<{ name: string }[]>([]);
@@ -57,10 +58,16 @@
             <tr class="border-b border-deep-700/20 hover:bg-deep-800/30">
               <td class="py-1.5 px-3 font-medium">{p.name}</td>
               <td class="py-1.5 px-3 text-right">
-                <button onclick={() => act('kick', p.name)} class="btn-ghost p-1 text-yellow-400" title="Kick"><Ban size={12} /></button>
-                <button onclick={() => act('ban', p.name)} class="btn-ghost p-1 text-red-400" title="Ban"><ShieldOff size={12} /></button>
-                <button onclick={() => act('op', p.name)} class="btn-ghost p-1 text-teal-400" title="OP"><Shield size={12} /></button>
-                <button onclick={() => act('deop', p.name)} class="btn-ghost p-1 text-deep-400" title="DeOP"><ShieldOff size={12} /></button>
+                {#if $userPermissions.includes('PLAYERS_KICK')}
+                  <button onclick={() => act('kick', p.name)} class="btn-ghost p-1 text-yellow-400" title="Kick"><Ban size={12} /></button>
+                {/if}
+                {#if $userPermissions.includes('PLAYERS_BAN')}
+                  <button onclick={() => act('ban', p.name)} class="btn-ghost p-1 text-red-400" title="Ban"><ShieldOff size={12} /></button>
+                {/if}
+                {#if $userPermissions.includes('PLAYERS_OP')}
+                  <button onclick={() => act('op', p.name)} class="btn-ghost p-1 text-teal-400" title="OP"><Shield size={12} /></button>
+                  <button onclick={() => act('deop', p.name)} class="btn-ghost p-1 text-deep-400" title="DeOP"><ShieldOff size={12} /></button>
+                {/if}
               </td>
             </tr>
           {:else}

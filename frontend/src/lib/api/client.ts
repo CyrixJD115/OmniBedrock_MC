@@ -166,6 +166,21 @@ export const api = {
   deleteIniFile: (filename: string) =>
     request<{ success: boolean }>(`/files/${filename}`, { method: 'DELETE' }),
 
+  // Roles
+  listRoles: () => request<Array<Record<string, unknown>>>('/roles/'),
+  createRole: (data: { name: string; display_name?: string; permissions: string[]; is_default?: boolean }) =>
+    request<Record<string, unknown>>('/roles/', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateRole: (name: string, data: Record<string, unknown>) =>
+    request<Record<string, unknown>>(`/roles/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  deleteRole: (name: string) =>
+    request<{ success: boolean }>(`/roles/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+
   // Settings
   getSettings: () => request<Record<string, unknown>>('/settings/'),
 };

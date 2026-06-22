@@ -8,8 +8,9 @@ from fastapi.responses import FileResponse
 
 from backend.app.core.config import settings as cfg
 from backend.app.core.dependencies import backup_scheduler, backup_service, backup_settings_service
-from backend.app.core.security import require_role, verify_token
-from backend.app.models.user import User, UserRole
+from backend.app.core.permissions import BACKUPS_CREATE, BACKUPS_DELETE, BACKUPS_RESTORE, BACKUPS_VIEW, SETTINGS_EDIT
+from backend.app.core.security import require_permission, verify_token
+from backend.app.models.user import User
 from backend.app.schemas.backup import (
     BackupCreateRequest,
     BackupListResponse,
@@ -50,7 +51,7 @@ async def list_backups(world: str | None = None, _u: User = Depends(verify_token
 
 
 @router.post("/create")
-async def create_backup(req: BackupCreateRequest, user: User = Depends(verify_token)) -> dict:
+async def create_backup(req: BackupCreateRequest, user: User = Depends(require_permission(BACKUPS_CREATE))) -> dict:
     pre_post = backup_settings_service.load()["pre_post"] if req.run_hooks else {"before": [], "after": []}
 
     async def _discard(event: dict) -> None:
@@ -77,7 +78,7 @@ async def create_backup(req: BackupCreateRequest, user: User = Depends(verify_to
 
 
 @router.post("/restore/{world}/{filename}")
-async def restore_backup(world: str, filename: str, _u: User = Depends(verify_token)) -> dict:
+async def restore_backup(world: str, filename: str, _u: User = Depends(require_permission(BACKUPS_RESTORE))) -> dict:
     if not backup_service.restore_backup(world, filename):
         raise HTTPException(status_code=404, detail="Backup not found in trash")
     return {"success": True, "message": f"Restored {filename}"}
@@ -89,7 +90,7 @@ async def list_trash(world: str | None = None, _u: User = Depends(verify_token))
 
 
 @router.delete("/{world}/{filename}")
-async def delete_backup(world: str, filename: str, _u: User = Depends(verify_token)) -> dict:
+async def delete_backup(world: str, filename: str, _u: User = Depends(require_permission(BACKUPS_DELETE))) -> dict:
     if not backup_service.delete_backup(world, filename):
         raise HTTPException(status_code=404, detail="Backup not found")
     return {"success": True, "message": f"Moved {filename} to trash"}
@@ -111,7 +112,7 @@ async def get_settings(_u: User = Depends(verify_token)) -> dict:
 @router.put("/settings")
 async def put_settings(
     payload: BackupSettingsUpdate,
-    user: User = Depends(require_role(UserRole.admin, UserRole.owner)),
+    user: User = Depends(require_permission(SETTINGS_EDIT)),
 ) -> dict:
     backup_settings_service.save(manual=payload.manual, auto=payload.auto, pre_post=payload.pre_post)
     log_action(user.username, "backup.settings_update", "backup_settings.yaml", category="backup")
@@ -121,7 +122,7 @@ async def put_settings(
 @router.post("/test-command")
 async def test_command(
     payload: TestCommandRequest,
-    user: User = Depends(require_role(UserRole.admin, UserRole.owner)),
+    user: User = Depends(require_permission(BACKUPS_CREATE)),
 ) -> dict:
     entry = payload.entry
     log_action(user.username, "backup.test_command", f"{entry.type}:{entry.value}", category="backup")
@@ -161,7 +162,7 @@ async def include_items(world: str, _u: User = Depends(verify_token)) -> dict:
 @router.get("/folders")
 async def list_folders(
     base: str = "",
-    _u: User = Depends(require_role(UserRole.admin, UserRole.owner)),
+    _u: User = Depends(require_permission(BACKUPS_VIEW)),
 ) -> dict:
     root = Path(cfg.backups_dir).resolve()
     target = (root / base).resolve() if base else root
@@ -183,7 +184,7 @@ async def get_scheduler_config(_u: User = Depends(verify_token)) -> dict:
 @router.put("/scheduler")
 async def update_scheduler_config(
     cfg_req: BackupScheduleConfig,
-    user: User = Depends(require_role(UserRole.admin, UserRole.owner)),
+    user: User = Depends(require_permission(SETTINGS_EDIT)),
 ) -> dict:
     backup_settings_service.save(auto=cfg_req.model_dump(exclude_none=True))
     backup_scheduler.configure(

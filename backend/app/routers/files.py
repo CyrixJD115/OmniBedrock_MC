@@ -5,8 +5,9 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 
 from backend.app.core.config import settings
-from backend.app.core.security import require_role, verify_token
-from backend.app.models.user import User, UserRole
+from backend.app.core.permissions import FILES_EDIT
+from backend.app.core.security import require_permission, verify_token
+from backend.app.models.user import User
 
 router = APIRouter(prefix="/files", tags=["files"])
 
@@ -53,7 +54,7 @@ async def read_file(filename: str, _user: User = Depends(verify_token)) -> dict:
 
 
 @router.put("/{filename}")
-async def write_file(filename: str, body: dict, _user: User = Depends(require_role(UserRole.admin, UserRole.owner))):
+async def write_file(filename: str, body: dict, _user: User = Depends(require_permission(FILES_EDIT))):
     path = _safe_path(filename)
     if path.name in SENSITIVE:
         raise HTTPException(status_code=403, detail="Access denied")
@@ -62,7 +63,7 @@ async def write_file(filename: str, body: dict, _user: User = Depends(require_ro
 
 
 @router.delete("/{filename}")
-async def delete_file(filename: str, _user: User = Depends(require_role(UserRole.admin, UserRole.owner))):
+async def delete_file(filename: str, _user: User = Depends(require_permission(FILES_EDIT))):
     path = _safe_path(filename)
     if path.name in SENSITIVE:
         raise HTTPException(status_code=403, detail="Access denied")

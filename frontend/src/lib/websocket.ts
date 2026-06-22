@@ -7,7 +7,7 @@ function getWsBase(): string {
 type MessageHandler = (data: Record<string, unknown>) => void;
 
 class WebSocketManager {
-  private connections: Map<string, { ws: WebSocket; handlers: Set<MessageHandler>; reconnectTimer?: ReturnType<typeof setTimeout> }> = new Map();
+  private connections: Map<string, { ws: WebSocket; handlers: Set<MessageHandler>; reconnectTimer?: ReturnType<typeof setTimeout>; closed: boolean }> = new Map();
 
   connect(path: string, onMessage: MessageHandler): () => void {
     const key = path;
@@ -17,7 +17,7 @@ class WebSocketManager {
       const url = `${wsBase}${path}`;
       const ws = new WebSocket(url);
       const handlers = new Set<MessageHandler>([onMessage]);
-      const entry: { ws: WebSocket; handlers: Set<MessageHandler>; reconnectTimer?: ReturnType<typeof setTimeout> } = { ws, handlers };
+      const entry: { ws: WebSocket; handlers: Set<MessageHandler>; reconnectTimer?: ReturnType<typeof setTimeout>; closed: boolean } = { ws, handlers, closed: false };
 
       ws.onopen = () => {
         if (entry.reconnectTimer) {
@@ -37,6 +37,7 @@ class WebSocketManager {
       };
 
       ws.onclose = () => {
+        if (entry.closed) return;
         entry.reconnectTimer = setTimeout(() => {
           this.connections.delete(key);
           for (const h of handlers) {
@@ -56,6 +57,7 @@ class WebSocketManager {
       if (entry) {
         entry.handlers.delete(onMessage);
         if (entry.handlers.size === 0) {
+          entry.closed = true;
           entry.ws.close();
           if (entry.reconnectTimer) clearTimeout(entry.reconnectTimer);
           this.connections.delete(key);
@@ -67,6 +69,7 @@ class WebSocketManager {
   disconnect(path: string) {
     const entry = this.connections.get(path);
     if (entry) {
+      entry.closed = true;
       entry.ws.close();
       if (entry.reconnectTimer) clearTimeout(entry.reconnectTimer);
       this.connections.delete(path);

@@ -4,7 +4,8 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from backend.app.core.auth import decode_access_token, get_user
-from backend.app.models.user import User, UserRole
+from backend.app.core.roles import resolve_permissions
+from backend.app.models.user import User
 
 _bearer = HTTPBearer(auto_error=True)
 
@@ -22,17 +23,11 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(_bearer)) -
     return user
 
 
-def require_role(*roles: UserRole):
+def require_permission(*permissions: str):
     async def _check(user: User = Depends(verify_token)) -> User:
-        role_hierarchy = {
-            UserRole.owner: 4,
-            UserRole.admin: 3,
-            UserRole.moderator: 2,
-            UserRole.viewer: 1,
-        }
-        user_level = role_hierarchy.get(user.role, 0)
-        for allowed in roles:
-            if user_level >= role_hierarchy.get(allowed, 0):
-                return user
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+        user_perms = resolve_permissions(user.role)
+        for perm in permissions:
+            if perm not in user_perms:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Missing permission: {perm}")
+        return user
     return _check

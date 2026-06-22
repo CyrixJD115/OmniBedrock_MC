@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { api } from '$lib/api/client';
   import { addToast } from '$stores/toast';
+  import { userPermissions } from '$stores/auth';
   import { Eye, RotateCw, Save } from '@lucide/svelte';
 
   let properties = $state<{ key: string; value: string; comment: string; inline_comment: string }[]>([]);
@@ -69,7 +70,9 @@
       <h2 class="card-header">Raw Editor</h2>
       <textarea bind:value={rawText} class="input w-full h-96 font-mono text-sm" spellcheck="false"></textarea>
       <div class="flex gap-2 mt-3">
-        <button onclick={saveRaw} class="btn-primary flex items-center gap-2 text-xs"><Save size={14} /> Save</button>
+        {#if $userPermissions.includes('PROPERTIES_EDIT')}
+          <button onclick={saveRaw} class="btn-primary flex items-center gap-2 text-xs"><Save size={14} /> Save</button>
+        {/if}
         <button onclick={() => showRaw = false} class="btn-secondary text-xs">Cancel</button>
       </div>
     </div>

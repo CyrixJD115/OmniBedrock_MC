@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from backend.app.core.security import verify_token
+from backend.app.core.permissions import ADDONS_MANAGE
+from backend.app.core.security import require_permission, verify_token
 from backend.app.models.user import User
 from backend.app.schemas.addon import AddonReorderRequest, ManifestUpdateRequest
 from backend.app.services.addon_service import AddonService
@@ -27,7 +28,9 @@ async def get_manifest(path: str, _user: User = Depends(verify_token)) -> dict:
 
 
 @router.put("/manifest")
-async def update_manifest(req: ManifestUpdateRequest, user: User = Depends(verify_token)) -> dict:
+async def update_manifest(
+    req: ManifestUpdateRequest, user: User = Depends(require_permission(ADDONS_MANAGE))
+) -> dict:
     ok = _service.update_manifest(req.path, req.manifest)
     if not ok:
         raise HTTPException(status_code=500, detail="Failed to update manifest")
@@ -42,7 +45,7 @@ async def get_pack_order(world: str, pack_type: str, _user: User = Depends(verif
 
 @router.put("/order/{world}/{pack_type}")
 async def set_pack_order(
-    world: str, pack_type: str, req: AddonReorderRequest, user: User = Depends(verify_token)
+    world: str, pack_type: str, req: AddonReorderRequest, user: User = Depends(require_permission(ADDONS_MANAGE))
 ) -> dict:
     ok = _service.set_pack_order(world, pack_type, req.uuids)
     if not ok:

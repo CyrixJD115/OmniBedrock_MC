@@ -1,38 +1,37 @@
 <script lang="ts">
   import { page } from '$app/stores';
   import { serverStatus } from '$stores/index';
-  import { currentUser } from '$stores/auth';
+  import { currentUser, userPermissions } from '$stores/auth';
   import {
     LayoutDashboard, Terminal, FileCode, HardDrive, Package, Globe,
-    Users, FileText, BarChart3, Settings, ChevronLeft, Server, Power, LogOut,
+    Users, UserCog, FileText, BarChart3, Settings, ChevronLeft, Server, Power, LogOut,
     UserCircle, Shield, ClipboardList
   } from '@lucide/svelte';
 
   let { sidebarOpen, onlogout }: { sidebarOpen: boolean; onlogout?: () => void } = $props();
 
   const navItems = [
-    { href: '/', icon: LayoutDashboard, label: 'Dashboard', minRole: 'viewer' },
-    { href: '/console', icon: Terminal, label: 'Console', minRole: 'viewer' },
-    { href: '/properties', icon: FileCode, label: 'Properties', minRole: 'admin' },
-    { href: '/backups', icon: HardDrive, label: 'Backups', minRole: 'moderator' },
-    { href: '/addons', icon: Package, label: 'Addons', minRole: 'admin' },
-    { href: '/worlds', icon: Globe, label: 'Worlds', minRole: 'viewer' },
-    { href: '/players', icon: Users, label: 'Players', minRole: 'viewer' },
-    { href: '/files', icon: FileText, label: 'Files', minRole: 'admin' },
-    { href: '/performance', icon: BarChart3, label: 'Performance', minRole: 'viewer' },
-    { href: '/audit', icon: ClipboardList, label: 'Audit', minRole: 'admin' },
-    { href: '/settings', icon: Settings, label: 'Settings', minRole: 'admin' },
+    { href: '/', icon: LayoutDashboard, label: 'Dashboard', perm: '' },
+    { href: '/console', icon: Terminal, label: 'Console', perm: 'CONSOLE_VIEW' },
+    { href: '/properties', icon: FileCode, label: 'Properties', perm: 'PROPERTIES_VIEW' },
+    { href: '/backups', icon: HardDrive, label: 'Backups', perm: 'BACKUPS_VIEW' },
+    { href: '/addons', icon: Package, label: 'Addons', perm: 'ADDONS_VIEW' },
+    { href: '/worlds', icon: Globe, label: 'Worlds', perm: '' },
+    { href: '/players', icon: Users, label: 'Players', perm: 'PLAYERS_VIEW' },
+    { href: '/users', icon: UserCog, label: 'Users', perm: 'USERS_VIEW' },
+    { href: '/roles', icon: Shield, label: 'Roles', perm: 'USERS_VIEW' },
+    { href: '/files', icon: FileText, label: 'Files', perm: 'FILES_VIEW' },
+    { href: '/performance', icon: BarChart3, label: 'Performance', perm: '' },
+    { href: '/audit', icon: ClipboardList, label: 'Audit', perm: 'AUDIT_VIEW' },
+    { href: '/settings', icon: Settings, label: 'Settings', perm: 'SETTINGS_VIEW' },
   ];
 
   let currentPath = $state('/');
   $effect(() => { currentPath = $page.url.pathname; });
 
-  const roleLevel: Record<string, number> = { owner: 4, admin: 3, moderator: 2, viewer: 1 };
-
-  function canAccess(minRole: string): boolean {
-    const user = $currentUser;
-    if (!user) return false;
-    return (roleLevel[user.role] ?? 0) >= (roleLevel[minRole] ?? 0);
+  function canAccess(perm: string): boolean {
+    if (!perm) return true;
+    return $userPermissions.includes(perm);
   }
 
   function navClass(href: string): string {
@@ -70,7 +69,7 @@
 
   <nav class="flex-1 overflow-y-auto p-2 space-y-0.5">
     {#each navItems as item}
-      {#if canAccess(item.minRole)}
+      {#if canAccess(item.perm)}
         <a href={item.href} class={navClass(item.href)}>
           <item.icon size={16} class="shrink-0" />
           {#if sidebarOpen}

@@ -4,8 +4,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.core import auth
+from backend.app.core import roles as roles_module
 from backend.app.core.dependencies import backup_service
 from backend.app.main import app
+from backend.app.models.role import Role
 from backend.app.models.user import User, UserRole
 
 
@@ -16,6 +18,8 @@ def client():
 
 @pytest.fixture
 def auth_header():
+    if not roles_module._roles:
+        roles_module._roles = {n: Role(**r.to_dict()) for n, r in roles_module._DEFAULT_ROLES.items()}
     user = User(username="admin", password_hash="x", role=UserRole.admin)
     auth._users["admin"] = user
     token = auth.create_access_token(user)

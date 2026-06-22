@@ -12,7 +12,8 @@ import jwt
 import yaml
 
 from backend.app.core.config import settings
-from backend.app.models.user import User, UserRole
+from backend.app.core.roles import get_default_role_name, resolve_permissions
+from backend.app.models.user import User
 
 logger = logging.getLogger("auth")
 
@@ -63,7 +64,7 @@ def init_users() -> None:
         user = User(
             username=username,
             password_hash=hashed,
-            role=UserRole.owner,
+            role="owner",
             display_name="Administrator",
         )
         _users[username] = user
@@ -104,9 +105,11 @@ def authenticate_user(username: str, password: str) -> User | None:
     return user
 
 
-def create_user(username: str, password: str, role: UserRole, display_name: str = "") -> User | None:
+def create_user(username: str, password: str, role: str | None = None, display_name: str = "") -> User | None:
     if username in _users:
         return None
+    if role is None:
+        role = get_default_role_name()
     hashed = _hash_password(password)
     user = User(
         username=username,
@@ -121,7 +124,7 @@ def create_user(username: str, password: str, role: UserRole, display_name: str 
 
 def update_user(
     username: str,
-    role: UserRole | None = None,
+    role: str | None = None,
     display_name: str | None = None,
     password: str | None = None,
 ) -> User | None:
@@ -162,7 +165,7 @@ def _jwt_key() -> bytes:
 def create_access_token(user: User) -> str:
     payload = {
         "sub": user.username,
-        "role": user.role.value,
+        "role": user.role,
         "iat": int(time.time()),
         "exp": int(time.time()) + ACCESS_TOKEN_EXPIRE_SECONDS,
     }
@@ -187,3 +190,10 @@ def get_user_from_token(token: str) -> User | None:
     if not username:
         return None
     return get_user(username)
+
+
+def get_user_permissions(username: str) -> list[str]:
+    user = _users.get(username)
+    if not user:
+        return []
+    return resolve_permissions(user.role)

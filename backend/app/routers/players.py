@@ -5,7 +5,8 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException
 
 from backend.app.core.dependencies import server_manager
-from backend.app.core.security import verify_token
+from backend.app.core.permissions import PLAYERS_KICK
+from backend.app.core.security import require_permission, verify_token
 from backend.app.models.user import User
 from backend.app.schemas.player import PlayerActionRequest, PlayerListResponse
 from backend.app.services.audit_service import log_action
@@ -40,7 +41,9 @@ async def list_players(_user: User = Depends(verify_token)) -> PlayerListRespons
 
 
 @router.post("/action")
-async def player_action(req: PlayerActionRequest, user: User = Depends(verify_token)) -> dict:
+async def player_action(
+    req: PlayerActionRequest, user: User = Depends(require_permission(PLAYERS_KICK))
+) -> dict:
     valid_actions = ["kick", "ban", "pardon", "op", "deop"]
     if req.action not in valid_actions:
         raise HTTPException(status_code=400, detail=f"Invalid action. Must be one of: {valid_actions}")

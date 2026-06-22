@@ -4,7 +4,8 @@ from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, status
 
 from backend.app.core.auth import get_user_from_token
 from backend.app.core.dependencies import server_manager
-from backend.app.core.security import verify_token
+from backend.app.core.permissions import CONSOLE_SEND
+from backend.app.core.security import require_permission
 from backend.app.models.user import User
 from backend.app.schemas.console import ConsoleCommandRequest, ConsoleCommandResponse
 from backend.app.websocket.console import ConsoleWebSocket
@@ -22,7 +23,9 @@ def get_ws_handler() -> ConsoleWebSocket:
 
 
 @router.post("/command")
-async def send_command(req: ConsoleCommandRequest, _user: User = Depends(verify_token)) -> ConsoleCommandResponse:
+async def send_command(
+    req: ConsoleCommandRequest, _user: User = Depends(require_permission(CONSOLE_SEND))
+) -> ConsoleCommandResponse:
     await server_manager.send_command(req.command)
     return ConsoleCommandResponse(success=True, message="")
 

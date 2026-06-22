@@ -130,3 +130,35 @@ export interface SchedulerConfig {
   compression?: string;
   worlds?: string[];
 }
+
+export interface UserInfo {
+  username: string;
+  display_name: string;
+  role: string;
+  created_at: string;
+}
+
+// --- Permission / Role types ---
+
+export const ALL_PERMISSIONS = [
+  'CONSOLE_VIEW', 'CONSOLE_SEND',
+  'SERVER_VIEW', 'SERVER_MANAGE',
+  'PLAYERS_VIEW', 'PLAYERS_KICK', 'PLAYERS_BAN', 'PLAYERS_OP',
+  'PROPERTIES_VIEW', 'PROPERTIES_EDIT',
+  'ADDONS_VIEW', 'ADDONS_MANAGE',
+  'BACKUPS_VIEW', 'BACKUPS_CREATE', 'BACKUPS_RESTORE', 'BACKUPS_DELETE',
+  'USERS_VIEW', 'USERS_CREATE', 'USERS_EDIT', 'USERS_DELETE',
+  'FILES_VIEW', 'FILES_EDIT',
+  'AUDIT_VIEW',
+  'SETTINGS_VIEW', 'SETTINGS_EDIT',
+] as const;
+
+export type Permission = typeof ALL_PERMISSIONS[number];
+
+export interface RoleInfo {
+  name: string;
+  display_name: string;
+  permissions: string[];
+  is_default: boolean;
+  created_at: string;
+}

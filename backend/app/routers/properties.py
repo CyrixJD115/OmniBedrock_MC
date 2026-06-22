@@ -3,7 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import PlainTextResponse
 
-from backend.app.core.security import verify_token
+from backend.app.core.permissions import PROPERTIES_EDIT
+from backend.app.core.security import require_permission, verify_token
 from backend.app.models.user import User
 from backend.app.services.audit_service import log_action
 from backend.app.services.properties_service import PropertiesService
@@ -25,7 +26,7 @@ async def get_properties_raw(_user: User = Depends(verify_token)) -> PlainTextRe
 
 
 @router.put("/raw")
-async def save_properties_raw(body: dict, user: User = Depends(verify_token)):
+async def save_properties_raw(body: dict, user: User = Depends(require_permission(PROPERTIES_EDIT))):
     text = body.get("text", "")
     _service.save_raw(text)
     log_action(user.username, "properties.raw_update", category="properties")
@@ -33,7 +34,7 @@ async def save_properties_raw(body: dict, user: User = Depends(verify_token)):
 
 
 @router.put("/{key}")
-async def update_property(key: str, body: dict, user: User = Depends(verify_token)):
+async def update_property(key: str, body: dict, user: User = Depends(require_permission(PROPERTIES_EDIT))):
     value = body.get("value", "")
     valid, msg = validate_property(key, value)
     if not valid:

@@ -3,6 +3,7 @@
   import { serverStatus, metrics, isServerRunning } from '$stores/index';
   import { api } from '$lib/api/client';
   import { addToast } from '$stores/toast';
+  import { userPermissions } from '$stores/auth';
   import { Play, Square, RotateCw, Terminal, Users, HardDrive, Globe, Cpu, Clock, Activity } from '@lucide/svelte';
 
   let loading = $state(true);
@@ -52,20 +53,22 @@
       <h1 class="text-lg font-bold text-white uppercase tracking-widest">Dashboard</h1>
       <div class="pixel-divider mt-2 w-48"></div>
     </div>
-    <div class="flex gap-2">
-      <button onclick={() => act('start')} disabled={$isServerRunning || acting !== null}
-              class="btn-success flex items-center gap-2 text-xs">
-        <Play size={14} /> {acting === 'start' ? 'Starting...' : 'Start'}
-      </button>
-      <button onclick={() => act('restart')} disabled={!$isServerRunning || acting !== null}
-              class="btn-secondary flex items-center gap-2 text-xs">
-        <RotateCw size={14} /> {acting === 'restart' ? 'Restarting...' : 'Restart'}
-      </button>
-      <button onclick={() => act('stop')} disabled={!$isServerRunning || acting !== null}
-              class="btn-danger flex items-center gap-2 text-xs">
-        <Square size={14} /> {acting === 'stop' ? 'Stopping...' : 'Stop'}
-      </button>
-    </div>
+    {#if $userPermissions.includes('SERVER_MANAGE')}
+      <div class="flex gap-2">
+        <button onclick={() => act('start')} disabled={$isServerRunning || acting !== null}
+                class="btn-success flex items-center gap-2 text-xs">
+          <Play size={14} /> {acting === 'start' ? 'Starting...' : 'Start'}
+        </button>
+        <button onclick={() => act('restart')} disabled={!$isServerRunning || acting !== null}
+                class="btn-secondary flex items-center gap-2 text-xs">
+          <RotateCw size={14} /> {acting === 'restart' ? 'Restarting...' : 'Restart'}
+        </button>
+        <button onclick={() => act('stop')} disabled={!$isServerRunning || acting !== null}
+                class="btn-danger flex items-center gap-2 text-xs">
+          <Square size={14} /> {acting === 'stop' ? 'Stopping...' : 'Stop'}
+        </button>
+      </div>
+    {/if}
   </div>
 
   <!-- Status Cards -->

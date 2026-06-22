@@ -3,6 +3,7 @@
   import { consoleLines, errorStats } from '$stores/index';
   import { api } from '$lib/api/client';
   import { addToast } from '$stores/toast';
+  import { userPermissions } from '$stores/auth';
   import { Send, Trash2, Filter, AlertTriangle, ChevronDown, ChevronRight, ArrowUp, ArrowDown, Binary, Download } from '@lucide/svelte';
   import { parseAnsi, highlightMatches, matchesQuery } from '$lib/console';
   import type { ErrorStat } from '$types/index';
@@ -330,12 +331,14 @@
     </div>
   {/if}
 
-  <div class="flex gap-2">
-    <input type="text" bind:value={input} onkeydown={onKeyDown}
-           placeholder="Enter command..."
-           class="input flex-1 font-terminal text-base tracking-wider" />
-    <button onclick={send} class="btn-primary flex items-center gap-2 text-xs">
-      <Send size={14} /> Send
-    </button>
-  </div>
+  {#if $userPermissions.includes('CONSOLE_SEND')}
+    <div class="flex gap-2">
+      <input type="text" bind:value={input} onkeydown={onKeyDown}
+             placeholder="Enter command..."
+             class="input flex-1 font-terminal text-base tracking-wider" />
+      <button onclick={send} class="btn-primary flex items-center gap-2 text-xs">
+        <Send size={14} /> Send
+      </button>
+    </div>
+  {/if}
 </div>

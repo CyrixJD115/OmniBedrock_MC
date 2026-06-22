@@ -11,6 +11,7 @@ from backend.app.core.auth import init_users
 from backend.app.core.config import settings
 from backend.app.core.dependencies import backup_scheduler, server_manager
 from backend.app.core.logging import setup_logging
+from backend.app.core.roles import init_roles
 from backend.app.managers.performance_collector import PerformanceCollector
 from backend.app.routers import (
     addons,
@@ -22,6 +23,7 @@ from backend.app.routers import (
     performance,
     players,
     properties,
+    roles,
     server,
     worlds,
 )
@@ -34,6 +36,7 @@ from backend.app.routers import (
 async def lifespan(app: FastAPI):
     setup_logging()
     init_users()
+    init_roles()
     collector = PerformanceCollector()
     collector.set_server_manager(server_manager)
     await collector.start()
@@ -81,6 +84,7 @@ def create_app() -> FastAPI:
     app.include_router(addons.router, prefix=prefix)
     app.include_router(worlds.router, prefix=prefix)
     app.include_router(players.router, prefix=prefix)
+    app.include_router(roles.router, prefix=prefix)
     app.include_router(settings_router.router, prefix=prefix)
     app.include_router(files.router, prefix=prefix)
     app.include_router(performance.router, prefix=prefix)
