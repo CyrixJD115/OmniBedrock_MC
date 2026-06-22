@@ -16,6 +16,12 @@ LOCK_FILE = ROOT / "backend" / "data" / "console_lock_state.yaml"
 processes: list[subprocess.Popen] = []
 
 
+def _spawn_kwargs() -> dict:
+    if os.name == "nt":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"preexec_fn": os.setpgrp}
+
+
 def _server_is_running() -> bool:
     try:
         import yaml
@@ -41,6 +47,7 @@ def start_backend() -> subprocess.Popen:
         cwd=str(ROOT),
         stdout=sys.stdout,
         stderr=sys.stderr,
+        **_spawn_kwargs(),
     )
 
 
@@ -65,6 +72,7 @@ def start_frontend() -> subprocess.Popen:
         cwd=str(FRONTEND_DIR),
         stdout=sys.stdout,
         stderr=sys.stderr,
+        **_spawn_kwargs(),
     )
 
 
