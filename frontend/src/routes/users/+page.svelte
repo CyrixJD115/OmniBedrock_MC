@@ -130,8 +130,10 @@
 
 <!-- Create Modal -->
 {#if showCreateModal}
-  <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onclick={() => showCreateModal = false}>
-    <div class="card max-w-md w-full mx-4" onclick={(e) => e.stopPropagation()}>
+  <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabindex="-1"
+       onclick={(e) => { if (e.target === e.currentTarget) showCreateModal = false; }}
+       onkeydown={(e) => { if (e.key === 'Escape') showCreateModal = false; }}>
+    <div class="card max-w-md w-full mx-4">
       <h2 class="text-sm font-bold text-white uppercase tracking-wider mb-4">Create User</h2>
       <div class="space-y-3">
         <input bind:value={form.username} placeholder="Username" class="input w-full text-xs" />
@@ -154,8 +156,10 @@
 
 <!-- Edit Modal -->
 {#if showEditModal && editingUser}
-  <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onclick={() => { showEditModal = false; editingUser = null; }}>
-    <div class="card max-w-md w-full mx-4" onclick={(e) => e.stopPropagation()}>
+  <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabindex="-1"
+       onclick={(e) => { if (e.target === e.currentTarget) { showEditModal = false; editingUser = null; } }}
+       onkeydown={(e) => { if (e.key === 'Escape') { showEditModal = false; editingUser = null; } }}>
+    <div class="card max-w-md w-full mx-4">
       <h2 class="text-sm font-bold text-white uppercase tracking-wider mb-4">Edit {editingUser.username}</h2>
       <div class="space-y-3">
         <input bind:value={editForm.display_name} placeholder="Display Name" class="input w-full text-xs" />
@@ -177,8 +181,10 @@
 
 <!-- Delete Confirmation -->
 {#if deleting}
-  <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onclick={() => deleting = null}>
-    <div class="card max-w-sm w-full mx-4" onclick={(e) => e.stopPropagation()}>
+  <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabindex="-1"
+       onclick={(e) => { if (e.target === e.currentTarget) deleting = null; }}
+       onkeydown={(e) => { if (e.key === 'Escape') deleting = null; }}>
+    <div class="card max-w-sm w-full mx-4">
       <h2 class="text-sm font-bold text-white uppercase tracking-wider mb-2">Delete User</h2>
       <p class="text-xs text-deep-300 mb-4">Are you sure you want to delete <strong>{deleting}</strong>? This cannot be undone.</p>
       <div class="flex justify-end gap-2">

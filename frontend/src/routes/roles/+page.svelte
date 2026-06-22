@@ -148,8 +148,10 @@
 
 <!-- Create Modal -->
 {#if creating}
-  <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onclick={() => creating = false}>
-    <div class="card max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto" onclick={(e) => e.stopPropagation()}>
+  <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabindex="-1"
+       onclick={(e) => { if (e.target === e.currentTarget) creating = false; }}
+       onkeydown={(e) => { if (e.key === 'Escape') creating = false; }}>
+    <div class="card max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto">
       <div class="flex items-center justify-between mb-4">
         <h2 class="text-sm font-bold text-white uppercase tracking-wider">Create Role</h2>
         <button onclick={() => creating = false} class="btn-ghost p-1 text-deep-400"><X size={14} /></button>
@@ -189,8 +191,10 @@
 
 <!-- Edit Modal -->
 {#if editing}
-  <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onclick={() => editing = null}>
-    <div class="card max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto" onclick={(e) => e.stopPropagation()}>
+  <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabindex="-1"
+       onclick={(e) => { if (e.target === e.currentTarget) editing = null; }}
+       onkeydown={(e) => { if (e.key === 'Escape') editing = null; }}>
+    <div class="card max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto">
       <div class="flex items-center justify-between mb-4">
         <h2 class="text-sm font-bold text-white uppercase tracking-wider">Edit {editing.name}</h2>
         <button onclick={() => editing = null} class="btn-ghost p-1 text-deep-400"><X size={14} /></button>
@@ -229,8 +233,10 @@
 
 <!-- Delete Confirmation -->
 {#if deleting}
-  <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onclick={() => deleting = null}>
-    <div class="card max-w-sm w-full mx-4" onclick={(e) => e.stopPropagation()}>
+  <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabindex="-1"
+       onclick={(e) => { if (e.target === e.currentTarget) deleting = null; }}
+       onkeydown={(e) => { if (e.key === 'Escape') deleting = null; }}>
+    <div class="card max-w-sm w-full mx-4">
       <h2 class="text-sm font-bold text-white uppercase tracking-wider mb-2">Delete Role</h2>
       <p class="text-xs text-deep-300 mb-4">Are you sure you want to delete <strong>{deleting}</strong>?</p>
       <div class="flex justify-end gap-2">
