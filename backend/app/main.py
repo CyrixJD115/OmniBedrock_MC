@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -49,7 +50,10 @@ async def lifespan(app: FastAPI):
 
     await backup_scheduler.stop()
     await collector.stop()
-    await server_manager.kill()
+    try:
+        await asyncio.wait_for(server_manager.stop(), timeout=10)
+    except Exception:
+        await server_manager.kill()
 
 
 def create_app() -> FastAPI:

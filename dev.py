@@ -10,6 +10,7 @@ from pathlib import Path
 
 VITE_CONFIG = Path(__file__).resolve().parent / "frontend" / "vite.config.ts"
 VITE_CONFIG_EXAMPLE = VITE_CONFIG.with_suffix(".ts.example")
+LOCK_FILE = Path(__file__).resolve().parent / "backend" / "data" / "console_lock_state.yaml"
 
 
 def ensure_vite_config():
@@ -20,10 +21,22 @@ def ensure_vite_config():
         print(f"[frontend] Created {VITE_CONFIG.name} from {VITE_CONFIG_EXAMPLE.name}")
         print(f"[frontend] Edit {VITE_CONFIG.name} to customize ports, hosts, etc.")
 
+
 ROOT = Path(__file__).resolve().parent
 FRONTEND_DIR = ROOT / "frontend"
 
 processes: list[subprocess.Popen] = []
+
+
+def _server_is_running() -> bool:
+    try:
+        import yaml
+        if LOCK_FILE.exists():
+            data = yaml.safe_load(LOCK_FILE.read_text())
+            return data.get("console", {}).get("state") == "locked"
+    except Exception:
+        pass
+    return False
 
 
 def start_backend() -> subprocess.Popen:
@@ -61,7 +74,37 @@ def start_frontend() -> subprocess.Popen:
     )
 
 
+_shutting_down = False
+
+
 def cleanup(*_):
+    global _shutting_down
+    if _shutting_down:
+        return
+    _shutting_down = True
+
+    if _server_is_running():
+        print("\n" + "!" * 60)
+        print("  WARNING: Minecraft server is still running!")
+        print("  The panel will try to stop it gracefully.")
+        print("  Press Ctrl+C again within 3 seconds to force quit.")
+        print("!" * 60 + "\n")
+
+        def force_quit(*_):
+            print("\nForce quitting...")
+            for p in processes:
+                if p and p.poll() is None:
+                    p.kill()
+            sys.exit(1)
+
+        old_handler = signal.signal(signal.SIGINT, force_quit)
+        signal.signal(signal.SIGTERM, force_quit)
+        try:
+            time.sleep(3)
+        except KeyboardInterrupt:
+            pass
+        signal.signal(signal.SIGINT, old_handler)
+
     print("\nShutting down...")
     for p in processes:
         if p and p.poll() is None:
@@ -69,7 +112,7 @@ def cleanup(*_):
     for p in processes:
         if p:
             try:
-                p.wait(timeout=5)
+                p.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 p.kill()
     sys.exit(0)
