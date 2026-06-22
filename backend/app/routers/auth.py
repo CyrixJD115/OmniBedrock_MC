@@ -13,6 +13,7 @@ from backend.app.core.auth import (
 )
 from backend.app.core.security import require_role, verify_token
 from backend.app.models.user import User, UserRole
+from backend.app.services.audit_service import log_action
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -67,6 +68,7 @@ async def create_user_endpoint(
     user = create_user(req.username, req.password, req.role, req.display_name)
     if not user:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already exists")
+    log_action(current_user.username, "auth.user_create", req.username, category="auth")
     return user.to_safe_dict()
 
 
@@ -79,6 +81,7 @@ async def update_user_endpoint(
     user = update_user(username, role=req.role, display_name=req.display_name, password=req.password)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    log_action(current_user.username, "auth.user_update", username, category="auth")
     return user.to_safe_dict()
 
 
@@ -91,4 +94,5 @@ async def delete_user_endpoint(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot delete yourself")
     if not delete_user(username):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    log_action(current_user.username, "auth.user_delete", username, category="auth")
     return {"success": True, "message": f"Deleted user {username}"}

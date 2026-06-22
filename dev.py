@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-import launcher
+from backend.app import launcher
 
 FRONTEND_DIR = Path(__file__).resolve().parent / "frontend"
 VITE_CONFIG = FRONTEND_DIR / "vite.config.ts"

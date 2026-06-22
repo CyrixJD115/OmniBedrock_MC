@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, status
 
+from backend.app.core.auth import get_user_from_token
 from backend.app.core.dependencies import server_manager
 from backend.app.core.security import verify_token
 from backend.app.models.user import User
@@ -28,6 +29,10 @@ async def send_command(req: ConsoleCommandRequest, _user: User = Depends(verify_
 
 @router.websocket("/ws")
 async def console_websocket(ws: WebSocket):
+    token = ws.query_params.get("token")
+    if not token or not get_user_from_token(token):
+        await ws.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
     handler = get_ws_handler()
     try:
         await handler.handle(ws)

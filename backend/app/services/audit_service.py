@@ -34,6 +34,14 @@ def log_action(
             f.write(json.dumps(entry) + "\n")
     except OSError as e:
         logger.error("Failed to write audit entry: %s", e)
+        return entry
+
+    try:
+        lines = _audit_file.read_text(encoding="utf-8").strip().splitlines()
+        if len(lines) > MAX_ENTRIES:
+            _audit_file.write_text("\n".join(lines[-MAX_ENTRIES:]) + "\n", encoding="utf-8")
+    except OSError:
+        pass
     return entry
 
 

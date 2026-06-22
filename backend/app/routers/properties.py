@@ -5,7 +5,9 @@ from fastapi.responses import PlainTextResponse
 
 from backend.app.core.security import verify_token
 from backend.app.models.user import User
+from backend.app.services.audit_service import log_action
 from backend.app.services.properties_service import PropertiesService
+from backend.app.utils.minecraft_helpers import validate_property
 
 router = APIRouter(prefix="/properties", tags=["properties"])
 
@@ -23,17 +25,22 @@ async def get_properties_raw(_user: User = Depends(verify_token)) -> PlainTextRe
 
 
 @router.put("/raw")
-async def save_properties_raw(body: dict, _user: User = Depends(verify_token)):
+async def save_properties_raw(body: dict, user: User = Depends(verify_token)):
     text = body.get("text", "")
     _service.save_raw(text)
+    log_action(user.username, "properties.raw_update", category="properties")
     return {"success": True, "message": "Properties saved"}
 
 
 @router.put("/{key}")
-async def update_property(key: str, body: dict, _user: User = Depends(verify_token)):
+async def update_property(key: str, body: dict, user: User = Depends(verify_token)):
     value = body.get("value", "")
+    valid, msg = validate_property(key, value)
+    if not valid:
+        raise HTTPException(status_code=400, detail=msg)
     entry = _service.update(key, value)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"Property '{key}' not found")
     _service.save()
+    log_action(user.username, f"properties.update:{key}", value, category="properties")
     return {"success": True, "message": f"'{key}' updated to '{value}'"}

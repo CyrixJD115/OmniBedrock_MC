@@ -47,7 +47,7 @@ export function highlightMatches(html: string, query: string, useRegex: boolean)
     return html;
   }
 
-  return html.replace(TAG_RE, (_, tag, text) => {
+  return html.replace(TAG_RE, (_: string, tag: string, text: string) => {
     if (tag) return tag;
     return text.replace(re, m => `<mark class="console-match">${m}</mark>`);
   });

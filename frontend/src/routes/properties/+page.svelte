@@ -40,8 +40,11 @@
   }
 
   const knownProps = ['server-name', 'gamemode', 'difficulty', 'allow-cheats', 'max-players',
-    'online-mode', 'white-list', 'server-port', 'view-distance', 'tick-distance', 'level-name',
-    'level-seed', 'default-player-permission-level', 'texturepack-required', 'player-idle-timeout'];
+    'online-mode', 'white-list', 'server-port', 'server-portv6', 'view-distance', 'tick-distance',
+    'level-name', 'level-seed', 'default-player-permission-level', 'texturepack-required',
+    'player-idle-timeout', 'content-log-file-enabled', 'compression-threshold',
+    'server-authoritative-movement', 'enable-lan-visibility', 'chat-restriction',
+    'disable-player-interaction'];
 
   let known = $derived(properties.filter(p => p.key && knownProps.includes(p.key)));
 </script>

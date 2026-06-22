@@ -7,6 +7,7 @@ from backend.app.core.config import settings as app_settings
 from backend.app.core.dependencies import server_manager
 from backend.app.core.security import require_role, verify_token
 from backend.app.models.user import User, UserRole
+from backend.app.services.audit_service import log_action
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -64,7 +65,7 @@ async def get_server_settings(_user: User = Depends(verify_token)) -> ServerSett
 @router.put("/server")
 async def update_server_settings(
     req: ServerSettingsRequest,
-    _user: User = Depends(require_role(UserRole.admin, UserRole.owner)),
+    user: User = Depends(require_role(UserRole.admin, UserRole.owner)),
 ) -> dict:
     if req.auto_restart is not None or req.auto_restart_delay is not None or req.max_crashes is not None:
         server_manager.set_auto_restart(
@@ -77,4 +78,5 @@ async def update_server_settings(
             stop_timeout=req.stop_timeout if req.stop_timeout is not None else server_manager._stop_timeout,
             kill_timeout=req.kill_timeout if req.kill_timeout is not None else server_manager._kill_timeout,
         )
+    log_action(user.username, "settings.update", category="settings")
     return {"success": True, "message": "Server settings updated"}

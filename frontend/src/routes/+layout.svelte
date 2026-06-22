@@ -5,7 +5,7 @@
   import { serverStatus } from '$stores/index';
   import { currentUser, authToken } from '$stores/auth';
   import { onMount, onDestroy } from 'svelte';
-  import { api, setToken } from '$lib/api/client';
+  import { api, getToken, setToken } from '$lib/api/client';
   import { wsManager } from '$lib/websocket';
   import { addToast } from '$stores/toast';
   import { page } from '$app/stores';
@@ -90,8 +90,10 @@
       serverStatus.set(status);
     } catch { /* server might not be up yet */ }
 
-    unsubs.push(wsManager.connect('/api/v1/console/ws', onConsoleMessage));
-    unsubs.push(wsManager.connect('/api/v1/performance/ws', onMetricsMessage));
+    const token = getToken();
+    const wsToken = token ? `?token=${token}` : '';
+    unsubs.push(wsManager.connect(`/api/v1/console/ws${wsToken}`, onConsoleMessage));
+    unsubs.push(wsManager.connect(`/api/v1/performance/ws${wsToken}`, onMetricsMessage));
   }
 
   const consoleBuffer: ConsoleLine[] = [];

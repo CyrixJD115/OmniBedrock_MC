@@ -94,4 +94,6 @@ class PerformanceCollector:
         }
 
     def _estimate_tps(self) -> float:
-        return 20.0 if self._server_manager and self._server_manager.status == ServerStatus.running else 0.0
+        if self._server_manager and self._server_manager.status == ServerStatus.running:
+            return self._server_manager.get_tps() or 20.0
+        return 0.0

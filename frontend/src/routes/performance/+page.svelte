@@ -1,13 +1,15 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { metrics } from '$stores/index';
+  import { getToken } from '$lib/api/client';
   import { wsManager } from '$lib/websocket';
   import { Cpu, HardDrive, Activity } from '@lucide/svelte';
 
   let history = $state<{ time: string; cpu: number; mem: number; tps: number }[]>([]);
 
   onMount(() => {
-    return wsManager.connect('/api/v1/performance/ws', (data: any) => {
+    const wsToken = getToken() ? `?token=${getToken()}` : '';
+    return wsManager.connect(`/api/v1/performance/ws${wsToken}`, (data: any) => {
       if (data.type !== 'metrics') return;
       metrics.set(data.data);
       const m = data.data;

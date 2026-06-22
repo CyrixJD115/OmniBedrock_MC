@@ -168,5 +168,4 @@ export const api = {
 
   // Settings
   getSettings: () => request<Record<string, unknown>>('/settings/'),
-  getMetrics: () => request<Record<string, unknown>>('/performance/metrics'),
 };

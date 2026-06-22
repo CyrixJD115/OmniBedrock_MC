@@ -1,7 +1,7 @@
-import { writable } from 'svelte/store';
+import { writable, type Writable, type Unsubscriber } from 'svelte/store';
 
-export function persisted<T>(key: string, defaultValue: T) {
-  const store = writable<T>(defaultValue, () => {
+export function persisted<T>(key: string, defaultValue: T): Writable<T> {
+  const store: Writable<T> = writable<T>(defaultValue, () => {
     const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
     if (raw !== null) {
       try {
@@ -11,7 +11,7 @@ export function persisted<T>(key: string, defaultValue: T) {
       }
     }
 
-    const unsub = store.subscribe(v => {
+    const unsub: Unsubscriber = store.subscribe((v: T) => {
       if (typeof localStorage !== 'undefined') {
         localStorage.setItem(key, JSON.stringify(v));
       }

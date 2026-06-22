@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-import launcher
+from backend.app import launcher
 
 ROOT = Path(__file__).resolve().parent
 FRONTEND_DIR = ROOT / "frontend"

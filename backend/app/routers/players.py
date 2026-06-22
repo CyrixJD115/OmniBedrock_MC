@@ -8,6 +8,7 @@ from backend.app.core.dependencies import server_manager
 from backend.app.core.security import verify_token
 from backend.app.models.user import User
 from backend.app.schemas.player import PlayerActionRequest, PlayerListResponse
+from backend.app.services.audit_service import log_action
 
 router = APIRouter(prefix="/players", tags=["players"])
 
@@ -39,7 +40,7 @@ async def list_players(_user: User = Depends(verify_token)) -> PlayerListRespons
 
 
 @router.post("/action")
-async def player_action(req: PlayerActionRequest, _user: User = Depends(verify_token)) -> dict:
+async def player_action(req: PlayerActionRequest, user: User = Depends(verify_token)) -> dict:
     valid_actions = ["kick", "ban", "pardon", "op", "deop"]
     if req.action not in valid_actions:
         raise HTTPException(status_code=400, detail=f"Invalid action. Must be one of: {valid_actions}")
@@ -50,4 +51,6 @@ async def player_action(req: PlayerActionRequest, _user: User = Depends(verify_t
         cmd = f"{req.action} {req.target}"
 
     await server_manager.send_command(cmd)
+    detail = f"{req.target} ({req.reason})" if req.reason else req.target
+    log_action(user.username, f"player:{req.action}", detail, category="player")
     return {"success": True, "message": f"Sent '{cmd}' to server"}
