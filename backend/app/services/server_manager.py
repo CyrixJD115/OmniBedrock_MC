@@ -237,8 +237,12 @@ class ServerManager:
 
     async def _send_command(self, command: str) -> None:
         if self._process and self._process.stdin and self._process.returncode is None:
-            self._process.stdin.write(command + "\n")
-            self._process.stdin.flush()
+            try:
+                self._process.stdin.write(command + "\n")
+                self._process.stdin.flush()
+            except (BrokenPipeError, OSError):
+                logger.debug("Cannot send command, process already dead")
+                self._process.poll()
 
     def subscribe_stdout(self) -> asyncio.Queue[str]:
         q: asyncio.Queue[str] = asyncio.Queue()
@@ -289,6 +293,7 @@ class ServerManager:
             while self._process and self._process.returncode is None:
                 line = await asyncio.get_event_loop().run_in_executor(None, self._process.stdout.readline)
                 if not line:
+                    self._process.poll()
                     break
                 line = line.rstrip("\n\r")
 
