@@ -37,7 +37,7 @@ async def lifespan(app: FastAPI):
     collector = PerformanceCollector()
     collector.set_server_manager(server_manager)
     await collector.start()
-    await backup_scheduler.start()
+    await backup_scheduler.start_if_enabled()
 
     print(f"\n{'='*50}")
     print("  OmniBedrock MC Panel")

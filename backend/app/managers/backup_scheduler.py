@@ -36,11 +36,24 @@ class BackupScheduler:
         self._worlds = worlds or []
 
     async def start(self) -> None:
+        if not self._enabled:
+            return
         if self._task and not self._task.done():
             return
-        self._enabled = True
         self._task = asyncio.create_task(self._run())
         logger.info("Backup scheduler started (interval=%d min, keep=%d)", self._interval, self._keep)
+
+    async def start_if_enabled(self) -> None:
+        settings = self._settings_service.load()
+        auto = settings.get("auto", {})
+        if auto.get("enabled", False):
+            self.configure(
+                enabled=True,
+                interval_minutes=auto.get("interval_minutes", 30),
+                keep_count=auto.get("keep_count", 10),
+                worlds=auto.get("worlds"),
+            )
+            await self.start()
 
     async def stop(self) -> None:
         self._enabled = False
