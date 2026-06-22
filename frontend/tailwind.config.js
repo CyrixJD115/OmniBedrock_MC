@@ -45,7 +45,7 @@ export default {
         minecraft: ['"Press Start 2P"', 'monospace'],
         body: ['Montserrat', 'system-ui', 'sans-serif'],
         mono: ['"JetBrains Mono"', '"Fira Code"', 'monospace'],
-        terminal: ['"VT323"', '"JetBrains Mono"', 'monospace'],
+        terminal: ['"JetBrains Mono"', '"VT323"', 'monospace'],
       },
       boxShadow: {
         'block': '4px 4px 0px 0px rgba(0,0,0,0.5)',

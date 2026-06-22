@@ -64,6 +64,14 @@
   );
 </script>
 
+<style>
+  .terminal-container {
+    -webkit-font-smoothing: none;
+    -moz-osx-font-smoothing: unset;
+    font-smooth: never;
+  }
+</style>
+
 <div class="space-y-4">
   <div class="flex items-center justify-between">
     <div>
@@ -94,7 +102,7 @@
       <span class="text-deep-500 text-[10px] uppercase tracking-wider ml-2 font-mono">server-console</span>
     </div>
     <div bind:this={terminalEl}
-         class="h-[55vh] overflow-y-auto p-4 font-terminal text-base leading-relaxed">
+         class="terminal-container h-[55vh] overflow-y-auto p-4 font-terminal text-base leading-relaxed">
       {#each filtered as line, i (i)}
         <div class={"leading-snug " + (
           line.level === 'error' ? 'terminal-line-error' :
