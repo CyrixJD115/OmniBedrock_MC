@@ -9,6 +9,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 FRONTEND_DIR = ROOT / "frontend"
+VITE_CONFIG = FRONTEND_DIR / "vite.config.ts"
+VITE_CONFIG_EXAMPLE = FRONTEND_DIR / "vite.config.example.ts"
 LOCK_FILE = ROOT / "backend" / "data" / "console_lock_state.yaml"
 
 processes: list[subprocess.Popen] = []
@@ -40,6 +42,15 @@ def start_backend() -> subprocess.Popen:
         stdout=sys.stdout,
         stderr=sys.stderr,
     )
+
+
+def ensure_vite_config():
+    if not VITE_CONFIG_EXAMPLE.exists():
+        return
+    if not VITE_CONFIG.exists():
+        shutil.copy2(VITE_CONFIG_EXAMPLE, VITE_CONFIG)
+        print(f"[frontend] Created {VITE_CONFIG.name} from {VITE_CONFIG_EXAMPLE.name}")
+        print(f"[frontend] Edit {VITE_CONFIG.name} to customize ports, hosts, etc.")
 
 
 def start_frontend() -> subprocess.Popen:
@@ -106,6 +117,7 @@ def main():
     signal.signal(signal.SIGTERM, cleanup)
 
     processes.append(start_backend())
+    ensure_vite_config()
     p = start_frontend()
     if p:
         processes.append(p)
