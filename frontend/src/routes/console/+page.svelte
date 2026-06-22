@@ -1,10 +1,11 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { consoleLines } from '$stores/index';
+  import { consoleLines, errorStats } from '$stores/index';
   import { api } from '$lib/api/client';
   import { addToast } from '$stores/toast';
-  import { Send, Trash2, Filter } from '@lucide/svelte';
+  import { Send, Trash2, Filter, AlertTriangle, ChevronDown, ChevronRight } from '@lucide/svelte';
   import { parseAnsi, detectLevel } from '$lib/console';
+  import type { ErrorStat } from '$types/index';
 
   let input = $state('');
   let autoScroll = $state(true);
@@ -12,10 +13,14 @@
   let terminalEl: HTMLDivElement;
   let commandHistory: string[] = [];
   let historyIdx = $state(-1);
+  let showErrors = $state(false);
+  let errorSortKey = $state<'count' | 'signature' | 'last_seen'>('count');
+  let errorSortDir = $state<'desc' | 'asc'>('desc');
 
   let lines = $state<{ text: string; level: string; timestamp: number }[]>([]);
+  let errors = $state<ErrorStat[]>([]);
 
-  const unsub = consoleLines.subscribe(v => {
+  const unsubLines = consoleLines.subscribe(v => {
     lines = v;
     if (autoScroll && terminalEl) {
       requestAnimationFrame(() => {
@@ -24,7 +29,41 @@
     }
   });
 
-  onDestroy(unsub);
+  const unsubErrors = errorStats.subscribe(v => {
+    errors = v;
+  });
+
+  onDestroy(() => { unsubLines(); unsubErrors(); });
+
+  let errorCount = $derived(errors.reduce((a, e) => a + e.count, 0));
+
+  let sortedErrors = $derived(
+    [...errors].sort((a, b) => {
+      const dir = errorSortDir === 'desc' ? -1 : 1;
+      if (errorSortKey === 'count') return (a.count - b.count) * dir;
+      if (errorSortKey === 'last_seen') return (a.last_seen - b.last_seen) * dir;
+      return a.signature.localeCompare(b.signature) * dir;
+    })
+  );
+
+  function toggleSort(key: typeof errorSortKey) {
+    if (errorSortKey === key) {
+      errorSortDir = errorSortDir === 'desc' ? 'asc' : 'desc';
+    } else {
+      errorSortKey = key;
+      errorSortDir = 'desc';
+    }
+  }
+
+  function sortArrow(key: typeof errorSortKey): string {
+    if (errorSortKey !== key) return '';
+    return errorSortDir === 'desc' ? ' ↓' : ' ↑';
+  }
+
+  function formatTime(ts: number): string {
+    const d = new Date(ts * 1000);
+    return d.toLocaleTimeString();
+  }
 
   async function send() {
     const cmd = input.trim();
@@ -119,6 +158,46 @@
       {/if}
     </div>
   </div>
+
+  {#if errors.length > 0}
+    <div class="border-2 border-deep-600/50 bg-black/40">
+      <button onclick={() => showErrors = !showErrors}
+              class="w-full flex items-center gap-2 px-4 py-2 bg-deep-900/80 border-b border-deep-600/30 text-xs uppercase tracking-wider text-deep-300 hover:text-white transition-colors">
+        {#if showErrors}<ChevronDown size={13} />{:else}<ChevronRight size={13} />{/if}
+        <AlertTriangle size={13} class="text-red-400" />
+        Error Tracking
+        <span class="ml-auto text-red-400 font-bold">{errorCount} total</span>
+      </button>
+      {#if showErrors}
+        <div class="overflow-x-auto">
+          <table class="w-full text-[11px] font-mono">
+            <thead>
+              <tr class="border-b border-deep-600/20 text-deep-400">
+                <th onclick={() => toggleSort('signature')} class="text-left px-3 py-1.5 cursor-pointer hover:text-white transition-colors">
+                  Signature{sortArrow('signature')}
+                </th>
+                <th onclick={() => toggleSort('count')} class="text-right px-3 py-1.5 cursor-pointer hover:text-white transition-colors w-16">
+                  Count{sortArrow('count')}
+                </th>
+                <th onclick={() => toggleSort('last_seen')} class="text-right px-3 py-1.5 cursor-pointer hover:text-white transition-colors w-20">
+                  Last{sortArrow('last_seen')}
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each sortedErrors as err (err.signature)}
+                <tr class="border-b border-deep-600/10 hover:bg-red-950/20 transition-colors">
+                  <td class="px-3 py-1 text-red-300 truncate max-w-[400px]" title={err.signature}>{err.signature}</td>
+                  <td class="px-3 py-1 text-right text-red-400 font-bold">{err.count}</td>
+                  <td class="px-3 py-1 text-right text-deep-400">{formatTime(err.last_seen)}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      {/if}
+    </div>
+  {/if}
 
   <div class="flex gap-2">
     <input type="text" bind:value={input} onkeydown={onKeyDown}

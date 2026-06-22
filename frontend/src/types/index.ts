@@ -16,6 +16,13 @@ export interface ConsoleLine {
   timestamp: number;
 }
 
+export interface ErrorStat {
+  signature: string;
+  count: number;
+  first_seen: number;
+  last_seen: number;
+}
+
 export interface Metrics {
   timestamp: number;
   status: string;

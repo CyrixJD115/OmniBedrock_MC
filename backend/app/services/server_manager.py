@@ -66,6 +66,8 @@ class ServerManager:
         self._was_intentional_stop: bool = False
 
         self._last_tps: float | None = None
+        self._error_stats: dict[str, dict] = {}
+        self._error_stats_listeners: list[asyncio.Queue[list[dict]]] = []
 
         self._data_dir = Path(settings.data_dir)
         self._data_dir.mkdir(parents=True, exist_ok=True)
@@ -247,6 +249,23 @@ class ServerManager:
         if q in self._stdout_handler:
             self._stdout_handler.remove(q)
 
+    def subscribe_error_stats(self) -> asyncio.Queue[list[dict]]:
+        q: asyncio.Queue[list[dict]] = asyncio.Queue()
+        self._error_stats_listeners.append(q)
+        return q
+
+    def unsubscribe_error_stats(self, q: asyncio.Queue) -> None:
+        if q in self._error_stats_listeners:
+            self._error_stats_listeners.remove(q)
+
+    def get_error_stats(self) -> list[dict]:
+        return sorted(self._error_stats.values(), key=lambda x: x["count"], reverse=True)
+
+    def _notify_error_stats(self) -> None:
+        stats = self.get_error_stats()
+        for q in self._error_stats_listeners:
+            q.put_nowait(stats)
+
     def subscribe_status(self) -> asyncio.Queue[ServerStatus]:
         q: asyncio.Queue[ServerStatus] = asyncio.Queue()
         q.put_nowait(self._status)
@@ -276,6 +295,9 @@ class ServerManager:
                 m = _TPS_RE.search(line)
                 if m:
                     self._last_tps = float(m.group(1))
+
+                if detect_level(line) == "error":
+                    self._update_error_stats(line)
 
                 self._history.append(line)
                 if len(self._history) > self._max_history:
@@ -339,6 +361,7 @@ class ServerManager:
             logger.error("Watchdog error: %s", e)
 
     def _cleanup(self) -> None:
+        self._error_stats.clear()
         if self._reader_task and not self._reader_task.done():
             self._reader_task.cancel()
         if self._writer_task and not self._writer_task.done():
@@ -358,6 +381,18 @@ class ServerManager:
             self._lock_file.write_text(payload)
         except OSError as e:
             logger.error("Failed to write lock state: %s", e)
+
+    def _update_error_stats(self, line: str) -> None:
+        sig = re.sub(r"\d+(?:\.\d+)+", "@", line.lower())
+        sig = re.sub(r"\b\d+\b", "#", sig)
+        sig = re.sub(r"\s+", " ", sig).strip()[:120]
+        now = time.time()
+        if sig in self._error_stats:
+            self._error_stats[sig]["count"] += 1
+            self._error_stats[sig]["last_seen"] = now
+        else:
+            self._error_stats[sig] = {"signature": sig, "count": 1, "first_seen": now, "last_seen": now}
+        self._notify_error_stats()
 
     def get_status_dict(self) -> dict:
         return {

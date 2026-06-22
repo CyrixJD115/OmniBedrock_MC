@@ -107,6 +107,8 @@
   function onMetricsMessage(data: Record<string, unknown>) {
     if (data.type === 'metrics') {
       import('$stores/index').then(m => m.metrics.set(data.data as never));
+    } else if (data.type === 'error_stats') {
+      import('$stores/index').then(m => m.errorStats.set(data.errors as never));
     }
   }
 

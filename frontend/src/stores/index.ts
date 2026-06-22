@@ -1,5 +1,5 @@
 import { writable, derived } from 'svelte/store';
-import type { ServerStatus, ConsoleLine, Metrics } from '$types/index';
+import type { ServerStatus, ConsoleLine, Metrics, ErrorStat } from '$types/index';
 
 export const serverStatus = writable<ServerStatus>({
   status: 'stopped',
@@ -10,6 +10,7 @@ export const serverStatus = writable<ServerStatus>({
 
 export const consoleLines = writable<ConsoleLine[]>([]);
 export const metrics = writable<Metrics | null>(null);
+export const errorStats = writable<ErrorStat[]>([]);
 
 export const isServerRunning = derived(serverStatus, ($s) => $s.status === 'running');
 

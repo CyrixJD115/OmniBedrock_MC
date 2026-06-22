@@ -24,6 +24,7 @@ class ConsoleWebSocket:
 
         stdout_q = self._manager.subscribe_stdout()
         status_q = self._manager.subscribe_status()
+        error_q = self._manager.subscribe_error_stats()
         stop_event = asyncio.Event()
 
         for line in self._manager.get_history():
@@ -66,10 +67,19 @@ class ConsoleWebSocket:
             finally:
                 stop_event.set()
 
+        async def error_stats_writer():
+            try:
+                while not stop_event.is_set():
+                    stats = await error_q.get()
+                    await ws.send_text(json.dumps({"type": "error_stats", "errors": stats}))
+            except Exception:
+                pass
+
         tasks = [
             asyncio.create_task(reader()),
             asyncio.create_task(writer()),
             asyncio.create_task(status_writer()),
+            asyncio.create_task(error_stats_writer()),
         ]
 
         try:
@@ -82,5 +92,6 @@ class ConsoleWebSocket:
         finally:
             self._manager.unsubscribe_stdout(stdout_q)
             self._manager.unsubscribe_status(status_q)
+            self._manager.unsubscribe_error_stats(error_q)
             self._connections.discard(ws)
             logger.info("Console WS disconnected (%d remaining)", len(self._connections))
