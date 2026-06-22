@@ -92,11 +92,14 @@
 
   function onConsoleMessage(data: Record<string, unknown>) {
     if (data.type !== 'console') return;
-    import('$stores/index').then(m => {
-      m.consoleLines.update(lines => {
-        lines.push({ text: data.line as string, level: 'info', timestamp: data.timestamp as number });
-        if (lines.length > 2000) lines.splice(0, lines.length - 2000);
-        return lines;
+    import('$lib/console').then(c => {
+      import('$stores/index').then(m => {
+        const level = (data.level as string) || c.detectLevel(data.line as string);
+        m.consoleLines.update(lines => {
+          lines.push({ text: data.line as string, level: level as never, timestamp: data.timestamp as number });
+          if (lines.length > 2000) lines.splice(0, lines.length - 2000);
+          return lines;
+        });
       });
     });
   }

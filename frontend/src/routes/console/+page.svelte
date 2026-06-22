@@ -4,6 +4,7 @@
   import { api } from '$lib/api/client';
   import { addToast } from '$stores/toast';
   import { Send, Trash2, Filter } from '@lucide/svelte';
+  import { parseAnsi, detectLevel } from '$lib/console';
 
   let input = $state('');
   let autoScroll = $state(true);
@@ -101,7 +102,7 @@
           line.level === 'debug' ? 'terminal-line-debug' :
           line.level === 'local' ? 'terminal-line-local' :
           'terminal-line-info'
-        )}>{line.text}</div>
+        )}>{@html parseAnsi(line.text)}</div>
       {/each}
       {#if filtered.length === 0}
         <div class="text-deep-600 font-mono">

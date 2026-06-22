@@ -7,7 +7,7 @@ import time
 
 from fastapi import WebSocket
 
-from backend.app.services.server_manager import ServerManager
+from backend.app.services.server_manager import ServerManager, detect_level
 
 logger = logging.getLogger("ws_console")
 
@@ -27,7 +27,7 @@ class ConsoleWebSocket:
         stop_event = asyncio.Event()
 
         for line in self._manager.get_history():
-            await ws.send_text(json.dumps({"type": "console", "line": line, "timestamp": time.time()}))
+            await ws.send_text(json.dumps({"type": "console", "line": line, "level": detect_level(line), "timestamp": time.time()}))
 
         async def reader():
             try:
@@ -47,7 +47,7 @@ class ConsoleWebSocket:
                 while not stop_event.is_set():
                     try:
                         line = await asyncio.wait_for(stdout_q.get(), timeout=1)
-                        await ws.send_text(json.dumps({"type": "console", "line": line, "timestamp": time.time()}))
+                        await ws.send_text(json.dumps({"type": "console", "line": line, "level": detect_level(line), "timestamp": time.time()}))
                     except asyncio.TimeoutError:
                         try:
                             await ws.send_text(json.dumps({"type": "ping"}))

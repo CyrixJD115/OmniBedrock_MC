@@ -17,6 +17,26 @@ from backend.app.models.server import ServerStatus
 logger = logging.getLogger("server_manager")
 
 _TPS_RE = re.compile(r"(?:tps|mspt)[:\s]*([0-9.]+)", re.IGNORECASE)
+_LEVEL_RE = re.compile(r"\[(ERROR|WARN(?:ING)?|INFO|DEBUG|LOCAL)\]", re.IGNORECASE)
+_ERROR_KEYWORDS = re.compile(r"(?:error|exception|traceback|fatal)", re.IGNORECASE)
+
+
+def detect_level(line: str) -> str:
+    m = _LEVEL_RE.search(line)
+    if m:
+        token = m.group(1).upper()
+        if token in ("ERROR",):
+            return "error"
+        if token in ("WARN", "WARNING"):
+            return "warn"
+        if token in ("DEBUG",):
+            return "debug"
+        if token in ("LOCAL",):
+            return "local"
+        return "info"
+    if _ERROR_KEYWORDS.search(line):
+        return "error"
+    return "info"
 
 
 class ServerManager:
