@@ -74,37 +74,18 @@ def start_frontend() -> subprocess.Popen:
     )
 
 
+_arm_state = {"armed": False, "time": 0.0}
+_ARM_MIN_DELAY = 5
+_ARM_TIMEOUT = 10
 _shutting_down = False
 
 
-def cleanup(*_):
+def _shutdown_all() -> None:
     global _shutting_down
     if _shutting_down:
         return
     _shutting_down = True
-
-    if _server_is_running():
-        print("\n" + "!" * 60)
-        print("  WARNING: Minecraft server is still running!")
-        print("  The panel will try to stop it gracefully.")
-        print("  Press Ctrl+C again within 3 seconds to force quit.")
-        print("!" * 60 + "\n")
-
-        def force_quit(*_):
-            print("\nForce quitting...")
-            for p in processes:
-                if p and p.poll() is None:
-                    p.kill()
-            sys.exit(1)
-
-        old_handler = signal.signal(signal.SIGINT, force_quit)
-        signal.signal(signal.SIGTERM, force_quit)
-        try:
-            time.sleep(3)
-        except KeyboardInterrupt:
-            pass
-        signal.signal(signal.SIGINT, old_handler)
-
+    signal.signal(signal.SIGINT, signal.default_int_handler)
     print("\nShutting down...")
     for p in processes:
         if p and p.poll() is None:
@@ -116,6 +97,43 @@ def cleanup(*_):
             except subprocess.TimeoutExpired:
                 p.kill()
     sys.exit(0)
+
+
+def cleanup(*_) -> None:
+    if _shutting_down:
+        return
+
+    if _server_is_running():
+        now = time.time()
+        arm = _arm_state
+
+        if not arm["armed"]:
+            arm["armed"] = True
+            arm["time"] = now
+            print("\n" + "!" * 60)
+            print("  WARNING: Minecraft server is still running!")
+            print("  Shutdown is ARMED. Press Ctrl+C again to confirm.")
+            print(f"  Wait at least {_ARM_MIN_DELAY}s between presses. Pressing sooner cancels.")
+            print(f"  Arm expires in {_ARM_TIMEOUT}s.")
+            print("!" * 60 + "\n")
+            signal.signal(signal.SIGINT, signal.default_int_handler)
+            return
+
+        elapsed = now - arm["time"]
+        if elapsed < _ARM_MIN_DELAY:
+            arm["armed"] = False
+            signal.signal(signal.SIGINT, cleanup)
+            print("Shutdown cancelled (too fast — protection triggered).")
+            return
+        if elapsed > _ARM_TIMEOUT:
+            arm["armed"] = False
+            signal.signal(signal.SIGINT, cleanup)
+            print("Shutdown cancelled (timed out).")
+            return
+
+        arm["armed"] = False
+
+    _shutdown_all()
 
 
 def main():
@@ -160,7 +178,7 @@ def main():
             for p in processes:
                 if p and p.poll() is not None:
                     print(f"Process exited with code {p.returncode}")
-                    cleanup()
+                    _shutdown_all()
     except KeyboardInterrupt:
         cleanup()
 
