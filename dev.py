@@ -8,8 +8,9 @@ import sys
 import time
 from pathlib import Path
 
-VITE_CONFIG = Path(__file__).resolve().parent / "frontend" / "vite.config.ts"
-VITE_CONFIG_EXAMPLE = VITE_CONFIG.with_suffix(".ts.example")
+FRONTEND_DIR = Path(__file__).resolve().parent / "frontend"
+VITE_CONFIG = FRONTEND_DIR / "vite.config.ts"
+VITE_CONFIG_EXAMPLE = FRONTEND_DIR / "vite.config.example.ts"
 LOCK_FILE = Path(__file__).resolve().parent / "backend" / "data" / "console_lock_state.yaml"
 
 
@@ -23,7 +24,6 @@ def ensure_vite_config():
 
 
 ROOT = Path(__file__).resolve().parent
-FRONTEND_DIR = ROOT / "frontend"
 
 processes: list[subprocess.Popen] = []
 
