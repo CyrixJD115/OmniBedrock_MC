@@ -1,21 +1,24 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, tick } from 'svelte';
   import { consoleLines, errorStats } from '$stores/index';
   import { api } from '$lib/api/client';
   import { addToast } from '$stores/toast';
-  import { Send, Trash2, Filter, AlertTriangle, ChevronDown, ChevronRight } from '@lucide/svelte';
-  import { parseAnsi, detectLevel } from '$lib/console';
+  import { Send, Trash2, Filter, AlertTriangle, ChevronDown, ChevronRight, ArrowUp, ArrowDown, Binary } from '@lucide/svelte';
+  import { parseAnsi, highlightMatches, matchesQuery } from '$lib/console';
   import type { ErrorStat } from '$types/index';
 
   let input = $state('');
   let autoScroll = $state(true);
   let filterText = $state('');
+  let useRegex = $state(false);
+  let levelFilter = $state('');
   let terminalEl: HTMLDivElement;
   let commandHistory: string[] = [];
   let historyIdx = $state(-1);
   let showErrors = $state(false);
   let errorSortKey = $state<'count' | 'signature' | 'last_seen'>('count');
   let errorSortDir = $state<'desc' | 'asc'>('desc');
+  let currentMatch = $state(-1);
 
   let lines = $state<{ text: string; level: string; timestamp: number }[]>([]);
   let errors = $state<ErrorStat[]>([]);
@@ -96,11 +99,50 @@
   function clearLines() {
     consoleLines.set([]);
     addToast('Console cleared', 'info');
+    currentMatch = -1;
+  }
+
+  function filterActive(): boolean {
+    return filterText.length > 0 || levelFilter.length > 0;
   }
 
   let filtered = $derived(
-    !filterText ? lines : lines.filter(l => l.text.toLowerCase().includes(filterText.toLowerCase()))
+    lines.filter(l => {
+      if (levelFilter && l.level !== levelFilter) return false;
+      if (!filterText) return true;
+      return matchesQuery(l.text, filterText, useRegex);
+    })
   );
+
+  let matchIndices = $derived.by(() => {
+    if (!filterText) return [];
+    return lines.reduce<number[]>((acc, l, i) => {
+      if (matchesQuery(l.text, filterText, useRegex)) acc.push(i);
+      return acc;
+    }, []);
+  });
+
+  let matchCount = $derived(matchIndices.length);
+
+  function navigateMatch(dir: -1 | 1) {
+    if (matchCount === 0) return;
+    currentMatch = (currentMatch + dir + matchCount) % matchCount;
+    const idx = matchIndices[currentMatch];
+    const el = terminalEl?.querySelector(`[data-line-idx="${idx}"]`) as HTMLElement | null;
+    if (el) {
+      el.scrollIntoView({ block: 'center' });
+      el.classList.add('console-match-active');
+      setTimeout(() => el.classList.remove('console-match-active'), 1500);
+    }
+  }
+
+  function renderLine(text: string): string {
+    let html = parseAnsi(text);
+    if (filterText) {
+      html = highlightMatches(html, filterText, useRegex);
+    }
+    return html;
+  }
 </script>
 
 <style>
@@ -108,6 +150,25 @@
     -webkit-font-smoothing: none;
     -moz-osx-font-smoothing: unset;
     font-smooth: never;
+  }
+  :global(.console-match) {
+    background: rgba(6, 182, 212, 0.3);
+    border-radius: 2px;
+    outline: 1px solid rgba(6, 182, 212, 0.5);
+  }
+  :global(.console-match-active) {
+    background: rgba(6, 182, 212, 0.15);
+    outline: 2px solid rgba(6, 182, 212, 0.6);
+    outline-offset: -2px;
+  }
+  .filter-btn {
+    @apply flex items-center justify-center w-7 h-7 rounded text-deep-400 hover:text-white hover:bg-deep-700/50 transition-colors text-[11px] font-mono;
+  }
+  .filter-btn.active {
+    @apply text-bedrock-400 bg-deep-700/50;
+  }
+  .level-dot {
+    @apply w-2 h-2 rounded-full inline-block flex-shrink-0;
   }
 </style>
 
@@ -123,6 +184,37 @@
         <input type="text" bind:value={filterText} placeholder="Filter"
                class="input pl-8 py-1.5 text-xs w-36 font-mono" />
       </div>
+
+      <button onclick={() => useRegex = !useRegex}
+              title={useRegex ? 'Regex mode on' : 'Regex mode off'}
+              class="filter-btn {useRegex ? 'active' : ''}">
+        <Binary size={12} />
+      </button>
+
+      <div class="relative">
+        <select bind:value={levelFilter}
+                class="input py-1.5 text-xs w-24 font-mono appearance-none bg-deep-900/80 cursor-pointer">
+          <option value="">All</option>
+          <option value="error">Error</option>
+          <option value="warn">Warn</option>
+          <option value="info">Info</option>
+          <option value="debug">Debug</option>
+          <option value="local">Local</option>
+        </select>
+      </div>
+
+      {#if matchCount > 0}
+        <div class="flex items-center gap-1 text-xs font-mono text-deep-400">
+          <button onclick={() => navigateMatch(-1)} class="filter-btn" title="Previous match">
+            <ArrowUp size={12} />
+          </button>
+          <span class="tabular-nums w-14 text-center">{currentMatch + 1}/{matchCount}</span>
+          <button onclick={() => navigateMatch(1)} class="filter-btn" title="Next match">
+            <ArrowDown size={12} />
+          </button>
+        </div>
+      {/if}
+
       <button onclick={clearLines} class="btn-ghost p-2 text-xs" title="Clear">
         <Trash2 size={14} />
       </button>
@@ -139,21 +231,25 @@
       <span class="w-2.5 h-2.5 bg-yellow-500/80"></span>
       <span class="w-2.5 h-2.5 bg-teal-500/80"></span>
       <span class="text-deep-500 text-[10px] uppercase tracking-wider ml-2 font-mono">server-console</span>
+      {#if filterActive()}
+        <span class="ml-auto text-[10px] font-mono text-deep-400">{filtered.length} / {lines.length} lines</span>
+      {/if}
     </div>
     <div bind:this={terminalEl}
          class="terminal-container h-[55vh] overflow-y-auto p-4 font-terminal text-base leading-relaxed">
       {#each filtered as line, i (i)}
-        <div class={"leading-snug " + (
-          line.level === 'error' ? 'terminal-line-error' :
-          line.level === 'warn' ? 'terminal-line-warn' :
-          line.level === 'debug' ? 'terminal-line-debug' :
-          line.level === 'local' ? 'terminal-line-local' :
-          'terminal-line-info'
-        )}>{@html parseAnsi(line.text)}</div>
+        {@const lineIdx = lines.indexOf(line)}
+        <div data-line-idx={lineIdx} class={"leading-snug " + (
+               line.level === 'error' ? 'terminal-line-error' :
+               line.level === 'warn' ? 'terminal-line-warn' :
+               line.level === 'debug' ? 'terminal-line-debug' :
+               line.level === 'local' ? 'terminal-line-local' :
+               'terminal-line-info'
+             )}>{@html renderLine(line.text)}</div>
       {/each}
       {#if filtered.length === 0}
         <div class="text-deep-600 font-mono">
-          {filterText ? '> No matches' : '> Console output appears here...'}
+          {filterActive() ? '> No matches' : '> Console output appears here...'}
         </div>
       {/if}
     </div>
