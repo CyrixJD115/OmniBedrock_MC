@@ -40,6 +40,25 @@ def ensure_vite_config():
         print(f"[frontend] Edit {VITE_CONFIG.name} to customize ports, hosts, etc.")
 
 
+def ensure_dependencies():
+    pkg = FRONTEND_DIR / "package.json"
+    lock = FRONTEND_DIR / "node_modules" / ".package-lock.json"
+    if not pkg.exists():
+        return
+    need_install = False
+    if not (FRONTEND_DIR / "node_modules").exists():
+        need_install = True
+    elif lock.exists() and pkg.stat().st_mtime > lock.stat().st_mtime:
+        need_install = True
+    if need_install:
+        print("[frontend] Installing dependencies (npm install)...")
+        result = subprocess.run(["npm", "install"], cwd=str(FRONTEND_DIR))
+        if result.returncode != 0:
+            print("[frontend] npm install failed!")
+            sys.exit(1)
+        print("[frontend] Dependencies installed.")
+
+
 def start_frontend() -> subprocess.Popen | None:
     cmd = ["npm", "run", "dev"]
     node = shutil.which("node")
@@ -60,6 +79,7 @@ def main():
     processes: list[subprocess.Popen] = []
     processes.append(start_backend())
     ensure_vite_config()
+    ensure_dependencies()
     p = start_frontend()
     if p:
         processes.append(p)
