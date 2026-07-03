@@ -52,6 +52,7 @@ export interface Addon {
   uuid: string;
   version: number[];
   valid: boolean;
+  manifest: Record<string, unknown> | null;
 }
 
 export interface Player {

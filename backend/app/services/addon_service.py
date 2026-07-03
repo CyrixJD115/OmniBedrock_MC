@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid as uuid_lib
 from pathlib import Path
 
 from backend.app.core.config import settings
@@ -25,6 +26,14 @@ class AddonService:
                 return None
         return None
 
+    def _write_manifest(self, path: str | Path, manifest: dict) -> bool:
+        manifest_path = Path(path) / "manifest.json"
+        try:
+            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+            return True
+        except OSError:
+            return False
+
     def list_addons(self) -> dict:
         behavior_packs: list[dict] = []
         resource_packs: list[dict] = []
@@ -45,6 +54,7 @@ class AddonService:
                             "uuid": (manifest.get("header", {}).get("uuid", "") if manifest else ""),
                             "version": (manifest.get("header", {}).get("version", []) if manifest else []),
                             "valid": manifest is not None,
+                            "manifest": manifest,
                         }
                         if key == "behavior_packs":
                             behavior_packs.append(info)
@@ -57,12 +67,43 @@ class AddonService:
         return self._read_manifest(Path(path))
 
     def update_manifest(self, path: str, manifest: dict) -> bool:
-        manifest_path = Path(path) / "manifest.json"
+        return self._write_manifest(path, manifest)
+
+    def rename_addon(self, path: str, new_name: str) -> tuple[bool, str]:
+        """Rename an addon folder on disk."""
+        old_path = Path(path)
+        if not old_path.exists() or not old_path.is_dir():
+            return False, "Addon path not found"
+        new_path = old_path.parent / new_name
+        if new_path.exists():
+            return False, "An addon with that name already exists"
         try:
-            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-            return True
-        except OSError:
+            old_path.rename(new_path)
+            return True, str(new_path)
+        except OSError as e:
+            return False, str(e)
+
+    def randomize_uuid(self, path: str) -> tuple[bool, str | None]:
+        """Generate a new random UUID for the addon's manifest."""
+        manifest = self._read_manifest(Path(path))
+        if not manifest:
+            return False, None
+        new_uuid = str(uuid_lib.uuid4())
+        if "header" not in manifest:
+            manifest["header"] = {}
+        manifest["header"]["uuid"] = new_uuid
+        ok = self._write_manifest(path, manifest)
+        return ok, new_uuid if ok else None
+
+    def change_uuid(self, path: str, new_uuid: str) -> bool:
+        """Set a specific UUID in the addon's manifest."""
+        manifest = self._read_manifest(Path(path))
+        if not manifest:
             return False
+        if "header" not in manifest:
+            manifest["header"] = {}
+        manifest["header"]["uuid"] = new_uuid
+        return self._write_manifest(path, manifest)
 
     def get_pack_order(self, world: str, pack_type: str) -> list[dict]:
         world_path = self._worlds_dir / world

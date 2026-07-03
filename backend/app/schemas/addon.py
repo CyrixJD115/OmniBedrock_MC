@@ -16,3 +16,17 @@ class AddonReorderRequest(BaseModel):
 class ManifestUpdateRequest(BaseModel):
     path: str
     manifest: dict
+
+
+class RenameAddonRequest(BaseModel):
+    path: str
+    new_name: str
+
+
+class ChangeUuidRequest(BaseModel):
+    path: str
+    uuid: str
+
+
+class RandomizeUuidRequest(BaseModel):
+    path: str

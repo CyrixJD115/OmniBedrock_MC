@@ -5,7 +5,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from backend.app.core.permissions import ADDONS_MANAGE
 from backend.app.core.security import require_permission, verify_token
 from backend.app.models.user import User
-from backend.app.schemas.addon import AddonReorderRequest, ManifestUpdateRequest
+from backend.app.schemas.addon import (
+    AddonReorderRequest,
+    ChangeUuidRequest,
+    ManifestUpdateRequest,
+    RandomizeUuidRequest,
+    RenameAddonRequest,
+)
 from backend.app.services.addon_service import AddonService
 from backend.app.services.audit_service import log_action
 
@@ -52,3 +58,36 @@ async def set_pack_order(
         raise HTTPException(status_code=500, detail="Failed to update pack order")
     log_action(user.username, "addons.reorder", f"{world}/{pack_type}", category="addons")
     return {"success": True, "message": "Pack order updated"}
+
+
+@router.put("/rename")
+async def rename_addon(
+    req: RenameAddonRequest, user: User = Depends(require_permission(ADDONS_MANAGE))
+) -> dict:
+    ok, result = _service.rename_addon(req.path, req.new_name)
+    if not ok:
+        raise HTTPException(status_code=400, detail=result)
+    log_action(user.username, "addons.rename", f"{req.path} -> {req.new_name}", category="addons")
+    return {"success": True, "new_path": result, "message": "Addon renamed"}
+
+
+@router.post("/randomize-uuid")
+async def randomize_addon_uuid(
+    req: RandomizeUuidRequest, user: User = Depends(require_permission(ADDONS_MANAGE))
+) -> dict:
+    ok, new_uuid = _service.randomize_uuid(req.path)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to randomize UUID")
+    log_action(user.username, "addons.randomize_uuid", req.path, category="addons")
+    return {"success": True, "uuid": new_uuid, "message": "UUID randomized"}
+
+
+@router.put("/change-uuid")
+async def change_addon_uuid(
+    req: ChangeUuidRequest, user: User = Depends(require_permission(ADDONS_MANAGE))
+) -> dict:
+    ok = _service.change_uuid(req.path, req.uuid)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to change UUID")
+    log_action(user.username, "addons.change_uuid", req.path, category="addons")
+    return {"success": True, "message": "UUID updated"}

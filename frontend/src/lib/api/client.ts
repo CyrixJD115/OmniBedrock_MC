@@ -102,20 +102,14 @@ export const api = {
   restoreBackup: (world: string, filename: string) =>
     request<{ success: boolean }>(`/backups/restore/${world}/${filename}`, { method: 'POST' }),
   listTrash: (world?: string) => request<Array<any>>(`/backups/trash${world ? `?world=${world}` : ''}`),
-  downloadBackup: async (world: string, filename: string) => {
-    const res = await fetch(`${API_BASE}/backups/${encodeURIComponent(world)}/${encodeURIComponent(filename)}/download`, {
-      headers: { Authorization: `Bearer ${authToken}` },
-    });
-    if (!res.ok) throw new Error(`Download failed: ${res.status}`);
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
+  downloadBackup: (world: string, filename: string) => {
+    const url = `${API_BASE}/backups/${encodeURIComponent(world)}/${encodeURIComponent(filename)}/download?token=${authToken}`;
     const a = document.createElement('a');
     a.href = url;
     a.download = filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
   },
   restoreToWorld: (world: string, filename: string) =>
     request<{ success: boolean; message: string }>(`/backups/${encodeURIComponent(world)}/${encodeURIComponent(filename)}/restore-to-world`, {
@@ -156,6 +150,21 @@ export const api = {
     request<{ success: boolean }>(`/addons/order/${world}/${packType}`, {
       method: 'PUT',
       body: JSON.stringify({ pack_type: packType, uuids }),
+    }),
+  renameAddon: (path: string, newName: string) =>
+    request<{ success: boolean; new_path: string }>('/addons/rename', {
+      method: 'PUT',
+      body: JSON.stringify({ path, new_name: newName }),
+    }),
+  randomizeUuid: (path: string) =>
+    request<{ success: boolean; uuid: string }>('/addons/randomize-uuid', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    }),
+  changeUuid: (path: string, uuid: string) =>
+    request<{ success: boolean }>('/addons/change-uuid', {
+      method: 'PUT',
+      body: JSON.stringify({ path, uuid }),
     }),
 
   // Players

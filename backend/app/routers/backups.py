@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 from backend.app.core.config import settings as cfg
 from backend.app.core.dependencies import backup_scheduler, backup_service, backup_settings_service, server_manager
 from backend.app.core.permissions import BACKUPS_CREATE, BACKUPS_DELETE, BACKUPS_RESTORE, BACKUPS_VIEW, SETTINGS_EDIT
-from backend.app.core.security import require_permission, verify_token
+from backend.app.core.security import require_permission, verify_token, verify_token_query
 from backend.app.models.server import ServerStatus
 from backend.app.models.user import User
 from backend.app.schemas.backup import (
@@ -129,7 +129,7 @@ async def delete_backup(world: str, filename: str, _u: User = Depends(require_pe
 
 
 @router.get("/{world}/{filename}/download")
-async def download_backup(world: str, filename: str, _u: User = Depends(verify_token)):
+async def download_backup(world: str, filename: str, _u: User = Depends(verify_token_query)):
     path = backup_service.get_backup_path(world, filename)
     if not path:
         raise HTTPException(status_code=404, detail="Backup not found")

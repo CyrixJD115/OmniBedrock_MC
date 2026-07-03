@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from backend.app.core.auth import decode_access_token, get_user
+from backend.app.core.auth import decode_access_token, get_user, get_user_from_token
 from backend.app.core.roles import resolve_permissions
 from backend.app.models.user import User
 
@@ -20,6 +20,33 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(_bearer)) -
     user = get_user(username)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    return user
+
+
+async def verify_token_query(
+    authorization: str | None = Header(None),
+    token: str | None = Query(None),
+) -> User:
+    """Verify JWT from either the Authorization header or a query parameter.
+
+    This is used for endpoints that need to support direct browser access
+    (e.g. file downloads via <a> tags that cannot set custom headers).
+    """
+    token_str = token
+    if not token_str and authorization:
+        parts = authorization.split()
+        if len(parts) == 2 and parts[0].lower() == "bearer":
+            token_str = parts[1]
+
+    if not token_str:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+
+    user = get_user_from_token(token_str)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+        )
     return user
 
 
