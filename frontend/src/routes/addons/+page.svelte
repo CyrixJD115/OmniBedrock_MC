@@ -6,7 +6,7 @@
   import type { Addon } from '$types/index';
   import {
     Package, Eye, RotateCw, Save, ChevronUp, ChevronDown, X, FileDown, FileUp,
-    Edit, Shuffle, Hash, FolderOpen, Trash2, Search, Download, Upload
+    Edit, Shuffle, Hash, FolderOpen, Trash2, Search, GripVertical, Plus
   } from '@lucide/svelte';
 
   // ─── state ────────────────────────────────────────────────────────────────
@@ -22,7 +22,7 @@
   let activeTab = $state<AddonTab>('bp');
 
   // order
-  let orderBP = $state<string[]>([]);   // UUIDs in order
+  let orderBP = $state<string[]>([]);
   let orderRP = $state<string[]>([]);
   let orderDirty = $state(false);
 
@@ -36,7 +36,7 @@
   // hidden UUIDs (persisted to localStorage)
   let hiddenUuids = $state<Set<string>>(new Set());
 
-  // manifest preview
+  // manifest preview (slide-in drawer)
   let previewAddon = $state<Addon | null>(null);
   let manifestViewMode = $state<'structured' | 'raw'>('structured');
   let manifestWrap = $state(true);
@@ -62,8 +62,11 @@
   let renamePath = $state('');
   let renameValue = $state('');
 
-  // DnD
-  let dragSource: { list: 'available' | 'current'; packType: 'bp' | 'rp'; uuid: string } | null = null;
+  // DnD state (must be $state so visual feedback updates reactively)
+  type DragSrc = { list: 'available' | 'current'; packType: 'bp' | 'rp'; uuid: string };
+  let dragSource = $state<DragSrc | null>(null);
+  let dragOverZone = $state<{ zone: 'available' | 'current'; packType: 'bp' | 'rp'; targetUuid?: string } | null>(null);
+  let isDragging = $state(false);
 
   // ─── helpers ──────────────────────────────────────────────────────────────
   const STORAGE_KEY = 'omb_addon_hidden';
@@ -86,6 +89,32 @@
   }
 
   const canManage = $derived($userPermissions.includes('ADDONS_MANAGE'));
+
+  function esc(s: string): string {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  function versionStr(v: number[] | undefined): string {
+    if (!v || v.length === 0) return '—';
+    return v.join('.');
+  }
+
+  function packColorClass(packType: 'bp' | 'rp'): string {
+    return packType === 'bp' ? 'text-bedrock-400' : 'text-teal-400';
+  }
+
+  /** After mutations, refresh the preview to match the updated addon. */
+  function syncPreview(path: string) {
+    if (!previewAddon || previewAddon.path !== path) return;
+    const matchPath = path === renamePath ? undefined : path;
+    // For rename, match by new name since path changed
+    const updated = allBp.concat(allRp).find((p) =>
+      renameOpen ? p.name === renameValue.trim() : p.path === matchPath
+    );
+    if (updated) previewAddon = updated;
+  }
 
   // ─── data ─────────────────────────────────────────────────────────────────
   onMount(async () => {
@@ -142,7 +171,6 @@
 
     let available = worldPacks.filter((p) => !orderSet.has(p.uuid) && !(hideHidden && hiddenUuids.has(p.uuid)));
     let current = worldPacks.filter((p) => orderSet.has(p.uuid));
-    // sort current by order
     current = current.sort((a, b) => order.indexOf(a.uuid) - order.indexOf(b.uuid));
 
     if (s) {
@@ -172,51 +200,64 @@
   // ─── DnD ───────────────────────────────────────────────────────────────────
   function handleDragStart(e: DragEvent, list: 'available' | 'current', packType: 'bp' | 'rp', uuid: string) {
     dragSource = { list, packType, uuid };
+    isDragging = true;
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = 'move';
       e.dataTransfer.setData('text/plain', uuid);
     }
   }
 
-  function handleDragOver(e: DragEvent) {
+  function handleDragEnd() {
+    dragSource = null;
+    dragOverZone = null;
+    isDragging = false;
+  }
+
+  function handleDragOverZone(e: DragEvent, zone: 'available' | 'current', packType: 'bp' | 'rp', targetUuid?: string) {
     if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
     e.preventDefault();
+    if (!dragSource || dragSource.packType !== packType) return;
+    dragOverZone = { zone, packType, targetUuid };
+  }
+
+  function handleDragLeaveZone(e: DragEvent, packType: 'bp' | 'rp') {
+    // Only clear if we're actually leaving the container (not entering a child)
+    const rt = e.relatedTarget as HTMLElement | null;
+    if (rt && (e.currentTarget as HTMLElement).contains(rt)) return;
+    if (dragOverZone?.packType === packType) dragOverZone = null;
   }
 
   function handleDropOnAvailable(e: DragEvent, packType: 'bp' | 'rp') {
     e.preventDefault();
     const ds = dragSource;
-    if (!ds || ds.packType !== packType) return;
+    if (!ds || ds.packType !== packType) { handleDragEnd(); return; }
     const orderArr = packType === 'bp' ? orderBP : orderRP;
     const setOrderFn = packType === 'bp' ? (v: string[]) => orderBP = v : (v: string[]) => orderRP = v;
-    // Moving from current back to available → remove from order
     if (ds.list === 'current') {
       setOrderFn(orderArr.filter((u) => u !== ds.uuid));
       orderDirty = true;
-      log(`Removed ${ds.uuid} from ${packType === 'bp' ? 'BP' : 'RP'} order`);
+      log(`Removed ${ds.uuid.slice(0, 8)} from ${packType === 'bp' ? 'BP' : 'RP'} order`);
     }
-    dragSource = null;
+    handleDragEnd();
   }
 
   function handleDropOnCurrent(e: DragEvent, packType: 'bp' | 'rp', targetUuid?: string) {
     e.preventDefault();
     const ds = dragSource;
-    if (!ds || ds.packType !== packType) return;
+    if (!ds || ds.packType !== packType) { handleDragEnd(); return; }
     const orderArr = packType === 'bp' ? [...orderBP] : [...orderRP];
     const setOrderFn = packType === 'bp' ? (v: string[]) => orderBP = v : (v: string[]) => orderRP = v;
 
     if (ds.list === 'available') {
-      // Moving from available to current
       if (!orderArr.includes(ds.uuid)) {
         const idx = targetUuid ? orderArr.indexOf(targetUuid) : orderArr.length;
         if (idx >= 0) orderArr.splice(idx, 0, ds.uuid);
         else orderArr.push(ds.uuid);
         setOrderFn(orderArr);
         orderDirty = true;
-        log(`Added ${ds.uuid} to ${packType === 'bp' ? 'BP' : 'RP'} order`);
+        log(`Added ${ds.uuid.slice(0, 8)} to ${packType === 'bp' ? 'BP' : 'RP'} order`);
       }
     } else if (ds.list === 'current') {
-      // Reorder within current
       if (ds.uuid !== targetUuid) {
         const fromIdx = orderArr.indexOf(ds.uuid);
         if (fromIdx >= 0) orderArr.splice(fromIdx, 1);
@@ -225,10 +266,23 @@
         else orderArr.push(ds.uuid);
         setOrderFn(orderArr);
         orderDirty = true;
-        log(`Reordered ${ds.uuid} in ${packType === 'bp' ? 'BP' : 'RP'} order`);
+        log(`Reordered ${ds.uuid.slice(0, 8)} in ${packType === 'bp' ? 'BP' : 'RP'} order`);
       }
     }
-    dragSource = null;
+    handleDragEnd();
+  }
+
+  function showDropIndicatorBefore(packType: 'bp' | 'rp', zone: 'available' | 'current', uuid: string): boolean {
+    if (!isDragging || !dragOverZone) return false;
+    return dragOverZone.packType === packType && dragOverZone.zone === zone && dragOverZone.targetUuid === uuid;
+  }
+
+  function isDropZoneActive(packType: 'bp' | 'rp', zone: 'available' | 'current'): boolean {
+    return isDragging && dragSource?.packType === packType && dragOverZone?.zone === zone && dragOverZone?.packType === packType;
+  }
+
+  function isDraggingItem(list: 'available' | 'current', packType: 'bp' | 'rp', uuid: string): boolean {
+    return dragSource?.list === list && dragSource?.packType === packType && dragSource?.uuid === uuid;
   }
 
   // ─── save order ────────────────────────────────────────────────────────────
@@ -252,7 +306,7 @@
     else next.add(uuid);
     hiddenUuids = next;
     saveHidden();
-    log(`${next.has(uuid) ? 'Hidden' : 'Unhidden'} ${uuid}`);
+    log(`${next.has(uuid) ? 'Hidden' : 'Unhidden'} ${uuid.slice(0, 8)}`);
   }
 
   // ─── manifest preview ──────────────────────────────────────────────────────
@@ -289,11 +343,8 @@
       addToast('Manifest saved', 'success');
       log(`Manifest saved: ${manifestEditPath}`);
       manifestEditorOpen = false;
-      // Refresh to show updated data
       await loadAddons();
-      if (previewAddon && previewAddon.path === manifestEditPath) {
-        previewAddon = (await api.getManifest(manifestEditPath)) as any;
-      }
+      syncPreview(manifestEditPath);
     } catch (e: any) {
       addToast(`Save failed: ${e.message}`, 'error');
     }
@@ -320,12 +371,14 @@
     const manifest = versionEditAddon.manifest ? JSON.parse(JSON.stringify(versionEditAddon.manifest)) : {};
     if (!manifest.header) manifest.header = {};
     manifest.header.version = [versionMajor, versionMinor, versionPatch];
+    const targetPath = versionEditAddon.path;
     try {
-      await api.updateManifest(versionEditAddon.path, manifest);
-      addToast(`Version bumped to [${versionMajor}, ${versionMinor}, ${versionPatch}]`, 'success');
+      await api.updateManifest(targetPath, manifest);
+      addToast(`Version bumped to ${versionMajor}.${versionMinor}.${versionPatch}`, 'success');
       log(`Version bumped: ${versionEditAddon.name} → ${versionMajor}.${versionMinor}.${versionPatch}`);
       versionEditorOpen = false;
       await loadAddons();
+      syncPreview(targetPath);
     } catch (e: any) {
       addToast(`Failed: ${e.message}`, 'error');
     }
@@ -350,6 +403,7 @@
       log(`UUID ${uuidEditMode} for ${uuidEditPath}`);
       uuidEditorOpen = false;
       await loadAddons();
+      syncPreview(uuidEditPath);
     } catch (e: any) {
       addToast(`Failed: ${e.message}`, 'error');
     }
@@ -370,6 +424,7 @@
       log(`Renamed: ${renamePath} → ${renameValue}`);
       renameOpen = false;
       await loadAddons();
+      syncPreview(renamePath);
     } catch (e: any) {
       addToast(`Rename failed: ${e.message}`, 'error');
     }
@@ -480,337 +535,419 @@
   // ─── structured manifest HTML ─────────────────────────────────────────────
   function structuredHtml(a: Addon): string {
     const m = a.manifest as any;
-    if (!m || !m.header) return '<p class="text-red-400">Invalid manifest</p>';
+    if (!m || !m.header) return '<p class="text-red-400 text-xs">Invalid or missing manifest</p>';
     const h = m.header;
-    let html = `
-      <div class="space-y-2 text-xs">
-        <div class="flex justify-between"><span class="text-deep-400">Name</span><span class="text-white font-medium">${esc(h.name ?? '')}</span></div>
-        <div class="flex justify-between"><span class="text-deep-400">UUID</span><span class="text-green-400 font-mono">${esc(h.uuid ?? '')}</span></div>
-        <div class="flex justify-between"><span class="text-deep-400">Version</span><span class="text-blue-400 font-mono">${(h.version ?? []).join('.')}</span></div>
-        <div class="flex justify-between"><span class="text-deep-400">Format Version</span><span class="text-deep-200">${esc(m.format_version ?? '')}</span></div>
-        ${h.min_engine_version ? `<div class="flex justify-between"><span class="text-deep-400">Min Engine</span><span class="text-deep-200">${h.min_engine_version.join('.')}</span></div>` : ''}
-        ${h.description ? `<div class="bg-deep-800/60 rounded p-2 mt-1 text-deep-300 italic">${esc(h.description)}</div>` : ''}
-        ${m.modules?.length ? `<div class="mt-2"><span class="text-deep-400 block mb-1">Modules (${m.modules.length})</span>${m.modules.map((mod: any) => `<div class="flex justify-between text-deep-300 pl-2"><span>${esc(mod.type ?? '')}</span><span class="font-mono text-[10px]">${esc((mod.version ?? []).join('.'))}</span></div>`).join('')}</div>` : ''}
-        ${m.dependencies?.length ? `<div class="mt-2"><span class="text-deep-400 block mb-1">Dependencies (${m.dependencies.length})</span>${m.dependencies.map((dep: any) => `<div class="text-deep-300 pl-2 font-mono text-[10px]">${esc(dep.uuid ?? dep.module_name ?? '')} ${dep.version ? `v${dep.version.join('.')}` : ''}</div>`).join('')}</div>` : ''}
-        ${m.metadata ? `<div class="mt-2"><span class="text-deep-400 block mb-1">Metadata</span><div class="text-deep-300 pl-2">${m.metadata.authors ? `Authors: ${esc(m.metadata.authors.join(', '))}` : ''}${m.metadata.product_type ? `<br>Product: ${esc(m.metadata.product_type)}` : ''}</div></div>` : ''}
-        ${m.capabilities?.length ? `<div class="mt-1"><span class="text-deep-400">Capabilities:</span> <span class="text-deep-300">${m.capabilities.join(', ')}</span></div>` : ''}
-      </div>`;
+    const row = (label: string, value: string, valClass = 'text-deep-200') =>
+      `<div class="flex justify-between gap-2 py-1"><span class="text-deep-400 shrink-0">${label}</span><span class="${valClass} text-right break-all">${esc(value)}</span></div>`;
+    let html = `<div class="space-y-0.5 text-xs">`;
+    html += row('Name', h.name ?? '', 'text-white font-medium');
+    html += row('UUID', h.uuid ?? '', 'text-green-400 font-mono');
+    html += row('Version', (h.version ?? []).join('.'), 'text-blue-400 font-mono');
+    html += row('Format', m.format_version ?? '');
+    if (h.min_engine_version) html += row('Min Engine', h.min_engine_version.join('.'));
+    if (h.description) {
+      html += `<div class="bg-deep-800/60 rounded p-2 mt-2 text-deep-300 italic text-[11px]">${esc(h.description)}</div>`;
+    }
+    if (m.modules?.length) {
+      html += `<div class="mt-3"><span class="text-deep-400 block mb-1 uppercase tracking-wider text-[10px]">Modules (${m.modules.length})</span>`;
+      html += m.modules.map((mod: any) =>
+        `<div class="flex justify-between text-deep-300 py-0.5 gap-2"><span class="min-w-0 truncate">${esc(mod.type ?? '')}${mod.description ? ' — <span class="text-deep-500">' + esc(mod.description) + '</span>' : ''}</span><span class="font-mono text-[10px] text-deep-400 shrink-0">${esc((mod.version ?? []).join('.'))}</span></div>`
+      ).join('') + `</div>`;
+    }
+    if (m.dependencies?.length) {
+      html += `<div class="mt-3"><span class="text-deep-400 block mb-1 uppercase tracking-wider text-[10px]">Dependencies (${m.dependencies.length})</span>`;
+      html += m.dependencies.map((dep: any) =>
+        `<div class="text-deep-300 py-0.5 font-mono text-[10px]">${esc(dep.uuid ?? dep.module_name ?? '')} ${dep.version ? '<span class="text-deep-500">v' + esc(dep.version.join('.')) + '</span>' : ''}</div>`
+      ).join('') + `</div>`;
+    }
+    if (m.metadata) {
+      html += `<div class="mt-3"><span class="text-deep-400 block mb-1 uppercase tracking-wider text-[10px]">Metadata</span>`;
+      if (m.metadata.authors) html += `<div class="text-deep-300 text-[11px]">Authors: ${esc(m.metadata.authors.join(', '))}</div>`;
+      if (m.metadata.product_type) html += `<div class="text-deep-300 text-[11px]">Product: ${esc(m.metadata.product_type)}</div>`;
+      html += `</div>`;
+    }
+    if (m.capabilities?.length) {
+      html += `<div class="mt-2"><span class="text-deep-400 text-[10px] uppercase tracking-wider">Capabilities:</span> <span class="text-deep-300">${m.capabilities.map((c: string) => esc(c)).join(', ')}</span></div>`;
+    }
+    html += `</div>`;
     return html;
   }
-
-  function esc(s: string): string {
-    const d = document.createElement('div');
-    d.textContent = s;
-    return d.innerHTML;
-  }
-
-  // ─── version display helper ───────────────────────────────────────────────
-  function versionStr(v: number[] | undefined): string {
-    if (!v || v.length === 0) return '—';
-    return v.join('.');
-  }
-
 </script>
 
-<div class="space-y-4">
-  <!-- header -->
-  <div class="flex items-center justify-between">
-    <div>
-      <h1 class="text-lg font-bold text-white uppercase tracking-widest">Addon Organizer</h1>
-      <div class="pixel-divider mt-2 w-40"></div>
+<!-- main layout: shifts left when drawer is open -->
+<div class="transition-[padding] duration-200 {previewAddon ? 'lg:pr-96' : ''}">
+  <div class="space-y-4">
+    <!-- header -->
+    <div class="flex items-center justify-between">
+      <div>
+        <h1 class="text-lg font-bold text-white uppercase tracking-widest">Addon Organizer</h1>
+        <div class="pixel-divider mt-2 w-40"></div>
+      </div>
+      <div class="flex items-center gap-2">
+        {#if orderDirty && canManage}
+          <span class="text-yellow-400 text-xs uppercase tracking-wider animate-pulse">Unsaved</span>
+        {/if}
+        {#if canManage}
+          <button onclick={() => saveOrder()} disabled={!orderDirty || !selWorld}
+                  class="btn-primary text-xs py-1.5 px-3 flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed">
+            <Save size={13} /> Save Order
+          </button>
+        {/if}
+        <button onclick={exportOrder} disabled={!selWorld}
+                class="btn-ghost p-1.5 disabled:opacity-30" title="Export order"><FileDown size={14} /></button>
+        <button onclick={importOrder}
+                class="btn-ghost p-1.5" title="Import order"><FileUp size={14} /></button>
+        <button onclick={async () => { await loadAddons(); addToast('Reloaded', 'success'); }}
+                class="btn-ghost p-2" title="Reload"><RotateCw size={14} /></button>
+      </div>
     </div>
-    <div class="flex items-center gap-2">
-      {#if orderDirty && canManage}
-        <span class="text-yellow-400 text-xs uppercase tracking-wider">Unsaved changes</span>
-      {/if}
-      {#if canManage}
-        <button onclick={() => saveOrder()} disabled={!orderDirty || !selWorld}
-                class="btn-primary text-xs py-1.5 px-3 flex items-center gap-1.5 disabled:opacity-40">
-          <Save size={13} /> Save Order
+
+    <!-- world selector -->
+    <div class="flex items-center gap-3">
+      <label for="addon-world" class="text-deep-400 text-xs uppercase tracking-wider">World</label>
+      <select id="addon-world" bind:value={selWorld} onchange={onWorldChange} class="input w-48 text-xs py-1.5">
+        {#each worlds as w}<option value={w}>{w}</option>{/each}
+      </select>
+    </div>
+
+    <!-- tabs -->
+    <div class="flex gap-1 border-b border-deep-600/30 pb-px">
+      {#each [{id: 'bp' as const, label: 'Behavior Packs'}, {id: 'rp' as const, label: 'Resource Packs'}, {id: 'details' as const, label: 'Details'}, {id: 'logs' as const, label: 'Logs'}] as tab}
+        <button onclick={() => activeTab = tab.id}
+          class="text-xs px-4 py-2 uppercase tracking-wider font-semibold transition rounded-t
+                 {activeTab === tab.id
+                   ? 'bg-deep-800/60 text-white border-b-2 border-bedrock-500'
+                   : 'text-deep-400 hover:text-deep-200'}">
+          {tab.label}
         </button>
-      {/if}
-      <button onclick={exportOrder} disabled={!selWorld}
-              class="btn-ghost p-1.5" title="Export order"><FileDown size={14} /></button>
-      <button onclick={importOrder}
-              class="btn-ghost p-1.5" title="Import order"><FileUp size={14} /></button>
-      <button onclick={async () => { await loadAddons(); addToast('Reloaded', 'success'); }}
-              class="btn-ghost p-2"><RotateCw size={14} /></button>
+      {/each}
     </div>
-  </div>
 
-  <!-- world selector -->
-  <div class="flex items-center gap-3">
-    <label for="addon-world" class="text-deep-400 text-xs uppercase tracking-wider">World</label>
-    <select id="addon-world" bind:value={selWorld} onchange={onWorldChange} class="input w-48 text-xs py-1.5">
-      {#each worlds as w}<option value={w}>{w}</option>{/each}
-    </select>
-  </div>
+    <!-- ======================== BP / RP TABS ======================== -->
+    {#if activeTab === 'bp' || activeTab === 'rp'}
+      {@const packType = activeTab}
+      {@const order = packType === 'bp' ? orderBP : orderRP}
+      {@const setOrder = packType === 'bp' ? (v: string[]) => orderBP = v : (v: string[]) => orderRP = v}
+      {@const f = packType === 'bp' ? filteredBP : filteredRP}
+      {@const search = packType === 'bp' ? searchBP : searchRP}
+      {@const setSearch = packType === 'bp' ? (v: string) => searchBP = v : (v: string) => searchRP = v}
 
-  <!-- tabs -->
-  <div class="flex gap-1 border-b border-deep-600/30 pb-px">
-    {#each [{id: 'bp' as const, label: 'Behavior Packs'}, {id: 'rp' as const, label: 'Resource Packs'}, {id: 'details' as const, label: 'Details'}, {id: 'logs' as const, label: 'Logs'}] as tab}
-      <button onclick={() => activeTab = tab.id}
-        class="text-xs px-4 py-2 uppercase tracking-wider font-semibold transition rounded-t
-               {activeTab === tab.id
-                 ? 'bg-deep-800/60 text-white border-b-2 border-bedrock-500'
-                 : 'text-deep-400 hover:text-deep-200'}">
-        {tab.label}
-      </button>
-    {/each}
-  </div>
-
-  <!-- ======================== BP / RP TABS ======================== -->
-  {#if activeTab === 'bp' || activeTab === 'rp'}
-    {@const packType = activeTab}
-    {@const order = packType === 'bp' ? orderBP : orderRP}
-    {@const setOrder = packType === 'bp' ? (v: string[]) => orderBP = v : (v: string[]) => orderRP = v}
-    {@const f = packType === 'bp' ? filteredBP : filteredRP}
-
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-      <!-- Available -->
-      <div class="card">
-        <h2 class="card-header">Available</h2>
-        <div class="mb-2">
-          <div class="relative">
-            <Search size={12} class="absolute left-2 top-1/2 -translate-y-1/2 text-deep-500" />
-            {#if packType === 'bp'}
-              <input bind:value={searchBP} class="input w-full text-xs py-1.5 pl-7" placeholder="Filter by name or UUID..." />
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <!-- Available -->
+        <div class="card flex flex-col">
+          <div class="flex items-center justify-between mb-2">
+            <h2 class="card-header !mb-0">
+              Available
+              <span class="text-deep-500 font-normal ml-1">({f.available.length})</span>
+            </h2>
+          </div>
+          <div class="mb-2">
+            <div class="relative">
+              <Search size={12} class="absolute left-2.5 top-1/2 -translate-y-1/2 text-deep-500 pointer-events-none" />
+              <input value={search} oninput={(e) => setSearch((e.target as HTMLInputElement).value)}
+                     class="input w-full text-xs py-1.5 pl-7" placeholder="Filter by name or UUID..." />
+            </div>
+          </div>
+          <div role="region" aria-label="Available addons drop zone"
+               class="flex-1 space-y-1 max-h-[28rem] overflow-y-auto rounded min-h-[8rem] p-1 -m-1 transition-colors duration-150
+                      {isDropZoneActive(packType, 'available') ? 'bg-bedrock-500/10 ring-2 ring-bedrock-500/30 ring-inset' : ''}"
+               ondragover={(e) => handleDragOverZone(e, 'available', packType)}
+               ondragleave={(e) => handleDragLeaveZone(e, packType)}
+               ondrop={(e) => handleDropOnAvailable(e, packType)}>
+            {#each f.available as p (p.uuid)}
+              <div role="listitem" draggable="true"
+                   ondragstart={(e) => handleDragStart(e, 'available', packType, p.uuid)}
+                   ondragend={handleDragEnd}
+                   class="group flex items-center gap-1.5 p-1.5 border border-deep-600/20 hover:border-deep-500/40 hover:bg-deep-800/40 rounded transition-colors
+                          {!p.valid ? 'opacity-50' : ''}
+                          {isDraggingItem('available', packType, p.uuid) ? 'opacity-30' : ''}"
+                   title={!p.valid ? 'manifest.json missing or invalid' : p.name}>
+                <GripVertical size={11} class="text-deep-600 group-hover:text-deep-400 cursor-grab active:cursor-grabbing shrink-0 transition-colors" />
+                <Package size={14} class={packColorClass(packType) + ' shrink-0'} />
+                <button onclick={() => openPreview(p)} class="flex-1 min-w-0 text-left">
+                  <p class="text-xs font-medium truncate hover:text-white transition-colors">{p.name}</p>
+                  <p class="text-[10px] text-deep-500 font-mono truncate">
+                    {versionStr(p.version)}
+                    {#if hiddenUuids.has(p.uuid)}<span class="text-red-500 ml-1">[HIDDEN]</span>{/if}
+                    {#if !p.valid}<span class="text-red-500 ml-1">[INVALID]</span>{/if}
+                  </p>
+                </button>
+                {#if canManage && !order.includes(p.uuid)}
+                  <button onclick={() => { setOrder([...order, p.uuid]); orderDirty = true; log(`Added ${p.name}`); }}
+                          class="btn-ghost p-0.5 text-bedrock-400 hover:text-bedrock-300 opacity-0 group-hover:opacity-100 transition-opacity"
+                          title="Add to current order"><Plus size={13} /></button>
+                {/if}
+                <button onclick={() => openPreview(p)}
+                        class="btn-ghost p-0.5 opacity-0 group-hover:opacity-100 transition-opacity" title="Preview"><Eye size={12} /></button>
+              </div>
             {:else}
-              <input bind:value={searchRP} class="input w-full text-xs py-1.5 pl-7" placeholder="Filter by name or UUID..." />
+              <div class="flex items-center justify-center py-8 text-center">
+                <div>
+                  <Package size={20} class="text-deep-700 mx-auto mb-2" />
+                  <p class="text-deep-600 text-xs">{search ? 'No matches' : 'No addons available'}</p>
+                  {#if isDragging && dragSource?.list === 'current' && dragSource?.packType === packType}
+                    <p class="text-bedrock-500 text-[10px] mt-1 animate-pulse">↓ Drop here to remove from order</p>
+                  {/if}
+                </div>
+              </div>
+            {/each}
+          </div>
+        </div>
+
+        <!-- Current Order -->
+        <div class="card flex flex-col">
+          <div class="flex items-center justify-between mb-2">
+            <h2 class="card-header !mb-0">
+              Current Order
+              <span class="text-deep-500 font-normal ml-1">({f.current.length})</span>
+            </h2>
+            {#if canManage && orderDirty}
+              <span class="text-yellow-400/70 text-[10px] uppercase tracking-wider">Modified</span>
+            {/if}
+          </div>
+          <div role="region" aria-label="Current order drop zone"
+               class="flex-1 space-y-1 max-h-[28rem] overflow-y-auto rounded min-h-[8rem] p-1 -m-1 transition-colors duration-150
+                      {isDropZoneActive(packType, 'current') ? 'bg-bedrock-500/10 ring-2 ring-bedrock-500/30 ring-inset' : ''}"
+               ondragover={(e) => handleDragOverZone(e, 'current', packType)}
+               ondragleave={(e) => handleDragLeaveZone(e, packType)}
+               ondrop={(e) => handleDropOnCurrent(e, packType)}>
+            {#each f.current as p, i (p.uuid)}
+              <!-- drop indicator before this item -->
+              {#if showDropIndicatorBefore(packType, 'current', p.uuid)}
+                <div class="h-0.5 bg-bedrock-500 rounded-full mx-1 shadow-[0_0_8px_rgba(6,182,212,0.5)]"></div>
+              {/if}
+              <div role="listitem" draggable="true"
+                   ondragstart={(e) => handleDragStart(e, 'current', packType, p.uuid)}
+                   ondragend={handleDragEnd}
+                   ondragover={(e) => { e.preventDefault(); if (dragSource) dragOverZone = { zone: 'current', packType, targetUuid: p.uuid }; }}
+                   class="group flex items-center gap-1.5 p-1.5 border border-deep-600/30 hover:border-bedrock-500/40 hover:bg-deep-800/40 rounded transition-colors
+                          {!p.valid ? 'opacity-50' : ''}
+                          {isDraggingItem('current', packType, p.uuid) ? 'opacity-30 border-dashed' : ''}"
+                   title={!p.valid ? 'manifest.json missing or invalid' : p.name}>
+                <GripVertical size={11} class="text-deep-600 group-hover:text-deep-400 cursor-grab active:cursor-grabbing shrink-0 transition-colors" />
+                <span class="text-deep-500 text-[10px] font-mono w-4 text-right shrink-0 tabular-nums">{i + 1}</span>
+                <Package size={14} class={packColorClass(packType) + ' shrink-0'} />
+                <button onclick={() => openPreview(p)} class="flex-1 min-w-0 text-left">
+                  <p class="text-xs font-medium truncate hover:text-white transition-colors">{p.name}</p>
+                  <p class="text-[10px] text-deep-500 font-mono truncate">{versionStr(p.version)}</p>
+                </button>
+                {#if canManage}
+                  <div class="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                    <button onclick={() => { const o = [...order]; if (i > 0) { [o[i-1], o[i]] = [o[i], o[i-1]]; setOrder(o); orderDirty = true; } }}
+                            disabled={i === 0}
+                            class="btn-ghost p-0.5 disabled:opacity-20 disabled:cursor-not-allowed" title="Move up"><ChevronUp size={11} /></button>
+                    <button onclick={() => { const o = [...order]; if (i < o.length - 1) { [o[i], o[i+1]] = [o[i+1], o[i]]; setOrder(o); orderDirty = true; } }}
+                            disabled={i === f.current.length - 1}
+                            class="btn-ghost p-0.5 disabled:opacity-20 disabled:cursor-not-allowed" title="Move down"><ChevronDown size={11} /></button>
+                    <button onclick={() => { setOrder(order.filter((u) => u !== p.uuid)); orderDirty = true; log(`Removed ${p.name}`); }}
+                            class="btn-ghost p-0.5 text-red-400 hover:text-red-300" title="Remove from order"><X size={11} /></button>
+                  </div>
+                {/if}
+              </div>
+            {:else}
+              <div class="flex items-center justify-center py-8 text-center border-2 border-dashed border-deep-700/40 rounded">
+                <div>
+                  <Package size={20} class="text-deep-700 mx-auto mb-2" />
+                  <p class="text-deep-600 text-xs">{search ? 'No matches' : 'No addons in order'}</p>
+                  {#if isDragging && dragSource?.list === 'available' && dragSource?.packType === packType}
+                    <p class="text-bedrock-500 text-[10px] mt-1 animate-pulse">↓ Drop here to add to order</p>
+                  {/if}
+                </div>
+              </div>
+            {/each}
+            <!-- drop indicator at end -->
+            {#if f.current.length > 0 && dragOverZone?.zone === 'current' && dragOverZone?.packType === packType && !dragOverZone?.targetUuid}
+              <div class="h-0.5 bg-bedrock-500 rounded-full mx-1 shadow-[0_0_8px_rgba(6,182,212,0.5)]"></div>
             {/if}
           </div>
         </div>
-        <div class="space-y-1 max-h-80 overflow-y-auto"
-             ondragover={handleDragOver}
-             ondrop={(e) => handleDropOnAvailable(e, packType)}>
-          {#each f.available as p}
-            <div draggable="true"
-                 ondragstart={(e) => handleDragStart(e, 'available', packType, p.uuid)}
-                 class="flex items-center justify-between p-2 border border-deep-600/20 hover:bg-deep-800/30 rounded cursor-grab active:cursor-grabbing"
-                 class:opacity-50={!p.valid}
-                 title={!p.valid ? 'manifest.json missing or invalid' : p.name}>
-              <div class="flex items-center gap-2 min-w-0 flex-1" onclick={() => openPreview(p)}>
-                <Package size={14} class="text-{packType === 'bp' ? 'bedrock' : 'teal'}-400 shrink-0" />
-                <div class="min-w-0">
-                  <p class="text-xs font-medium truncate">{p.name}</p>
-                  <p class="text-[10px] text-deep-500 font-mono truncate">
-                    {versionStr(p.version)}
-                    {#if hiddenUuids.has(p.uuid)}<span class="text-red-500"> [HIDDEN]</span>{/if}
-                  </p>
-                </div>
-              </div>
-              <div class="flex items-center gap-1 shrink-0">
-                <button onclick={() => openPreview(p)} class="btn-ghost p-0.5" title="Preview"><Eye size={11} /></button>
-                {#if canManage}
-                  {#if order.includes(p.uuid)}
-                    <span class="text-[10px] text-deep-500">in use</span>
-                  {:else}
-                    <button onclick={() => { const o = [...order, p.uuid]; setOrder(o); orderDirty = true; log(`Added ${p.name}`); }}
-                            class="btn-ghost p-0.5 text-bedrock-400" title="Add to current order"><ChevronDown size={11} /></button>
-                  {/if}
-                {/if}
-              </div>
-            </div>
-          {:else}
-            <p class="text-deep-500 text-xs py-4 text-center">No addons available</p>
-          {/each}
-        </div>
       </div>
 
-      <!-- Current Order -->
+    <!-- ======================== DETAILS TAB ======================== -->
+    {:else if activeTab === 'details'}
       <div class="card">
-        <h2 class="card-header">Current Order</h2>
-        <div class="space-y-1 max-h-80 overflow-y-auto relative"
-             ondragover={handleDragOver}
-             ondrop={(e) => handleDropOnCurrent(e, packType)}>
-          {#each f.current as p, i}
-            <div draggable="true"
-                 ondragstart={(e) => handleDragStart(e, 'current', packType, p.uuid)}
-                 class="flex items-center justify-between p-2 border border-deep-600/20 hover:bg-deep-800/30 rounded cursor-grab active:cursor-grabbing"
-                 class:opacity-50={!p.valid}
-                 title={!p.valid ? 'manifest.json missing or invalid' : p.name}>
-              <div class="flex items-center gap-2 min-w-0 flex-1" onclick={() => openPreview(p)}>
-                <span class="text-deep-500 text-xs font-mono w-5 text-right shrink-0">{i + 1}.</span>
-                <Package size={14} class="text-{packType === 'bp' ? 'bedrock' : 'teal'}-400 shrink-0" />
-                <div class="min-w-0">
-                  <p class="text-xs font-medium truncate">{p.name}</p>
-                  <p class="text-[10px] text-deep-500 font-mono truncate">{versionStr(p.version)}</p>
-                </div>
-              </div>
-              <div class="flex items-center gap-1 shrink-0">
-                {#if canManage && i > 0}
-                  <button onclick={() => { const o = [...order]; [o[i-1], o[i]] = [o[i], o[i-1]]; setOrder(o); orderDirty = true; }}
-                          class="btn-ghost p-0.5" title="Move up"><ChevronUp size={11} /></button>
-                {/if}
-                {#if canManage && i < f.current.length - 1}
-                  <button onclick={() => { const o = [...order]; [o[i], o[i+1]] = [o[i+1], o[i]]; setOrder(o); orderDirty = true; }}
-                          class="btn-ghost p-0.5" title="Move down"><ChevronDown size={11} /></button>
-                {/if}
-                {#if canManage}
-                  <button onclick={() => { setOrder(order.filter((u) => u !== p.uuid)); orderDirty = true; log(`Removed ${p.name}`); }}
-                          class="btn-ghost p-0.5 text-red-400" title="Remove from order"><X size={11} /></button>
-                {/if}
-              </div>
+        <div class="flex flex-wrap items-center gap-3 mb-3">
+          <div class="relative">
+            <Search size={12} class="absolute left-2.5 top-1/2 -translate-y-1/2 text-deep-500 pointer-events-none" />
+            <input bind:value={searchDetails} class="input text-xs py-1.5 pl-7 w-40" placeholder="Search..." />
+          </div>
+          <select bind:value={detailsPackFilter} class="input text-xs py-1.5 w-28">
+            <option value="all">All Types</option>
+            <option value="bp">Behavior Packs</option>
+            <option value="rp">Resource Packs</option>
+          </select>
+          <select bind:value={detailsStateFilter} class="input text-xs py-1.5 w-28">
+            <option value="all">All States</option>
+            <option value="active">Active</option>
+            <option value="hidden">Hidden</option>
+          </select>
+          <button onclick={selectAllDetails} class="btn-ghost text-xs px-2 py-1 rounded border border-deep-600/30">Select All</button>
+          <button onclick={clearDetailsSelection} class="btn-ghost text-xs px-2 py-1 rounded border border-deep-600/30">Clear</button>
+          <span class="text-deep-500 text-xs">{detailsSelected.size} / {detailsAddons.length}</span>
+          {#if canManage && detailsSelected.size > 0}
+            <div class="flex items-center gap-1 ml-auto">
+              <button onclick={() => bulkBumpVersion('major')} class="btn-ghost text-xs px-2 py-1 rounded border border-deep-600/30">Bump Major</button>
+              <button onclick={() => bulkBumpVersion('minor')} class="btn-ghost text-xs px-2 py-1 rounded border border-deep-600/30">Bump Minor</button>
+              <button onclick={() => bulkBumpVersion('patch')} class="btn-ghost text-xs px-2 py-1 rounded border border-deep-600/30">Bump Patch</button>
+              <button onclick={() => bulkToggleHide()} class="btn-ghost text-xs px-2 py-1 rounded border border-deep-600/30">Toggle Hide</button>
             </div>
+          {/if}
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-xs">
+            <thead><tr class="text-deep-400 border-b border-deep-600/30 uppercase tracking-wider">
+              <th class="py-2 px-2 w-6"></th>
+              <th class="text-left py-2 px-3 font-medium">Type</th>
+              <th class="text-left py-2 px-3 font-medium">Name</th>
+              <th class="text-left py-2 px-3 font-medium">UUID</th>
+              <th class="text-right py-2 px-3 font-medium">Version</th>
+              <th class="text-center py-2 px-3 font-medium">Status</th>
+              <th class="text-right py-2 px-3 font-medium"></th>
+            </tr></thead>
+            <tbody>
+              {#each detailsAddons as a (a.uuid)}
+                <tr class="border-b border-deep-700/20 hover:bg-deep-800/30 {!a.valid ? 'opacity-50' : ''}">
+                  <td class="py-1.5 px-2">
+                    <input type="checkbox" checked={detailsSelected.has(a.uuid)}
+                           onchange={() => toggleDetailsSelect(a.uuid)} class="accent-bedrock-500" />
+                  </td>
+                  <td class="py-1.5 px-3">
+                    <span class={packColorClass(a.pack_type === 'behavior_packs' ? 'bp' : 'rp') + ' text-[10px] uppercase font-bold'}>
+                      {a.pack_type === 'behavior_packs' ? 'BP' : 'RP'}
+                    </span>
+                  </td>
+                  <td class="py-1.5 px-3 font-medium">
+                    <button onclick={() => openPreview(a)} class="hover:text-bedrock-300 transition-colors text-left">
+                      {a.name}
+                      {#if !a.valid}<span class="text-red-500 text-[10px] ml-1">(invalid)</span>{/if}
+                    </button>
+                  </td>
+                  <td class="py-1.5 px-3 font-mono text-[10px] text-deep-400">{a.uuid.slice(0, 8)}...</td>
+                  <td class="py-1.5 px-3 text-right font-mono">{versionStr(a.version)}</td>
+                  <td class="py-1.5 px-3 text-center">
+                    {#if hiddenUuids.has(a.uuid)}
+                      <span class="text-red-400 text-[10px]">HIDDEN</span>
+                    {:else}
+                      <span class="text-green-400 text-[10px]">ACTIVE</span>
+                    {/if}
+                  </td>
+                  <td class="py-1.5 px-3 text-right">
+                    <div class="flex items-center gap-1 justify-end">
+                      <button onclick={() => openPreview(a)} class="btn-ghost p-0.5" title="Preview"><Eye size={11} /></button>
+                      {#if canManage}
+                        <button onclick={() => openManifestEditor(a)} class="btn-ghost p-0.5" title="Edit manifest"><Edit size={11} /></button>
+                        <button onclick={() => openVersionEditor(a)} class="btn-ghost p-0.5" title="Version"><Hash size={11} /></button>
+                        <button onclick={() => openUuidEditor(a, 'randomize')} class="btn-ghost p-0.5" title="Randomize UUID"><Shuffle size={11} /></button>
+                        <button onclick={() => toggleHidden(a.uuid)} class="btn-ghost p-0.5" title="Toggle hide"><Trash2 size={11} /></button>
+                      {/if}
+                    </div>
+                  </td>
+                </tr>
+              {:else}
+                <tr><td colspan="7" class="text-center py-8 text-deep-500">No addons match the current filter</td></tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    <!-- ======================== LOGS TAB ======================== -->
+    {:else if activeTab === 'logs'}
+      <div class="card">
+        <div class="flex items-center justify-between mb-2">
+          <h2 class="card-header !mb-0">Action Log</h2>
+          <button onclick={() => actionLog = []} class="btn-ghost text-xs px-2 py-1 rounded border border-deep-600/30">Clear</button>
+        </div>
+        <div class="h-80 overflow-y-auto bg-deep-900/60 border border-deep-600/30 rounded p-3 font-mono text-xs space-y-1">
+          {#each actionLog as entry}
+            <div class="text-deep-300">{entry}</div>
           {:else}
-            <p class="text-deep-500 text-xs py-4 text-center">No addons in current order</p>
-            <div class="absolute inset-0 border-2 border-dashed border-deep-600/30 rounded pointer-events-none flex items-center justify-center">
-              <span class="text-deep-600 text-xs">Drop addons here</span>
-            </div>
+            <p class="text-deep-500 text-center py-8">No actions logged yet</p>
           {/each}
         </div>
       </div>
+    {/if}
+  </div>
+</div>
+
+<!-- ======================== MANIFEST PREVIEW DRAWER ======================== -->
+{#if previewAddon}
+  {@const a = previewAddon}
+  <!-- backdrop on mobile -->
+  <button type="button" class="fixed inset-0 z-40 bg-black/40 lg:hidden cursor-pointer" onclick={closePreview} aria-label="Close preview"></button>
+  <!-- drawer -->
+  <aside class="fixed top-0 right-0 z-50 h-full w-full max-w-md bg-deep-900 border-l-2 border-deep-600/50 shadow-2xl flex flex-col animate-slide-in">
+    <!-- drawer header -->
+    <div class="flex items-center justify-between p-4 border-b border-deep-700/50 shrink-0">
+      <div class="min-w-0">
+        <h2 class="text-sm font-bold text-white truncate">{a.name}</h2>
+        <p class="text-[10px] text-deep-500 font-mono uppercase tracking-wider">
+          {a.pack_type === 'behavior_packs' ? 'Behavior Pack' : 'Resource Pack'} · v{versionStr(a.version)}
+        </p>
+      </div>
+      <button onclick={closePreview} class="btn-ghost p-1.5 shrink-0" title="Close"><X size={16} /></button>
     </div>
 
-  <!-- ======================== DETAILS TAB ======================== -->
-  {:else if activeTab === 'details'}
-    <div class="card">
-      <div class="flex flex-wrap items-center gap-3 mb-3">
-        <div class="relative">
-          <Search size={12} class="absolute left-2 top-1/2 -translate-y-1/2 text-deep-500" />
-          <input bind:value={searchDetails} class="input text-xs py-1.5 pl-7 w-40" placeholder="Search..." />
-        </div>
-        <select bind:value={detailsPackFilter} class="input text-xs py-1.5 w-28">
-          <option value="all">All Types</option>
-          <option value="bp">Behavior Packs</option>
-          <option value="rp">Resource Packs</option>
-        </select>
-        <select bind:value={detailsStateFilter} class="input text-xs py-1.5 w-28">
-          <option value="all">All States</option>
-          <option value="active">Active</option>
-          <option value="hidden">Hidden</option>
-        </select>
-        <button onclick={selectAllDetails} class="btn-ghost text-xs px-2 py-1 rounded border border-deep-600/30">Select All</button>
-        <button onclick={clearDetailsSelection} class="btn-ghost text-xs px-2 py-1 rounded border border-deep-600/30">Clear</button>
-        <span class="text-deep-500 text-xs">{detailsSelected.size} / {detailsAddons.length} selected</span>
-        {#if canManage && detailsSelected.size > 0}
-          <div class="flex items-center gap-1 ml-auto">
-            <button onclick={() => bulkBumpVersion('major')} class="btn-ghost text-xs px-2 py-1 rounded border border-deep-600/30">Bump Major</button>
-            <button onclick={() => bulkBumpVersion('minor')} class="btn-ghost text-xs px-2 py-1 rounded border border-deep-600/30">Bump Minor</button>
-            <button onclick={() => bulkBumpVersion('patch')} class="btn-ghost text-xs px-2 py-1 rounded border border-deep-600/30">Bump Patch</button>
-            <button onclick={() => bulkToggleHide()} class="btn-ghost text-xs px-2 py-1 rounded border border-deep-600/30">Toggle Hide</button>
-          </div>
-        {/if}
-      </div>
-
-      <div class="overflow-x-auto">
-        <table class="w-full text-xs">
-          <thead><tr class="text-deep-400 border-b border-deep-600/30 uppercase tracking-wider">
-            <th class="py-2 px-2 w-6"></th>
-            <th class="text-left py-2 px-3 font-medium">Type</th>
-            <th class="text-left py-2 px-3 font-medium">Name</th>
-            <th class="text-left py-2 px-3 font-medium">UUID</th>
-            <th class="text-right py-2 px-3 font-medium">Version</th>
-            <th class="text-center py-2 px-3 font-medium">Status</th>
-            <th class="text-right py-2 px-3 font-medium"></th>
-          </tr></thead>
-          <tbody>
-            {#each detailsAddons as a}
-              <tr class="border-b border-deep-700/20 hover:bg-deep-800/30 {!a.valid ? 'opacity-50' : ''}">
-                <td class="py-1.5 px-2">
-                  <input type="checkbox" checked={detailsSelected.has(a.uuid)}
-                         onchange={() => toggleDetailsSelect(a.uuid)} class="accent-bedrock-500" />
-                </td>
-                <td class="py-1.5 px-3">
-                  <span class="text-{a.pack_type === 'behavior_packs' ? 'bedrock' : 'teal'}-400 text-[10px] uppercase">{a.pack_type === 'behavior_packs' ? 'BP' : 'RP'}</span>
-                </td>
-                <td class="py-1.5 px-3 font-medium cursor-pointer" onclick={() => openPreview(a)}>
-                  <span class="hover:text-bedrock-300 transition-colors">{a.name}</span>
-                  {#if !a.valid}<span class="text-red-500 text-[10px] ml-1">(invalid)</span>{/if}
-                </td>
-                <td class="py-1.5 px-3 font-mono text-[10px] text-deep-400">{a.uuid.slice(0, 8)}...</td>
-                <td class="py-1.5 px-3 text-right font-mono">{versionStr(a.version)}</td>
-                <td class="py-1.5 px-3 text-center">
-                  {#if hiddenUuids.has(a.uuid)}
-                    <span class="text-red-400 text-[10px]">HIDDEN</span>
-                  {:else}
-                    <span class="text-green-400 text-[10px]">ACTIVE</span>
-                  {/if}
-                </td>
-                <td class="py-1.5 px-3 text-right">
-                  <div class="flex items-center gap-1 justify-end">
-                    <button onclick={() => openPreview(a)} class="btn-ghost p-0.5" title="Preview"><Eye size={11} /></button>
-                    {#if canManage}
-                      <button onclick={() => openManifestEditor(a)} class="btn-ghost p-0.5" title="Edit manifest"><Edit size={11} /></button>
-                      <button onclick={() => openVersionEditor(a)} class="btn-ghost p-0.5" title="Version"><Hash size={11} /></button>
-                      <button onclick={() => openUuidEditor(a, 'randomize')} class="btn-ghost p-0.5" title="Randomize UUID"><Shuffle size={11} /></button>
-                      <button onclick={() => toggleHidden(a.uuid)} class="btn-ghost p-0.5" title="Toggle hide"><Trash2 size={11} /></button>
-                    {/if}
-                  </div>
-                </td>
-              </tr>
-            {:else}
-              <tr><td colspan="7" class="text-center py-8 text-deep-500">No addons match the current filter</td></tr>
-            {/each}
-          </tbody>
-        </table>
-      </div>
+    <!-- drawer toolbar -->
+    <div class="flex items-center gap-2 p-3 border-b border-deep-700/30 shrink-0">
+      <select bind:value={manifestViewMode} class="input text-xs py-1 w-28 shrink-0">
+        <option value="structured">Structured</option>
+        <option value="raw">Raw JSON</option>
+      </select>
+      <label class="flex items-center gap-1 text-xs text-deep-400 cursor-pointer select-none shrink-0">
+        <input type="checkbox" bind:checked={manifestWrap} class="accent-bedrock-500" />
+        Wrap
+      </label>
+      <div class="flex-1"></div>
+      {#if canManage}
+        <button onclick={() => openManifestEditor(a)} class="btn-ghost text-xs px-2 py-1 rounded border border-deep-600/30 flex items-center gap-1" title="Edit manifest">
+          <Edit size={12} /> Edit
+        </button>
+        <button onclick={() => openVersionEditor(a)} class="btn-ghost text-xs px-2 py-1 rounded border border-deep-600/30 flex items-center gap-1" title="Edit version">
+          <Hash size={12} /> Ver
+        </button>
+        <button onclick={() => openRename(a)} class="btn-ghost text-xs px-2 py-1 rounded border border-deep-600/30 flex items-center gap-1" title="Rename">
+          <FolderOpen size={12} /> Rename
+        </button>
+      {/if}
     </div>
 
-  <!-- ======================== LOGS TAB ======================== -->
-  {:else if activeTab === 'logs'}
-    <div class="card">
-      <div class="flex items-center justify-between mb-2">
-        <h2 class="card-header !mb-0">Action Log</h2>
-        <button onclick={() => actionLog = []} class="btn-ghost text-xs px-2 py-1 rounded border border-deep-600/30">Clear</button>
-      </div>
-      <div class="h-80 overflow-y-auto bg-deep-900/60 border border-deep-600/30 rounded p-3 font-mono text-xs space-y-1">
-        {#each actionLog as entry}
-          <div class="text-deep-300">{entry}</div>
-        {:else}
-          <p class="text-deep-500 text-center py-8">No actions logged yet</p>
-        {/each}
-      </div>
-    </div>
-  {/if}
-
-  <!-- ======================== MANIFEST PREVIEW PANEL ======================== -->
-  {#if previewAddon}
-    {@const a = previewAddon}
-    <div class="card">
-      <div class="flex items-center justify-between mb-3">
-        <h2 class="card-header !mb-0">{a.name}</h2>
-        <div class="flex items-center gap-2">
-          <select bind:value={manifestViewMode} class="input text-xs py-1 w-28">
-            <option value="structured">Structured</option>
-            <option value="raw">Raw JSON</option>
-          </select>
-          <label class="flex items-center gap-1 text-xs text-deep-400 cursor-pointer select-none">
-            <input type="checkbox" bind:checked={manifestWrap} class="accent-bedrock-500" />
-            Wrap
-          </label>
-          {#if canManage}
-            <button onclick={() => openManifestEditor(a)} class="btn-ghost text-xs px-2 py-1 rounded border border-deep-600/30 flex items-center gap-1">
-              <Edit size={12} /> Edit
-            </button>
-            <button onclick={() => openVersionEditor(a)} class="btn-ghost text-xs px-2 py-1 rounded border border-deep-600/30 flex items-center gap-1">
-              <Hash size={12} /> Version
-            </button>
-            <button onclick={() => openRename(a)} class="btn-ghost text-xs px-2 py-1 rounded border border-deep-600/30 flex items-center gap-1">
-              <FolderOpen size={12} /> Rename
-            </button>
-          {/if}
-          <button onclick={closePreview} class="btn-secondary text-xs">Close</button>
-        </div>
-      </div>
+    <!-- drawer body -->
+    <div class="flex-1 overflow-y-auto p-4">
       {#if manifestViewMode === 'structured'}
-        <div class="bg-deep-950 p-4 rounded border border-deep-600/30 max-h-80 overflow-y-auto">
+        <div class="bg-deep-950/50 rounded border border-deep-600/30 p-3">
           {@html structuredHtml(a)}
         </div>
       {:else}
-        <pre class="text-xs font-mono bg-deep-950 p-4 overflow-auto max-h-80 border border-deep-600/30"
-             class:whitespace-pre-wrap={manifestWrap}
-             class:whitespace-pre={!manifestWrap}>{JSON.stringify(a.manifest ?? {}, null, 2)}</pre>
+        <pre class="text-xs font-mono bg-deep-950/50 p-3 border border-deep-600/30 rounded
+                   {manifestWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre overflow-x-auto'}">{JSON.stringify(a.manifest ?? {}, null, 2)}</pre>
       {/if}
     </div>
-  {/if}
-</div>
+
+    <!-- drawer footer with quick actions -->
+    {#if canManage}
+      <div class="p-3 border-t border-deep-700/50 shrink-0 flex flex-wrap gap-1.5">
+        <button onclick={() => openUuidEditor(a, 'change')} class="btn-ghost text-xs px-2 py-1 rounded border border-deep-600/30 flex items-center gap-1">
+          <Edit size={11} /> Change UUID
+        </button>
+        <button onclick={() => openUuidEditor(a, 'randomize')} class="btn-ghost text-xs px-2 py-1 rounded border border-deep-600/30 flex items-center gap-1">
+          <Shuffle size={11} /> Randomize
+        </button>
+        <button onclick={() => toggleHidden(a.uuid)} class="btn-ghost text-xs px-2 py-1 rounded border border-deep-600/30 flex items-center gap-1"
+                title="Toggle hidden state">
+          <Trash2 size={11} /> {hiddenUuids.has(a.uuid) ? 'Unhide' : 'Hide'}
+        </button>
+      </div>
+    {/if}
+  </aside>
+{/if}
 
 <!-- ======================== MODALS ======================== -->
 
 <!-- Manifest Editor Modal -->
 {#if manifestEditorOpen}
-  <div class="fixed inset-0 z-50 flex items-center justify-center p-4 modal-bg"
+  <div class="fixed inset-0 z-[60] flex items-center justify-center p-4 modal-bg"
        style="background: rgba(3,8,16,0.85); backdrop-filter: blur(4px);"
        onclick={(e) => { if ((e.target as HTMLElement).classList.contains('modal-bg')) manifestEditorOpen = false; }}
        onkeydown={(e) => e.key === 'Escape' && (manifestEditorOpen = false)}
@@ -835,16 +972,16 @@
 
 <!-- Version Editor Modal -->
 {#if versionEditorOpen && versionEditAddon}
-  <div class="fixed inset-0 z-50 flex items-center justify-center p-4 modal-bg"
+  <div class="fixed inset-0 z-[60] flex items-center justify-center p-4 modal-bg"
        style="background: rgba(3,8,16,0.85); backdrop-filter: blur(4px);"
        onclick={(e) => { if ((e.target as HTMLElement).classList.contains('modal-bg')) versionEditorOpen = false; }}
        onkeydown={(e) => e.key === 'Escape' && (versionEditorOpen = false)}
        role="dialog" aria-modal="true" tabindex="-1">
     <div class="bg-deep-900 border-2 border-deep-600/50 p-4 w-full max-w-md shadow-block-lg shadow-black/50">
       <h2 class="text-sm font-bold text-white uppercase tracking-widest mb-1">Version Editor</h2>
-      <p class="text-xs text-deep-400 mb-4">{versionEditAddon.name}</p>
+      <p class="text-xs text-deep-400 mb-4 truncate">{versionEditAddon.name}</p>
 
-      <div class="flex items-center gap-2 mb-3">
+      <div class="flex items-center gap-2 mb-4">
         <span class="text-deep-400 text-xs">Quick:</span>
         <button onclick={() => bumpVersion('major')} class="btn-ghost text-xs px-2 py-1 rounded border border-deep-600/30">Bump Major</button>
         <button onclick={() => bumpVersion('minor')} class="btn-ghost text-xs px-2 py-1 rounded border border-deep-600/30">Bump Minor</button>
@@ -854,19 +991,19 @@
       <div class="grid grid-cols-3 gap-3 mb-4">
         <div>
           <label for="version-major" class="block text-deep-400 text-xs uppercase tracking-wider mb-1">Major</label>
-          <input id="version-major" type="number" min="0" max="9999" bind:value={versionMajor} class="input w-full text-xs py-1.5" />
+          <input id="version-major" type="number" min="0" max="9999" bind:value={versionMajor} class="input w-full text-xs py-1.5 text-center" />
         </div>
         <div>
           <label for="version-minor" class="block text-deep-400 text-xs uppercase tracking-wider mb-1">Minor</label>
-          <input id="version-minor" type="number" min="0" max="9999" bind:value={versionMinor} class="input w-full text-xs py-1.5" />
+          <input id="version-minor" type="number" min="0" max="9999" bind:value={versionMinor} class="input w-full text-xs py-1.5 text-center" />
         </div>
         <div>
           <label for="version-patch" class="block text-deep-400 text-xs uppercase tracking-wider mb-1">Patch</label>
-          <input id="version-patch" type="number" min="0" max="9999" bind:value={versionPatch} class="input w-full text-xs py-1.5" />
+          <input id="version-patch" type="number" min="0" max="9999" bind:value={versionPatch} class="input w-full text-xs py-1.5 text-center" />
         </div>
       </div>
 
-      <p class="text-center text-sm font-mono text-bedrock-400 mb-4">{versionMajor}.{versionMinor}.{versionPatch}</p>
+      <p class="text-center text-base font-mono text-bedrock-400 mb-4">{versionMajor}.{versionMinor}.{versionPatch}</p>
 
       <div class="flex justify-end gap-2">
         <button onclick={() => versionEditorOpen = false} class="btn-secondary text-xs">Cancel</button>
@@ -878,7 +1015,7 @@
 
 <!-- UUID Editor Modal -->
 {#if uuidEditorOpen}
-  <div class="fixed inset-0 z-50 flex items-center justify-center p-4 modal-bg"
+  <div class="fixed inset-0 z-[60] flex items-center justify-center p-4 modal-bg"
        style="background: rgba(3,8,16,0.85); backdrop-filter: blur(4px);"
        onclick={(e) => { if ((e.target as HTMLElement).classList.contains('modal-bg')) uuidEditorOpen = false; }}
        onkeydown={(e) => e.key === 'Escape' && (uuidEditorOpen = false)}
@@ -903,7 +1040,7 @@
 
 <!-- Rename Modal -->
 {#if renameOpen}
-  <div class="fixed inset-0 z-50 flex items-center justify-center p-4 modal-bg"
+  <div class="fixed inset-0 z-[60] flex items-center justify-center p-4 modal-bg"
        style="background: rgba(3,8,16,0.85); backdrop-filter: blur(4px);"
        onclick={(e) => { if ((e.target as HTMLElement).classList.contains('modal-bg')) renameOpen = false; }}
        onkeydown={(e) => e.key === 'Escape' && (renameOpen = false)}
@@ -919,3 +1056,13 @@
     </div>
   </div>
 {/if}
+
+<style>
+  @keyframes slide-in {
+    from { transform: translateX(100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+  }
+  .animate-slide-in {
+    animation: slide-in 0.2s ease-out;
+  }
+</style>
