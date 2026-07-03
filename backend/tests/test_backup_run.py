@@ -35,9 +35,12 @@ def test_pre_zip_post_order(svc, monkeypatch):
         backup_path.write_bytes(b"zip")
 
     monkeypatch.setattr(svc, "_create_zip", fake_zip)
+
+    async def mock_send(cmd: str, notify=None) -> None:
+        called.append(f"send:{cmd}")
+
     monkeypatch.setattr(
-        "backend.app.services.backup_service._send_to_server",
-        lambda cmd: called.append(f"send:{cmd}") or None,
+        "backend.app.services.backup_service._send_to_server", mock_send
     )
     events, notify = _collect()
     pre_post = {
@@ -65,7 +68,11 @@ def test_wait_sleeps_and_comment_skipped(svc, monkeypatch):
 
     monkeypatch.setattr("backend.app.services.backup_service.asyncio.sleep", fake_sleep)
     monkeypatch.setattr(svc, "_create_zip", fake_zip)
-    monkeypatch.setattr("backend.app.services.backup_service._send_to_server", lambda cmd: None)
+
+    async def mock_send(cmd: str, notify=None) -> None:
+        pass
+
+    monkeypatch.setattr("backend.app.services.backup_service._send_to_server", mock_send)
     events, notify = _collect()
     pre_post = {
         "before": [{"type": "wait", "value": 5}, {"type": "comment", "value": "hi"}],
@@ -90,8 +97,12 @@ def test_dry_run_skips_zip_but_send_fires(svc, monkeypatch):
 
     monkeypatch.setattr(svc, "_create_zip", fake_zip)
     sends: list[str] = []
+
+    async def mock_send(cmd: str, notify=None) -> None:
+        sends.append(cmd)
+
     monkeypatch.setattr(
-        "backend.app.services.backup_service._send_to_server", lambda cmd: sends.append(cmd)
+        "backend.app.services.backup_service._send_to_server", mock_send
     )
     events, notify = _collect()
     pre_post = {"before": [{"type": "send", "value": "say hi"}], "after": []}
@@ -111,7 +122,11 @@ def test_one_job_at_a_time(svc, monkeypatch):
         pass
 
     monkeypatch.setattr(svc, "_create_zip", fake_zip)
-    monkeypatch.setattr("backend.app.services.backup_service._send_to_server", lambda cmd: None)
+
+    async def mock_send(cmd: str, notify=None) -> None:
+        pass
+
+    monkeypatch.setattr("backend.app.services.backup_service._send_to_server", mock_send)
     svc._active = True
     events, notify = _collect()
     with pytest.raises(BackupAlreadyRunning):

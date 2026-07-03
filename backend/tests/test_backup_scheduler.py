@@ -25,12 +25,19 @@ def test_scheduler_runs_backup_with_hooks(tmp_path, monkeypatch):
     settings_svc = BackupSettingsService()
     settings_svc.save(
         auto={"enabled": True, "interval_minutes": 0, "keep_count": 1},
-        pre_post={"before": [{"type": "send", "value": "say auto"}], "after": []},
+        pre_post={
+            "before": [{"type": "send", "value": "save hold"}, {"type": "send", "value": "say auto"}],
+            "after": [{"type": "send", "value": "save resume"}],
+        },
     )
 
     sent: list[str] = []
+
+    async def mock_send(cmd: str, notify=None) -> None:
+        sent.append(cmd)
+
     monkeypatch.setattr(
-        "backend.app.services.backup_service._send_to_server", lambda cmd: sent.append(cmd)
+        "backend.app.services.backup_service._send_to_server", mock_send
     )
 
     calls: list[str] = []
@@ -47,4 +54,6 @@ def test_scheduler_runs_backup_with_hooks(tmp_path, monkeypatch):
     sched.configure(enabled=True, interval_minutes=0, keep_count=1)
     asyncio.run(sched.tick_once())
     assert "auto" in calls
-    assert sent == ["say auto"]
+    assert "save hold" in sent
+    assert "save resume" in sent
+    assert "say auto" in sent

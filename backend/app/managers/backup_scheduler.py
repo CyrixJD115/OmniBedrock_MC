@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from backend.app.services.backup_service import BackupService
+from backend.app.services.backup_service import BackupService, validate_pre_post_commands
 from backend.app.services.backup_settings_service import BackupSettingsService
 
 logger = logging.getLogger("backup_scheduler")
@@ -39,6 +39,12 @@ class BackupScheduler:
         if not self._enabled:
             return
         if self._task and not self._task.done():
+            return
+        settings = self._settings_service.load()
+        valid, msg = validate_pre_post_commands(settings["pre_post"])
+        if not valid:
+            logger.warning("Backup scheduler not started: %s", msg)
+            self._enabled = False
             return
         self._task = asyncio.create_task(self._run())
         logger.info("Backup scheduler started (interval=%d min, keep=%d)", self._interval, self._keep)
@@ -81,6 +87,12 @@ class BackupScheduler:
         settings = self._settings_service.load()
         auto = settings["auto"]
         pre_post = settings["pre_post"]
+
+        valid, msg = validate_pre_post_commands(pre_post)
+        if not valid:
+            logger.warning("Auto-backup skipped: %s", msg)
+            return
+
         worlds = self._worlds or self._backup_service.list_worlds()
         for world in worlds:
             async def _discard(e: dict) -> None:

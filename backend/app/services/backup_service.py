@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shutil
 import zipfile
 from datetime import datetime, timezone
@@ -19,10 +20,54 @@ class BackupAlreadyRunning(Exception):
     pass
 
 
-def _send_to_server(cmd: str) -> None:
+def validate_pre_post_commands(pre_post: dict) -> tuple[bool, str]:
+    before = pre_post.get("before", [])
+    after = pre_post.get("after", [])
+    has_save_hold = any(
+        e.get("type") == "send" and e.get("value") == "save hold"
+        for e in before
+    )
+    has_save_resume = any(
+        e.get("type") == "send" and e.get("value") == "save resume"
+        for e in after
+    )
+    if not has_save_hold and not has_save_resume:
+        return False, "Before commands must include 'save hold' (send type) and After commands must include 'save resume' (send type)"
+    if not has_save_hold:
+        return False, "Before commands must include 'save hold' (send type)"
+    if not has_save_resume:
+        return False, "After commands must include 'save resume' (send type)"
+    return True, ""
+
+
+async def _send_to_server(cmd: str, notify: NotifyFn | None = None) -> None:
     from backend.app.core.dependencies import server_manager
 
-    server_manager.send_command(cmd)
+    # Subscribe to stdout BEFORE queuing the command to avoid missing output
+    q: asyncio.Queue[str] | None = None
+    if notify is not None:
+        q = server_manager.subscribe_stdout()
+
+    await server_manager.send_command(cmd)
+    await asyncio.sleep(0)  # yield so _writer_loop can pick up the command
+
+    if q is not None:
+        try:
+            # Wait up to 5s for first line of server response
+            try:
+                line = await asyncio.wait_for(q.get(), timeout=5.0)
+                await notify({"type": "output", "stream": "server", "line": line})
+            except asyncio.TimeoutError:
+                return  # no output within 5s
+            # Keep reading until 1s gap signals end of output
+            while True:
+                try:
+                    line = await asyncio.wait_for(q.get(), timeout=1.0)
+                    await notify({"type": "output", "stream": "server", "line": line})
+                except asyncio.TimeoutError:
+                    break
+        finally:
+            server_manager.unsubscribe_stdout(q)
 
 
 NotifyFn = Callable[[dict], Awaitable[None]]
@@ -105,6 +150,27 @@ class BackupService:
     def get_backup_path(self, world: str, filename: str) -> Path | None:
         path = self._backup_root / world / filename
         return path if path.exists() else None
+
+    async def restore_to_world(self, world: str, filename: str) -> None:
+        backup_path = self._backup_root / world / filename
+        if not backup_path.exists():
+            raise FileNotFoundError(f"Backup '{filename}' for world '{world}' not found")
+        world_path = self._worlds_dir / world
+        if not world_path.exists():
+            raise FileNotFoundError(f"World directory '{world}' not found")
+
+        backup_dir = world_path.parent / f"{world}.bak.{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        logger.info("Saving current world to %s", backup_dir)
+        loop = asyncio.get_event_loop()
+
+        def _restore():
+            shutil.move(str(world_path), str(backup_dir))
+            with zipfile.ZipFile(str(backup_path), "r") as zf:
+                zf.extractall(str(self._worlds_dir))
+            os.chmod(str(world_path), 0o755)
+
+        await loop.run_in_executor(None, _restore)
+        logger.info("Restored world '%s' from backup '%s'", world, filename)
 
     async def _create_zip(
         self,
@@ -226,8 +292,8 @@ class BackupService:
             await notify({"type": "status", "phase": phase, "message": f"Waiting {n}s …"})
             await asyncio.sleep(n)
         elif etype == "send":
-            _send_to_server(str(value))
             await notify({"type": "output", "stream": phase, "line": f"[send] {value}"})
+            await _send_to_server(str(value), notify=notify)
         elif etype == "command":
             if dry_run:
                 await notify({"type": "output", "stream": phase, "line": f"Would run (dry-run): {value}"})

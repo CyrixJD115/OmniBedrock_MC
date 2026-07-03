@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { api } from '$lib/api/client';
+  import { addToast } from '$stores/toast';
   import type { CommandEntry } from '$types/index';
 
   let { entry, onchange, ondelete }: {
@@ -9,12 +11,26 @@
 
   let typeOptions: CommandEntry['type'][] = ['command', 'wait', 'comment', 'send'];
 
+  let testing = $state(false);
+  let testResult = $state<{ kind: string; output: string; exit_code: number } | null>(null);
+
   function handleTypeChange(t: string) {
     onchange({ type: t as CommandEntry['type'], value: t === 'wait' ? 5 : '' });
   }
 
   function handleValueChange(v: string | number) {
     onchange({ type: entry.type, value: v });
+  }
+
+  async function testEntry() {
+    testing = true;
+    testResult = null;
+    try {
+      testResult = await api.testCommand(entry);
+    } catch (e: any) {
+      addToast(`Test failed: ${e.message}`, 'error');
+    }
+    testing = false;
   }
 </script>
 
@@ -56,9 +72,31 @@
         value={String(entry.value)}
         oninput={(e) => handleValueChange((e.target as HTMLInputElement).value)}
         class="w-full bg-deep-900 text-deep-100 text-xs border border-deep-600/40 rounded px-2 py-1"
-        placeholder={entry.type === 'send' ? '/say Backup starting...' : 'Comment text...'}
+        placeholder={entry.type === 'send' ? 'save hold' : 'Comment text...'}
       />
     {/if}
+    {#if testResult}
+      <div class="mt-1.5 p-1.5 rounded bg-deep-900/80 border border-deep-600/30 font-mono text-xs max-h-24 overflow-y-auto">
+        <div class="flex items-center gap-2 mb-0.5">
+          <span class="text-deep-500 uppercase tracking-wider text-[10px]">exit {testResult.exit_code}</span>
+          {#if testResult.exit_code === 0}
+            <span class="text-green-500 text-[10px]">OK</span>
+          {:else}
+            <span class="text-red-400 text-[10px]">FAIL</span>
+          {/if}
+          <button onclick={() => testResult = null} class="ml-auto text-deep-500 hover:text-deep-300 text-[10px]">&times;</button>
+        </div>
+        <pre class="text-deep-200 whitespace-pre-wrap break-all">{testResult.output}</pre>
+      </div>
+    {/if}
   </div>
-  <button onclick={ondelete} class="text-deep-400 hover:text-red-400 transition shrink-0 text-xs px-1 py-1">&times;</button>
+  <div class="flex flex-col gap-1 shrink-0">
+    <button
+      onclick={testEntry}
+      disabled={testing}
+      class="text-bedrock-400 hover:text-bedrock-300 transition text-xs px-1 py-0.5 disabled:opacity-30"
+      title="Test this command"
+    >{testing ? '...' : 'Test'}</button>
+    <button onclick={ondelete} class="text-deep-400 hover:text-red-400 transition text-xs px-1 py-0.5">&times;</button>
+  </div>
 </div>

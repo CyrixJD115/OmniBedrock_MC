@@ -68,15 +68,19 @@ def test_include_items_lists_world_entries(client, auth_header, tmp_path, monkey
 def test_create_returns_409_when_busy(client, auth_header, monkeypatch):
     monkeypatch.setattr(backup_service, "_active", True)
     r = client.post(
-        "/api/v1/backups/create", headers=auth_header, json={"world": "W", "tag": "manual"}
+        "/api/v1/backups/create", headers=auth_header, json={"world": "W", "tag": "manual", "run_hooks": False}
     )
     assert r.status_code == 409
 
 
 def test_test_command_runs_send(client, auth_header, monkeypatch):
     sent: list[str] = []
+
+    async def mock_send(cmd: str, notify=None) -> None:
+        sent.append(cmd)
+
     monkeypatch.setattr(
-        "backend.app.routers.backups._send_to_server", lambda cmd: sent.append(cmd)
+        "backend.app.routers.backups._send_to_server", mock_send
     )
     r = client.post(
         "/api/v1/backups/test-command",

@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
 from backend.app.core.config import settings as cfg
-from backend.app.core.dependencies import backup_scheduler, backup_service, backup_settings_service
+from backend.app.core.dependencies import backup_scheduler, backup_service, backup_settings_service, server_manager
 from backend.app.core.permissions import BACKUPS_CREATE, BACKUPS_DELETE, BACKUPS_RESTORE, BACKUPS_VIEW, SETTINGS_EDIT
 from backend.app.core.security import require_permission, verify_token
+from backend.app.models.server import ServerStatus
 from backend.app.models.user import User
 from backend.app.schemas.backup import (
     BackupCreateRequest,
@@ -19,7 +21,7 @@ from backend.app.schemas.backup import (
     TestCommandRequest,
 )
 from backend.app.services.audit_service import log_action
-from backend.app.services.backup_service import BackupAlreadyRunning, _send_to_server
+from backend.app.services.backup_service import BackupAlreadyRunning, _send_to_server, validate_pre_post_commands
 from backend.app.websocket.backup import BackupWebSocket
 
 router = APIRouter(prefix="/backups", tags=["backups"])
@@ -54,6 +56,11 @@ async def list_backups(world: str | None = None, _u: User = Depends(verify_token
 async def create_backup(req: BackupCreateRequest, user: User = Depends(require_permission(BACKUPS_CREATE))) -> dict:
     pre_post = backup_settings_service.load()["pre_post"] if req.run_hooks else {"before": [], "after": []}
 
+    if req.run_hooks:
+        valid, msg = validate_pre_post_commands(pre_post)
+        if not valid:
+            raise HTTPException(status_code=400, detail=msg)
+
     async def _discard(event: dict) -> None:
         pass
 
@@ -82,6 +89,31 @@ async def restore_backup(world: str, filename: str, _u: User = Depends(require_p
     if not backup_service.restore_backup(world, filename):
         raise HTTPException(status_code=404, detail="Backup not found in trash")
     return {"success": True, "message": f"Restored {filename}"}
+
+
+@router.post("/{world}/{filename}/restore-to-world")
+async def restore_backup_to_world(
+    world: str, filename: str, user: User = Depends(require_permission(BACKUPS_RESTORE)),
+) -> dict:
+    path = backup_service.get_backup_path(world, filename)
+    if not path:
+        raise HTTPException(status_code=404, detail="Backup not found")
+
+    if server_manager.status == ServerStatus.running:
+        logger = logging.getLogger("backup")
+        logger.info("Stopping server before restoring world '%s' from backup '%s'", world, filename)
+        await server_manager.stop()
+
+    try:
+        await backup_service.restore_to_world(world, filename)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    log_action(user.username, "backup.restore_to_world", f"{world}/{filename}", category="backup")
+    return {
+        "success": True,
+        "message": f"World '{world}' restored from '{filename}'. Server was stopped — start it manually when ready.",
+    }
 
 
 @router.get("/trash")
@@ -127,8 +159,17 @@ async def test_command(
     entry = payload.entry
     log_action(user.username, "backup.test_command", f"{entry.type}:{entry.value}", category="backup")
     if entry.type == "send":
-        _send_to_server(str(entry.value))
-        return {"kind": "send", "output": f"Sent to console: {entry.value}", "exit_code": 0}
+        lines: list[str] = []
+
+        async def _collect(e: dict) -> None:
+            if e.get("stream") == "server" and e.get("line"):
+                lines.append(e["line"])
+
+        await _send_to_server(str(entry.value), notify=_collect)
+        output = f"Sent to console: {entry.value}"
+        if lines:
+            output += "\n" + "\n".join(lines)
+        return {"kind": "send", "output": output, "exit_code": 0}
     if entry.type == "comment":
         return {"kind": "comment", "output": "Comment (ignored)", "exit_code": 0}
     if entry.type == "wait":

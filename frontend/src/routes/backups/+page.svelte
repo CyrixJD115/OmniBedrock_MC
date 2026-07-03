@@ -13,8 +13,8 @@
   import type { CommandEntry } from '$types/index';
   import { HardDrive, Download, Trash2, Plus, RefreshCw, Play } from '@lucide/svelte';
 
-  let activeTab = $state<'manual' | 'auto' | 'backups' | 'logs'>('manual');
-  let tabs: Array<'manual' | 'auto' | 'backups' | 'logs'> = ['manual', 'auto', 'backups', 'logs'];
+  let activeTab = $state<'manual' | 'auto' | 'backups' | 'commands' | 'logs'>('manual');
+  let tabs: Array<'manual' | 'auto' | 'backups' | 'commands' | 'logs'> = ['manual', 'auto', 'backups', 'commands', 'logs'];
   let worlds = $state<string[]>([]);
   let loading = $state(true);
 
@@ -102,8 +102,10 @@
     } catch (e: any) { addToast(`Delete failed: ${e.message}`, 'error'); }
   }
 
-  function downloadBackup(w: string, f: string) {
-    window.open(`/api/v1/backups/${w}/${f}/download`, '_blank');
+  async function downloadBackup(w: string, f: string) {
+    try {
+      await api.downloadBackup(w, f);
+    } catch (e: any) { addToast(`Download failed: ${e.message}`, 'error'); }
   }
 
   async function loadTrash() {
@@ -157,6 +159,25 @@
     } catch (e: any) { addToast(`Failed to save: ${e.message}`, 'error'); }
   }
 
+  // --- commands validation ---
+  let commandsValid = $derived.by(() => {
+    const hasSaveHold = cmdBefore.some((e) => e.type === 'send' && e.value === 'save hold');
+    const hasSaveResume = cmdAfter.some((e) => e.type === 'send' && e.value === 'save resume');
+    return hasSaveHold && hasSaveResume;
+  });
+
+  // --- restore modal ---
+  let restoreTarget = $state<{ world: string; filename: string } | null>(null);
+
+  async function confirmRestore() {
+    if (!restoreTarget) return;
+    try {
+      const r = await api.restoreToWorld(restoreTarget.world, restoreTarget.filename);
+      addToast(r.message, 'success');
+      restoreTarget = null;
+    } catch (e: any) { addToast(`Restore failed: ${e.message}`, 'error'); }
+  }
+
   // --- logs ---
   let filteredEvents = $derived(
     $backupEvents.filter((e) => !logFilter || e.type === logFilter || e.phase?.includes(logFilter))
@@ -196,12 +217,17 @@
                {activeTab === tab
                  ? 'bg-deep-800/60 text-white border-b-2 border-bedrock-500'
                  : 'text-deep-400 hover:text-deep-200'}"
-      >{tab === 'manual' ? 'Manual' : tab === 'auto' ? 'Automatic' : tab === 'backups' ? 'Backups' : 'Logs'}</button>
+      >{tab === 'manual' ? 'Manual' : tab === 'auto' ? 'Automatic' : tab === 'backups' ? 'Backups' : tab === 'commands' ? 'Commands' : 'Logs'}</button>
     {/each}
   </div>
 
   <!-- ======================== MANUAL TAB ======================== -->
   {#if activeTab === 'manual'}
+    {#if !commandsValid}
+      <div class="bg-red-900/30 border border-red-700/50 rounded p-3 mb-4 text-xs text-red-300">
+        <strong>Commands not configured:</strong> Before commands must include <code class="font-mono bg-deep-900/60 px-1 rounded">save hold</code> (send type) and After commands must include <code class="font-mono bg-deep-900/60 px-1 rounded">save resume</code> (send type). Go to the <button onclick={() => activeTab = 'commands'} class="underline text-red-200 hover:text-red-100">Commands</button> tab to configure them before running backups.
+      </div>
+    {/if}
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
       <div class="lg:col-span-2 space-y-4">
         <div class="card">
@@ -235,18 +261,7 @@
           </div>
         </div>
 
-        <div class="card">
-          <h2 class="card-header">Pre / Post Commands</h2>
-          <CommandEditor
-            label=""
-            before={cmdBefore}
-            after={cmdAfter}
-            onchange={(b, a) => { cmdBefore = b; cmdAfter = a; }}
-          />
-          <div class="mt-2">
-            <button onclick={savePrePost} class="btn-ghost text-xs px-3 py-1 rounded uppercase tracking-wider border border-deep-600/30 text-deep-300 hover:text-deep-100">Save Commands</button>
-          </div>
-        </div>
+
       </div>
 
       <div class="space-y-4">
@@ -258,10 +273,10 @@
           </label>
           <button
             onclick={runBackup}
-            disabled={creating || !selWorld || $backupRunning}
+            disabled={creating || !selWorld || $backupRunning || !commandsValid}
             class="btn-primary w-full flex items-center justify-center gap-2 text-sm py-2 disabled:opacity-40"
           >
-            <Play size={15} /> {creating ? 'Running...' : $backupRunning ? 'Busy' : 'Run Backup'}
+            <Play size={15} /> {creating ? 'Running...' : $backupRunning ? 'Busy' : !commandsValid ? 'Fix Commands First' : 'Run Backup'}
           </button>
         </div>
 
@@ -294,12 +309,17 @@
 
   <!-- ======================== AUTOMATIC TAB ======================== -->
   {:else if activeTab === 'auto'}
+    {#if !commandsValid}
+      <div class="bg-red-900/30 border border-red-700/50 rounded p-3 mb-4 text-xs text-red-300">
+        <strong>Cannot enable automatic backups:</strong> Before commands must include <code class="font-mono bg-deep-900/60 px-1 rounded">save hold</code> and After commands must include <code class="font-mono bg-deep-900/60 px-1 rounded">save resume</code>. Go to the <button onclick={() => activeTab = 'commands'} class="underline text-red-200 hover:text-red-100">Commands</button> tab to configure them.
+      </div>
+    {/if}
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
       <div class="card">
         <h2 class="card-header">Schedule</h2>
         <div class="space-y-3">
           <label class="flex items-center gap-2 text-xs cursor-pointer select-none">
-            <input type="checkbox" bind:checked={schedEnabled} class="accent-bedrock-500" />
+            <input type="checkbox" bind:checked={schedEnabled} disabled={!commandsValid} class="accent-bedrock-500 disabled:opacity-40" />
             <span class="text-deep-200 uppercase tracking-wider font-semibold">Enabled</span>
           </label>
           <div class="grid grid-cols-3 gap-3">
@@ -397,8 +417,9 @@
                 <td class="py-1.5 px-3 text-right">{formatBytes(b.size_bytes)}</td>
                 <td class="py-1.5 px-3 text-right text-deep-400">{new Date(b.modified).toLocaleString()}</td>
                 <td class="py-1.5 px-3 text-right">
-                  <button onclick={() => downloadBackup(b.world, b.filename)} class="btn-ghost p-1"><Download size={12} /></button>
-                  <button onclick={() => delBackup(b.world, b.filename)} class="btn-ghost p-1 text-red-400"><Trash2 size={12} /></button>
+                  <button onclick={() => downloadBackup(b.world, b.filename)} class="btn-ghost p-1" title="Download"><Download size={12} /></button>
+                  <button onclick={() => { restoreTarget = { world: b.world, filename: b.filename }; }} class="btn-ghost p-1 text-green-400" title="Restore to world"><RefreshCw size={12} /></button>
+                  <button onclick={() => delBackup(b.world, b.filename)} class="btn-ghost p-1 text-red-400" title="Move to trash"><Trash2 size={12} /></button>
                 </td>
               </tr>
             {:else}
@@ -406,6 +427,113 @@
             {/each}
           </tbody>
         </table>
+      </div>
+    </div>
+
+  <!-- ======================== COMMANDS TAB ======================== -->
+  {:else if activeTab === 'commands'}
+    <div class="flex flex-col lg:flex-row gap-4">
+      <div class="flex-1 min-w-0">
+        <div class="card">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="card-header !mb-0">Before / After Commands</h2>
+            <button onclick={savePrePost} class="btn-primary text-xs py-1.5 px-4 flex items-center gap-2">
+              Save Commands
+            </button>
+          </div>
+          <CommandEditor
+            label=""
+            before={cmdBefore}
+            after={cmdAfter}
+            onchange={(b, a) => { cmdBefore = b; cmdAfter = a; }}
+          />
+        </div>
+      </div>
+      <div class="w-full lg:w-64 shrink-0 space-y-3">
+        <div class="card">
+          <h2 class="card-header">Validation</h2>
+          <div class="text-xs space-y-2">
+            {#if commandsValid}
+              <div class="flex items-center gap-2 text-green-400 bg-green-900/20 border border-green-700/40 rounded p-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-green-500 shrink-0"></span>
+                <span class="font-semibold">All required commands present</span>
+              </div>
+            {:else}
+              <div class="flex items-center gap-2 text-red-400 bg-red-900/20 border border-red-700/40 rounded p-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-red-500 shrink-0"></span>
+                <span class="font-semibold">Missing required commands</span>
+              </div>
+            {/if}
+            <div class="bg-deep-800/40 rounded p-2 space-y-1 text-deep-300">
+              <div class="flex items-center justify-between">
+                <span>Before: <code class="font-mono bg-deep-900/60 px-1 rounded">save hold</code></span>
+                {#if cmdBefore.some((e) => e.type === 'send' && e.value === 'save hold')}
+                  <span class="text-green-400">&#10003;</span>
+                {:else}
+                  <span class="text-red-400">&#10007;</span>
+                {/if}
+              </div>
+              <div class="flex items-center justify-between">
+                <span>After: <code class="font-mono bg-deep-900/60 px-1 rounded">save resume</code></span>
+                {#if cmdAfter.some((e) => e.type === 'send' && e.value === 'save resume')}
+                  <span class="text-green-400">&#10003;</span>
+                {:else}
+                  <span class="text-red-400">&#10007;</span>
+                {/if}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2 class="card-header">Quick Add</h2>
+          <div class="flex flex-col gap-2">
+            <button
+              onclick={() => {
+                if (!cmdBefore.some((e) => e.type === 'send' && e.value === 'save hold')) {
+                  cmdBefore = [...cmdBefore, { type: 'send', value: 'save hold' }];
+                }
+              }}
+              disabled={cmdBefore.some((e) => e.type === 'send' && e.value === 'save hold')}
+              class="text-xs px-3 py-2 rounded border border-deep-600/30 text-left disabled:opacity-30 hover:bg-deep-700/40 transition"
+            >+ Add <code class="font-mono bg-deep-900/60 px-1 rounded">save hold</code> to Before</button>
+            <button
+              onclick={() => {
+                if (!cmdAfter.some((e) => e.type === 'send' && e.value === 'save resume')) {
+                  cmdAfter = [...cmdAfter, { type: 'send', value: 'save resume' }];
+                }
+              }}
+              disabled={cmdAfter.some((e) => e.type === 'send' && e.value === 'save resume')}
+              class="text-xs px-3 py-2 rounded border border-deep-600/30 text-left disabled:opacity-30 hover:bg-deep-700/40 transition"
+            >+ Add <code class="font-mono bg-deep-900/60 px-1 rounded">save resume</code> to After</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2 class="card-header">Command Types</h2>
+          <div class="text-xs space-y-1.5 text-deep-400">
+            <div class="flex items-start gap-2">
+              <code class="shrink-0 font-mono bg-deep-900/60 px-1 rounded text-deep-200">send</code>
+              <span>Sends a command to the server console</span>
+            </div>
+            <div class="flex items-start gap-2">
+              <code class="shrink-0 font-mono bg-deep-900/60 px-1 rounded text-deep-200">command</code>
+              <span>Runs a shell command on the host</span>
+            </div>
+            <div class="flex items-start gap-2">
+              <code class="shrink-0 font-mono bg-deep-900/60 px-1 rounded text-deep-200">wait</code>
+              <span>Pauses for a set number of seconds</span>
+            </div>
+            <div class="flex items-start gap-2">
+              <code class="shrink-0 font-mono bg-deep-900/60 px-1 rounded text-deep-200">comment</code>
+              <span>Ignored — for notes only</span>
+            </div>
+            <div class="flex items-start gap-2">
+              <code class="shrink-0 font-mono bg-deep-900/60 px-1 rounded text-deep-200">Test</code>
+              <span>Executes the entry immediately</span>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -502,6 +630,31 @@
       </div>
       <div class="flex justify-end mt-4">
         <button onclick={() => { showTrash = false; }} class="btn-secondary text-xs">Close</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if restoreTarget}
+  <div class="fixed inset-0 z-50 flex items-center justify-center p-4 modal-bg"
+       style="background: rgba(3,8,16,0.85); backdrop-filter: blur(4px);"
+       onclick={(e) => { if ((e.target as HTMLElement).classList.contains('modal-bg')) restoreTarget = null; }}
+       onkeydown={(e) => e.key === 'Escape' && (restoreTarget = null)}
+       role="dialog" aria-modal="true" tabindex="-1">
+    <div class="bg-deep-900 border-2 border-yellow-600/50 p-4 w-full max-w-lg shadow-block-lg shadow-black/50">
+      <h2 class="text-sm font-bold text-white uppercase tracking-widest mb-3">Restore Backup to World</h2>
+      <div class="text-xs space-y-3 text-deep-200">
+        <p>
+          This will replace the current world <strong class="text-white">{restoreTarget.world}</strong> with the backup <code class="font-mono bg-deep-800/60 px-1 rounded">{restoreTarget.filename}</code>.
+        </p>
+        <div class="bg-yellow-900/30 border border-yellow-700/50 rounded p-2 text-yellow-300">
+          <strong>Warning:</strong> The server will be <strong>stopped</strong> automatically before restoring. The current world directory will be saved as a <code class="font-mono bg-deep-900/60 px-1 rounded">.bak</code> backup. You will need to start the server manually afterward.
+        </div>
+        <p class="text-deep-400">Are you sure you want to proceed?</p>
+      </div>
+      <div class="flex justify-end gap-2 mt-4">
+        <button onclick={() => { restoreTarget = null; }} class="btn-secondary text-xs">Cancel</button>
+        <button onclick={confirmRestore} class="btn-primary text-xs bg-red-700 hover:bg-red-600 border-red-600 text-white px-4 py-1.5 rounded uppercase tracking-wider">Restore</button>
       </div>
     </div>
   </div>

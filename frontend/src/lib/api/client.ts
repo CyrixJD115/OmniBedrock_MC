@@ -102,10 +102,25 @@ export const api = {
   restoreBackup: (world: string, filename: string) =>
     request<{ success: boolean }>(`/backups/restore/${world}/${filename}`, { method: 'POST' }),
   listTrash: (world?: string) => request<Array<any>>(`/backups/trash${world ? `?world=${world}` : ''}`),
-  downloadBackup: (world: string, filename: string) => {
-    const url = `${API_BASE}/backups/${world}/${filename}/download`;
-    window.open(url, '_blank');
+  downloadBackup: async (world: string, filename: string) => {
+    const res = await fetch(`${API_BASE}/backups/${encodeURIComponent(world)}/${encodeURIComponent(filename)}/download`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+    if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   },
+  restoreToWorld: (world: string, filename: string) =>
+    request<{ success: boolean; message: string }>(`/backups/${encodeURIComponent(world)}/${encodeURIComponent(filename)}/restore-to-world`, {
+      method: 'POST',
+    }),
   getBackupSettings: () => request<BackupSettings>('/backups/settings'),
   updateBackupSettings: (data: Partial<BackupSettings>) =>
     request<{ success: boolean }>('/backups/settings', {
