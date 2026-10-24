@@ -144,17 +144,6 @@ Upgrading is safe: the panel reuses valid installations (re-running "Install End
 
 Auto-restart and stop/kill timeouts are persisted in `server_settings.yaml` through `/api/v1/settings/server`. Backup configuration lives in `backup_settings.yaml`. The scheduler applies configuration changes immediately and waits the configured interval before running. Server shutdown cancels scheduling, lets active jobs clean up save state, stops the game, and drains output. Ensure service/container stop timeouts cover your configured hooks and grace periods.
 
-## Migrating the Python installation
-
-The Python source is retained in `backend-py/` as a reference; the Rust backend does not import it or run FastAPI. Stop the old backend before starting Rust. Back up its data first.
-
-1. Point `BEDROCK_SERVER_DIR`, `DATA_DIR`, `BACKUPS_DIR`, and `LOGS_DIR` to your existing installation, or copy its stores into the corresponding Rust directories. The directories normally came from `backend/data`, `backend/backups`, and `backend/logs`; this checkout moved them to `backend-py/`.
-2. Preserve `users.yaml`, `roles.yaml`, `backup_settings.yaml`, and `audit.jsonl`. Existing Python PBKDF2 hashes are verified and upgraded to Argon2id after a successful login. Malformed stores fail startup rather than silently replacing accounts.
-3. Preserve the existing `SECRET_KEY` (at least 32 characters) to retain issued JWTs; otherwise users log in again. Tokens retain the Python SHA256-derived HS256 format and seven-day lifetime.
-4. Configure the Endstone executable from the existing environment, such as `ENDSTONE_BIN=/opt/omnibedrock/.venv/bin/endstone`.
-
-The REST paths and principal payload shapes are preserved. Python settings that were only held in memory begin with their previous defaults. Old exported archives remain in place; the backup catalog covers `BACKUPS_DIR/worlds/<world>/*.zip`. Custom export directories are supported within `BACKUPS_DIR`; archives there can be retrieved directly from that directory.
-
 ## Dual backend: Endstone or vanilla BDS
 
 The panel supervises either an Endstone launcher or the official `bedrock_server` binary in the same server directory. The active backend, and the vanilla version pin, live in `server_settings.yaml` and are editable from Settings → Server backend. Switching stops the game if it is running, applies the selection, and restarts on the new backend; `worlds/`, `server.properties`, `allowlist.json`, and `permissions.json` are shared between both backends and never touched by a switch.
@@ -232,7 +221,6 @@ backend/
   omnibedrock-server/      child supervision, console journal, metrics, backups, BDS versions, broadcaster
   omnibedrock-api/         axum routes, WebSocket handlers, auth; integration tests
 frontend/                  existing SvelteKit UI
-backend-py/                Python migration reference
 ```
 
 ## License

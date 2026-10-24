@@ -6,12 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from importlib.util import module_from_spec, spec_from_file_location
-
-_launcher_spec = spec_from_file_location("omni_legacy_launcher", Path(__file__).resolve().parent / "backend-py" / "app" / "launcher.py")
-assert _launcher_spec and _launcher_spec.loader
-launcher = module_from_spec(_launcher_spec)
-_launcher_spec.loader.exec_module(launcher)
+import launcher
 
 FRONTEND_DIR = Path(__file__).resolve().parent / "frontend"
 VITE_CONFIG = FRONTEND_DIR / "vite.config.ts"

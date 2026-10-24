@@ -1,7 +1,6 @@
 .git
 .env
 .venv
-backend-py
 bedrock_server
 backend/data
 backend/backups
