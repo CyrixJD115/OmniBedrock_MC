@@ -47,7 +47,7 @@
 <div class="space-y-4">
   <div class="flex items-center justify-between">
     <div>
-      <h1 class="text-lg font-bold text-white uppercase tracking-widest">Audit Log</h1>
+      <h1 class="text-lg font-bold text-strong uppercase tracking-widest">Audit Log</h1>
       <div class="pixel-divider mt-2 w-28"></div>
     </div>
     <button onclick={loadEntries} class="btn-ghost p-2"><RotateCw size={14} /></button>
@@ -99,7 +99,7 @@
               <td class="py-1.5 px-3 text-deep-300 max-w-xs truncate">{entry.detail}</td>
             </tr>
           {:else}
-            <tr><td colspan="5" class="text-center py-8 text-deep-500">No audit entries</td></tr>
+            <tr><td colspan="5" class="text-center py-8 text-deep-400">No audit entries</td></tr>
           {/each}
         </tbody>
       </table>

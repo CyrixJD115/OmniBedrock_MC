@@ -36,7 +36,7 @@
 <div class="space-y-4">
   <div class="flex items-center justify-between">
     <div>
-      <h1 class="text-lg font-bold text-white uppercase tracking-widest">Players</h1>
+      <h1 class="text-lg font-bold text-strong uppercase tracking-widest">Players</h1>
       <div class="pixel-divider mt-2 w-24"></div>
     </div>
     <button onclick={refresh} class="btn-secondary text-xs">Refresh</button>
@@ -71,7 +71,7 @@
               </td>
             </tr>
           {:else}
-            <tr><td colspan="2" class="text-center py-8 text-deep-500">{loading ? 'Loading...' : 'No players online'}</td></tr>
+            <tr><td colspan="2" class="text-center py-8 text-deep-400">{loading ? 'Loading...' : 'No players online'}</td></tr>
           {/each}
         </tbody>
       </table>

@@ -1,0 +1,36 @@
+[package]
+name = "omnibedrock-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Endstone process supervision, console pipeline, metrics, and backups"
+
+[dependencies]
+omnibedrock-core.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+flate2.workspace = true
+futures-util.workspace = true
+hex.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+sha2.workspace = true
+sysinfo.workspace = true
+tar.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+walkdir.workspace = true
+zip.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+nix.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true

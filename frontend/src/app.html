@@ -1,13 +1,38 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <link rel="icon" href="%sveltekit.assets%/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
     <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&family=Montserrat:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <script>
+      // Apply the saved theme before first paint so the app never flashes the
+      // wrong palette. Keys/values are managed by src/lib/theme.ts (JSON).
+      (function () {
+        try {
+          var parse = function (raw) { try { return JSON.parse(raw); } catch (e) { return undefined; } };
+          var read = function (key, guard, fallback) {
+            var v = parse(localStorage.getItem(key));
+            return guard(v) ? v : fallback;
+          };
+          var themes = ['cyan', 'minecraft', 'blue', 'purple', 'red', 'orange', 'pink', 'teal'];
+          var themeId = read('omb.theme', function (v) { return themes.indexOf(v) !== -1; }, 'cyan');
+          var mode = read('omb.theme-mode', function (v) { return v === 'dark' || v === 'light' || v === 'system'; }, 'dark');
+          var resolved = mode;
+          if (mode === 'system') {
+            resolved = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+          }
+          var root = document.documentElement;
+          root.setAttribute('data-theme', themeId);
+          root.setAttribute('data-mode', resolved);
+          if (resolved === 'dark') root.classList.add('dark');
+        } catch (e) {}
+      })();
+    </script>
     %sveltekit.head%
   </head>
-  <body class="bg-deep-950 text-deep-50">
+  <body>
     <div id="app">%sveltekit.body%</div>
   </body>
 </html>

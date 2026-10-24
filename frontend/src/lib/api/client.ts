@@ -1,4 +1,4 @@
-import type { ServerStatus, ServerActionResponse, Backup, AddonList, Addon, Player, PropertyEntry, IniFile, WorldInfo, BackupSettings, SchedulerConfig, CommandEntry, IncludeItem, FolderEntry } from '$types/index';
+import type { ServerStatus, ServerActionResponse, Backup, AddonList, Addon, Player, PropertyEntry, IniFile, WorldInfo, BackupSettings, SchedulerConfig, CommandEntry, IncludeItem, FolderEntry, BackendInfo, VersionRegistry, BroadcasterStatus, CfProject, StoreSearchResponse, StoreMeta, StoreFilesResponse, StoreInstallResponse } from '$types/index';
 
 const API_BASE = '/api/v1';
 let authToken = '';
@@ -64,6 +64,69 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ action }),
     }),
+
+  // Server backend (Endstone / Vanilla BDS)
+  getBackendInfo: () => request<BackendInfo>('/server/backend'),
+  getVersionRegistry: () => request<VersionRegistry>('/server/backend/versions'),
+  installBds: (version: string) =>
+    request<{ success: boolean; message: string }>('/server/backend/install', {
+      method: 'POST',
+      body: JSON.stringify({ version }),
+    }),
+  installEndstone: (version?: string) =>
+    request<{ success: boolean; message: string }>('/server/backend/endstone/install', {
+      method: 'POST',
+      body: JSON.stringify(version ? { version } : {}),
+    }),
+  switchBackend: (backend: string, version?: string) =>
+    request<{ success: boolean; message: string }>('/server/backend/switch', {
+      method: 'POST',
+      body: JSON.stringify(version ? { backend, version } : { backend }),
+    }),
+  getServerSettings: () => request<Record<string, unknown>>('/settings/server'),
+  updateServerSettings: (data: Record<string, unknown>) =>
+    request<{ success: boolean; message: string }>('/settings/server', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  // MCXboxBroadcast
+  getBroadcasterStatus: () => request<BroadcasterStatus>('/broadcaster/status'),
+  broadcasterAction: (action: 'start' | 'stop' | 'restart') =>
+    request<{ success: boolean; message: string }>('/broadcaster/action', {
+      method: 'POST',
+      body: JSON.stringify({ action }),
+    }),
+  sendBroadcasterCommand: (command: string) =>
+    request<{ success: boolean }>('/broadcaster/command', {
+      method: 'POST',
+      body: JSON.stringify({ command }),
+    }),
+  getBroadcasterConfig: () =>
+    fetch(`${API_BASE}/broadcaster/config`, { headers: { Authorization: `Bearer ${authToken}` } }).then(r => {
+      if (!r.ok) throw new Error(`API Error ${r.status}`);
+      return r.text();
+    }),
+  saveBroadcasterConfig: (text: string) =>
+    request<{ success: boolean }>('/broadcaster/config', {
+      method: 'PUT',
+      body: JSON.stringify({ text }),
+    }),
+  broadcasterAccount: (action: 'add' | 'remove', id: string) =>
+    request<{ success: boolean; message: string }>('/broadcaster/accounts', {
+      method: 'POST',
+      body: JSON.stringify({ action, id }),
+    }),
+  uploadBroadcasterScreenshot: (account: string, file: File) => {
+    return fetch(`${API_BASE}/broadcaster/screenshot?account=${encodeURIComponent(account)}`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${authToken}` },
+      body: file,
+    }).then(async r => {
+      if (!r.ok) throw new Error(await r.text());
+      return r.json() as Promise<{ success: boolean; message: string }>;
+    });
+  },
 
   // Console
   sendCommand: (command: string) =>
@@ -138,7 +201,25 @@ export const api = {
     request<{ base: string; dirs: FolderEntry[] }>(`/backups/folders${base ? `?base=${encodeURIComponent(base)}` : ''}`),
 
   // Addons
-  listAddons: () => request<AddonList>('/addons/'),
+  listAddons: (refresh = false) => request<AddonList>(refresh ? '/addons/?refresh=1' : '/addons/'),
+  uploadAddon: (world: string, file: File, packType: 'auto' | 'behavior_packs' | 'resource_packs' = 'auto') => {
+    return fetch(`${API_BASE}/addons/upload?world=${encodeURIComponent(world)}&type=${packType}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${authToken}` },
+      body: file,
+    }).then(async r => {
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.detail ?? `Upload failed (${r.status})`);
+      return body as { success: boolean; message: string; installed: Array<{ name: string; pack_type: string; uuid: string; version: number[] }> };
+    });
+  },
+  deleteAddon: (path: string) =>
+    request<{ success: boolean; message: string }>('/addons/delete', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    }),
+  addonIconUrl: (path: string, version?: string) =>
+    `${API_BASE}/addons/icon?path=${encodeURIComponent(path)}&token=${authToken}${version ? `&v=${encodeURIComponent(version)}` : ''}`,
   getManifest: (path: string) => request<Record<string, unknown>>(`/addons/manifest?path=${encodeURIComponent(path)}`),
   updateManifest: (path: string, manifest: Record<string, unknown>) =>
     request<{ success: boolean }>('/addons/manifest', {
@@ -166,6 +247,30 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ path, uuid }),
     }),
+
+  // Store (CurseForge)
+  storeSearch: (params: { class?: string; q?: string; page?: number; pageSize?: number; sort?: string; version?: string; category?: string }, signal?: AbortSignal) => {
+    const usp = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== null && `${value}` !== '') usp.set(key, `${value}`);
+    }
+    return request<StoreSearchResponse>(`/store/search?${usp.toString()}`, { signal });
+  },
+  storeMeta: () => request<StoreMeta>('/store/meta'),
+  storeProject: (id: number) => request<CfProject>(`/store/project/${id}`),
+  storeDescription: (id: number) => request<{ description: string }>(`/store/project/${id}/description`),
+  storeFiles: (id: number, page = 1, pageSize = 20, version?: string) => {
+    const usp = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+    if (version) usp.set('version', version);
+    return request<StoreFilesResponse>(`/store/project/${id}/files?${usp.toString()}`);
+  },
+  storeInstall: (payload: { project_id: number; project_slug: string; file_id: number; world: string; target?: 'auto' | 'behavior_packs' | 'resource_packs' | 'world' }) =>
+    request<StoreInstallResponse>('/store/install', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  storeImageUrl: (url: string) =>
+    `${API_BASE}/store/image?url=${encodeURIComponent(url)}&token=${authToken}`,
 
   // Players
   listPlayers: () => request<{ players: Player[]; count: number }>('/players/'),
@@ -207,4 +312,17 @@ export const api = {
 
   // Settings
   getSettings: () => request<Record<string, unknown>>('/settings/'),
+  getPanelSettings: () => request<{ login_enabled: boolean; default_credentials: boolean }>('/settings/panel'),
+  updatePanelSettings: (data: { login_enabled: boolean }) =>
+    request<{ success: boolean; message: string }>('/settings/panel', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  getCurseForgeSettings: () =>
+    request<{ configured: boolean; key_hint: string | null; source: 'settings' | 'env' }>('/settings/curseforge'),
+  updateCurseForgeKey: (api_key: string) =>
+    request<{ success: boolean; message: string; configured: boolean }>('/settings/curseforge', {
+      method: 'PUT',
+      body: JSON.stringify({ api_key }),
+    }),
 };

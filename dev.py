@@ -6,7 +6,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from backend.app import launcher
+from importlib.util import module_from_spec, spec_from_file_location
+
+_launcher_spec = spec_from_file_location("omni_legacy_launcher", Path(__file__).resolve().parent / "backend-py" / "app" / "launcher.py")
+assert _launcher_spec and _launcher_spec.loader
+launcher = module_from_spec(_launcher_spec)
+_launcher_spec.loader.exec_module(launcher)
 
 FRONTEND_DIR = Path(__file__).resolve().parent / "frontend"
 VITE_CONFIG = FRONTEND_DIR / "vite.config.ts"
@@ -24,16 +29,9 @@ def ensure_vite_config():
 
 
 def start_backend() -> subprocess.Popen:
-    venv_python = ROOT / ".venv" / "bin" / "python"
-    if os.name == "nt":
-        venv_python = ROOT / ".venv" / "Scripts" / "python.exe"
-    if not venv_python.exists():
-        venv_python = "python3"
-    port = os.getenv("OMNI_PORT", "17754")
-    cmd = [str(venv_python), "-m", "uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", port]
-    cmd.append("--reload")
-    cmd.append("--reload-exclude")
-    cmd.append("bedrock_server/**")
+    binary = ROOT / "target" / "debug" / ("omnibedrock.exe" if os.name == "nt" else "omnibedrock")
+    subprocess.run(["cargo", "build", "--locked"], cwd=ROOT, check=True)
+    cmd = [str(binary)]
     print(f"[backend] Starting: {' '.join(cmd)}")
     return subprocess.Popen(
         cmd,
@@ -72,10 +70,7 @@ def main():
     args = parser.parse_args()
 
     if args.reset_admin:
-        from backend.app.core.auth import reset_admin_store
-
-        reset_admin_store()
-        print("[reset] Admin user store cleared. A new admin + password will print on startup.")
+        parser.error("--reset-admin was removed: reset the selected account through the users API, or restore your users.yaml backup")
 
     run_backend = args.backend or not args.frontend
     run_frontend = args.frontend or not args.backend

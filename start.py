@@ -5,7 +5,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from backend.app import launcher
+from importlib.util import module_from_spec, spec_from_file_location
+
+_launcher_spec = spec_from_file_location("omni_legacy_launcher", Path(__file__).resolve().parent / "backend-py" / "app" / "launcher.py")
+assert _launcher_spec and _launcher_spec.loader
+launcher = module_from_spec(_launcher_spec)
+_launcher_spec.loader.exec_module(launcher)
 
 ROOT = Path(__file__).resolve().parent
 FRONTEND_DIR = ROOT / "frontend"
@@ -14,13 +19,9 @@ VITE_CONFIG_EXAMPLE = FRONTEND_DIR / "vite.config.example.ts"
 
 
 def start_backend() -> subprocess.Popen:
-    venv_python = ROOT / ".venv" / "bin" / "python"
-    if os.name == "nt":
-        venv_python = ROOT / ".venv" / "Scripts" / "python.exe"
-    if not venv_python.exists():
-        venv_python = "python3"
-    port = os.getenv("OMNI_PORT", "17754")
-    cmd = [str(venv_python), "-m", "uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", port]
+    binary = ROOT / "target" / "debug" / ("omnibedrock.exe" if os.name == "nt" else "omnibedrock")
+    subprocess.run(["cargo", "build", "--locked"], cwd=ROOT, check=True)
+    cmd = [str(binary)]
     print(f"[backend] Starting: {' '.join(cmd)}")
     return subprocess.Popen(
         cmd,

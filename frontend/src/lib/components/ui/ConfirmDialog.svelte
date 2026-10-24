@@ -20,13 +20,13 @@
 
 {#if open}
   <div class="fixed inset-0 z-50 flex items-center justify-center p-4 modal-bg"
-       style="background: rgba(3,8,16,0.85); backdrop-filter: blur(4px);"
+       style="background: rgb(var(--color-overlay) / 0.85); backdrop-filter: blur(4px);"
        onclick={handleBgClick}
        onkeydown={(e) => { if (e.key === 'Escape') handleKeyDown(e); }}
        role="dialog" aria-modal="true" tabindex="-1">
-    <div class="bg-deep-900 border-2 border-deep-600/50 p-6 w-full max-w-sm shadow-block-lg shadow-black/50"
-         style="box-shadow: inset 2px 2px 0 rgba(255,255,255,0.03), inset -1px -1px 0 rgba(0,0,0,0.3), 6px 6px 0 rgba(0,0,0,0.5);">
-      <h2 class="text-sm font-bold text-white uppercase tracking-widest mb-3">{title}</h2>
+    <div class="bg-deep-900 border-2 border-deep-600/60 p-6 w-full max-w-sm shadow-block-lg"
+>
+      <h2 class="text-sm font-bold text-strong uppercase tracking-widest mb-3">{title}</h2>
 
       {#if message}
         <p class="text-xs text-deep-300 mb-5 leading-relaxed">{message}</p>

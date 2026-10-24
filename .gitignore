@@ -18,3 +18,9 @@ build/
 .worktrees/
 vite.config.ts
 docs/
+
+/target/
+backend-py/data/
+backend-py/logs/
+backend-py/backups/
+.data/

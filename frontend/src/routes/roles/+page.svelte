@@ -95,7 +95,7 @@
 <div class="space-y-4">
   <div class="flex items-center justify-between">
     <div>
-      <h1 class="text-lg font-bold text-white uppercase tracking-widest">Roles</h1>
+      <h1 class="text-lg font-bold text-strong uppercase tracking-widest">Roles</h1>
       <div class="pixel-divider mt-2 w-24"></div>
     </div>
     <div class="flex gap-2">
@@ -113,7 +113,7 @@
       <div class="card relative">
         <div class="flex items-start justify-between mb-4">
           <div>
-            <h3 class="text-sm font-bold text-white uppercase tracking-wider">{r.display_name || r.name}</h3>
+            <h3 class="text-sm font-bold text-strong uppercase tracking-wider">{r.display_name || r.name}</h3>
             <p class="text-[11px] text-deep-400 uppercase tracking-wider mt-1">{r.name}{r.is_default ? ' — Default' : ''}</p>
           </div>
           {#if canManage() && r.name !== 'owner'}
@@ -127,7 +127,7 @@
           {#each PERM_GROUPS as group}
             {#if group.perms.some(p => r.permissions.includes(p))}
               <div>
-                <p class="text-[10px] text-deep-500 uppercase tracking-wider mb-1.5">{group.label}</p>
+                <p class="text-[10px] text-deep-400 uppercase tracking-wider mb-1.5">{group.label}</p>
                 <div class="flex flex-wrap gap-1.5">
                   {#each group.perms as perm}
                     {#if r.permissions.includes(perm)}
@@ -141,19 +141,19 @@
         </div>
       </div>
     {:else}
-      <div class="col-span-full text-center py-8 text-deep-500">{loading ? 'Loading...' : 'No roles defined'}</div>
+      <div class="col-span-full text-center py-8 text-deep-400">{loading ? 'Loading...' : 'No roles defined'}</div>
     {/each}
   </div>
 </div>
 
 <!-- Create Modal -->
 {#if creating}
-  <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabindex="-1"
+  <div class="fixed inset-0 flex items-center justify-center z-50" style="background: rgb(var(--color-overlay) / 0.85); backdrop-filter: blur(4px);" role="dialog" aria-modal="true" tabindex="-1"
        onclick={(e) => { if (e.target === e.currentTarget) creating = false; }}
        onkeydown={(e) => { if (e.key === 'Escape') creating = false; }}>
     <div class="card max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto">
       <div class="flex items-center justify-between mb-4">
-        <h2 class="text-sm font-bold text-white uppercase tracking-wider">Create Role</h2>
+        <h2 class="text-sm font-bold text-strong uppercase tracking-wider">Create Role</h2>
         <button onclick={() => creating = false} class="btn-ghost p-1 text-deep-400"><X size={14} /></button>
       </div>
       <div class="space-y-3 mb-4">
@@ -164,7 +164,7 @@
           Default role for new users
         </label>
       </div>
-      <h3 class="text-xs font-bold text-white uppercase tracking-wider mb-2">Permissions</h3>
+      <h3 class="text-xs font-bold text-strong uppercase tracking-wider mb-2">Permissions</h3>
       <div class="space-y-4">
         {#each PERM_GROUPS as group}
           <div>
@@ -173,7 +173,7 @@
               {#each group.perms as perm}
                 {@const active = newRole.permissions.has(perm)}
                 <button onclick={() => togglePerm(newRole.permissions, perm)}
-                        class="text-xs px-3 py-1.5 rounded border transition-all duration-150 {active ? 'bg-bedrock-500/40 border-bedrock-400 text-white shadow-sm shadow-bedrock-500/20 ring-1 ring-bedrock-500/40' : 'bg-deep-800/80 border-deep-600 text-deep-400 hover:border-deep-400 hover:text-deep-200'}">
+                        class="text-xs px-3 py-1.5 rounded border transition-all duration-150 {active ? 'bg-bedrock-500/40 border-bedrock-400 text-strong shadow-sm shadow-bedrock-500/20 ring-1 ring-bedrock-500/40' : 'bg-deep-800/80 border-deep-600 text-deep-400 hover:border-deep-400 hover:text-deep-200'}">
                   {#if active}<Check size={10} class="inline mr-1 -mt-0.5" />{/if}{permLabel[perm] || perm}
                 </button>
               {/each}
@@ -191,12 +191,12 @@
 
 <!-- Edit Modal -->
 {#if editing}
-  <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabindex="-1"
+  <div class="fixed inset-0 flex items-center justify-center z-50" style="background: rgb(var(--color-overlay) / 0.85); backdrop-filter: blur(4px);" role="dialog" aria-modal="true" tabindex="-1"
        onclick={(e) => { if (e.target === e.currentTarget) editing = null; }}
        onkeydown={(e) => { if (e.key === 'Escape') editing = null; }}>
     <div class="card max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto">
       <div class="flex items-center justify-between mb-4">
-        <h2 class="text-sm font-bold text-white uppercase tracking-wider">Edit {editing.name}</h2>
+        <h2 class="text-sm font-bold text-strong uppercase tracking-wider">Edit {editing.name}</h2>
         <button onclick={() => editing = null} class="btn-ghost p-1 text-deep-400"><X size={14} /></button>
       </div>
       <div class="space-y-3 mb-4">
@@ -206,7 +206,7 @@
           Default role for new users
         </label>
       </div>
-      <h3 class="text-xs font-bold text-white uppercase tracking-wider mb-2">Permissions</h3>
+      <h3 class="text-xs font-bold text-strong uppercase tracking-wider mb-2">Permissions</h3>
       <div class="space-y-4">
         {#each PERM_GROUPS as group}
           <div>
@@ -215,7 +215,7 @@
               {#each group.perms as perm}
                 {@const active = editing!.permissions.has(perm)}
                 <button onclick={() => togglePerm(editing!.permissions, perm)}
-                        class="text-xs px-3 py-1.5 rounded border transition-all duration-150 {active ? 'bg-bedrock-500/40 border-bedrock-400 text-white shadow-sm shadow-bedrock-500/20 ring-1 ring-bedrock-500/40' : 'bg-deep-800/80 border-deep-600 text-deep-400 hover:border-deep-400 hover:text-deep-200'}">
+                        class="text-xs px-3 py-1.5 rounded border transition-all duration-150 {active ? 'bg-bedrock-500/40 border-bedrock-400 text-strong shadow-sm shadow-bedrock-500/20 ring-1 ring-bedrock-500/40' : 'bg-deep-800/80 border-deep-600 text-deep-400 hover:border-deep-400 hover:text-deep-200'}">
                   {#if active}<Check size={10} class="inline mr-1 -mt-0.5" />{/if}{permLabel[perm] || perm}
                 </button>
               {/each}
@@ -233,11 +233,11 @@
 
 <!-- Delete Confirmation -->
 {#if deleting}
-  <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabindex="-1"
+  <div class="fixed inset-0 flex items-center justify-center z-50" style="background: rgb(var(--color-overlay) / 0.85); backdrop-filter: blur(4px);" role="dialog" aria-modal="true" tabindex="-1"
        onclick={(e) => { if (e.target === e.currentTarget) deleting = null; }}
        onkeydown={(e) => { if (e.key === 'Escape') deleting = null; }}>
     <div class="card max-w-sm w-full mx-4">
-      <h2 class="text-sm font-bold text-white uppercase tracking-wider mb-2">Delete Role</h2>
+      <h2 class="text-sm font-bold text-strong uppercase tracking-wider mb-2">Delete Role</h2>
       <p class="text-xs text-deep-300 mb-4">Are you sure you want to delete <strong>{deleting}</strong>?</p>
       <div class="flex justify-end gap-2">
         <button onclick={() => deleting = null} class="btn-secondary text-xs">Cancel</button>

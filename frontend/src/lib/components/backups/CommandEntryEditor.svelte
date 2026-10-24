@@ -78,13 +78,13 @@
     {#if testResult}
       <div class="mt-1.5 p-1.5 rounded bg-deep-900/80 border border-deep-600/30 font-mono text-xs max-h-24 overflow-y-auto">
         <div class="flex items-center gap-2 mb-0.5">
-          <span class="text-deep-500 uppercase tracking-wider text-[10px]">exit {testResult.exit_code}</span>
+          <span class="text-deep-400 uppercase tracking-wider text-[10px]">exit {testResult.exit_code}</span>
           {#if testResult.exit_code === 0}
             <span class="text-green-500 text-[10px]">OK</span>
           {:else}
             <span class="text-red-400 text-[10px]">FAIL</span>
           {/if}
-          <button onclick={() => testResult = null} class="ml-auto text-deep-500 hover:text-deep-300 text-[10px]">&times;</button>
+          <button onclick={() => testResult = null} class="ml-auto text-deep-400 hover:text-deep-300 text-[10px]">&times;</button>
         </div>
         <pre class="text-deep-200 whitespace-pre-wrap break-all">{testResult.output}</pre>
       </div>

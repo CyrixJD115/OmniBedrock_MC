@@ -1,0 +1,14 @@
+.git
+.env
+.venv
+backend-py
+bedrock_server
+backend/data
+backend/backups
+backend/logs
+frontend/node_modules
+frontend/.svelte-kit
+frontend/build
+target
+.data
+__pycache__

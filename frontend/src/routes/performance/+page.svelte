@@ -30,7 +30,7 @@
 
 <div class="space-y-4">
   <div>
-    <h1 class="text-lg font-bold text-white uppercase tracking-widest">Performance</h1>
+    <h1 class="text-lg font-bold text-strong uppercase tracking-widest">Performance</h1>
     <div class="pixel-divider mt-2 w-40"></div>
   </div>
 
@@ -40,21 +40,21 @@
         <span class="text-deep-400 text-xs uppercase tracking-wider">CPU Avg</span>
         <Cpu size={16} class="text-teal-400" />
       </div>
-      <p class="text-xl font-bold text-white font-mono">{cpuAvg}%</p>
+      <p class="text-xl font-bold text-strong font-mono">{cpuAvg}%</p>
     </div>
     <div class="card">
       <div class="flex items-center justify-between mb-2">
         <span class="text-deep-400 text-xs uppercase tracking-wider">Memory Avg</span>
         <HardDrive size={16} class="text-bedrock-400" />
       </div>
-      <p class="text-xl font-bold text-white font-mono">{memAvg} MB</p>
+      <p class="text-xl font-bold text-strong font-mono">{memAvg} MB</p>
     </div>
     <div class="card">
       <div class="flex items-center justify-between mb-2">
         <span class="text-deep-400 text-xs uppercase tracking-wider">TPS Avg</span>
         <Activity size={16} class="text-teal-400" />
       </div>
-      <p class="text-xl font-bold text-white font-mono">{tpsAvg}</p>
+      <p class="text-xl font-bold text-strong font-mono">{tpsAvg}</p>
     </div>
   </div>
 
@@ -77,7 +77,7 @@
               <td class="py-1 px-3 text-right">{h.tps.toFixed(1)}</td>
             </tr>
           {:else}
-            <tr><td colspan="4" class="text-center py-8 text-deep-500">Waiting for data...</td></tr>
+            <tr><td colspan="4" class="text-center py-8 text-deep-400">Waiting for data...</td></tr>
           {/each}
         </tbody>
       </table>

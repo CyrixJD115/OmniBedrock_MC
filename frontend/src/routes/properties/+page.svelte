@@ -53,7 +53,7 @@
 <div class="space-y-4">
   <div class="flex items-center justify-between">
     <div>
-      <h1 class="text-lg font-bold text-white uppercase tracking-widest">Server Properties</h1>
+      <h1 class="text-lg font-bold text-strong uppercase tracking-widest">Server Properties</h1>
       <div class="pixel-divider mt-2 w-48"></div>
     </div>
     <div class="flex gap-2">
@@ -121,7 +121,7 @@
               <tr class="border-b border-deep-700/20 hover:bg-deep-800/30">
                 <td class="py-1.5 px-3 font-mono text-bedrock-400">{entry.key}</td>
                 <td class="py-1.5 px-3">{entry.value}</td>
-                <td class="py-1.5 px-3 text-deep-500">{entry.inline_comment}</td>
+                <td class="py-1.5 px-3 text-deep-400">{entry.inline_comment}</td>
               </tr>
             {/each}
           </tbody>

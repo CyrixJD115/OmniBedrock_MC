@@ -1,0 +1,30 @@
+name: Rust and frontend
+on: [push, pull_request]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - working-directory: frontend
+        run: |
+          npm ci
+          cp vite.config.example.ts vite.config.ts
+          npm run check
+          npm run build
+      - run: cargo build --release --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: omnibedrock-linux
+          path: target/release/omnibedrock

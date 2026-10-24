@@ -1,0 +1,42 @@
+# OmniBedrock configuration file.
+#
+# Locations searched (first match wins, never merged):
+#   1. the file given via --config
+#   2. <executable dir>/config.toml
+#   3. ~/.config/omnibedrock/config.toml   (Linux; XDG_CONFIG_HOME honored)
+# In --portable mode only <executable dir>/portable/config.toml is read.
+#
+# Precedence (lowest to highest):
+#   defaults → portable layout → this file → environment → CLI flags
+#
+# Secrets (SECRET_KEY, CURSEFORGE_API_KEY, ADMIN_PASSWORD) are NOT read from
+# this file — put them in the environment or a .env file next to the binary.
+
+# ── network ────────────────────────────────────────────────────────────────
+# host = "0.0.0.0"
+# port = 17754
+# api_prefix = "/api/v1"
+# cors_origins = ["http://localhost:17755", "http://localhost:5173"]
+
+# ── storage paths (relative paths resolve against the working directory) ───
+# bedrock_server_dir = "bedrock_server"   # game server + its worlds/
+# data_dir           = "backend/data"     # accounts, toolchains, caches, settings
+# logs_dir           = "backend/logs"     # panel + audit logs
+# backups_dir        = "backend/backups"  # world backups
+# cache_dir          = "backend/data/cache" # defaults to <data_dir>/cache
+
+# ── server backends ────────────────────────────────────────────────────────
+# endstone_bin     = "/path/to/endstone"    # overrides the panel-managed toolchain
+# endstone_python  = "/path/to/python"      # legacy fallback; must import endstone
+# broadcaster_dir  = "backend/broadcaster"
+# broadcaster_jar  = "/path/to/MCXboxBroadcastStandalone.jar"
+# java_bin         = "/usr/bin/java"
+
+# ── tuning ─────────────────────────────────────────────────────────────────
+# debug = false
+# ws_heartbeat_interval = 30
+# console_max_lines = 2000
+# console_max_bytes = 16777216
+# console_max_line_bytes = 65536
+# console_journal_bytes = 268435456
+# command_queue_capacity = 256

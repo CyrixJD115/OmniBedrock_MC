@@ -2,10 +2,11 @@
   import { page } from '$app/stores';
   import { serverStatus } from '$stores/index';
   import { currentUser, userPermissions } from '$stores/auth';
+  import { themeMode, cycleMode } from '$lib/theme';
   import {
     LayoutDashboard, Terminal, FileCode, HardDrive, Package, Globe,
     Users, UserCog, FileText, BarChart3, Settings, ChevronLeft, Server, Power, LogOut,
-    UserCircle, Shield, ClipboardList
+    UserCircle, Shield, ClipboardList, Radio, Store, Sun, Moon, Monitor
   } from '@lucide/svelte';
 
   let { sidebarOpen, onlogout }: { sidebarOpen: boolean; onlogout?: () => void } = $props();
@@ -16,8 +17,10 @@
     { href: '/properties', icon: FileCode, label: 'Properties', perm: 'PROPERTIES_VIEW' },
     { href: '/backups', icon: HardDrive, label: 'Backups', perm: 'BACKUPS_VIEW' },
     { href: '/addons', icon: Package, label: 'Addons', perm: 'ADDONS_VIEW' },
+    { href: '/store', icon: Store, label: 'Store', perm: 'STORE_VIEW' },
     { href: '/worlds', icon: Globe, label: 'Worlds', perm: '' },
     { href: '/players', icon: Users, label: 'Players', perm: 'PLAYERS_VIEW' },
+    { href: '/broadcaster', icon: Radio, label: 'Broadcaster', perm: 'BROADCASTER_VIEW' },
     { href: '/users', icon: UserCog, label: 'Users', perm: 'USERS_VIEW' },
     { href: '/roles', icon: Shield, label: 'Roles', perm: 'USERS_VIEW' },
     { href: '/files', icon: FileText, label: 'Files', perm: 'FILES_VIEW' },
@@ -37,31 +40,40 @@
   function navClass(href: string): string {
     const active = currentPath === href;
     const base = 'flex items-center gap-3 px-3 py-2.5 text-sm font-medium uppercase tracking-wider transition-all duration-150 border-l-2';
-    if (active) return `${base} bg-bedrock-500/10 border-bedrock-400 text-bedrock-300`;
-    return `${base} border-transparent text-deep-300 hover:bg-deep-800/50 hover:border-deep-500 hover:text-deep-100`;
+    if (active) return `${base} bg-bedrock-500/15 border-bedrock-400 text-bedrock-300`;
+    return `${base} border-transparent text-deep-300 hover:bg-deep-700/60 hover:border-deep-500 hover:text-deep-100`;
   }
+
+  // Icon reflecting the *effective* mode; the label shows the choice.
+  const modeIcon = $derived($themeMode === 'light' ? Sun : $themeMode === 'dark' ? Moon : Monitor);
+  const modeTitle = $derived(
+    $themeMode === 'light' ? 'Light mode — click to switch'
+    : $themeMode === 'dark' ? 'Dark mode — click to switch'
+    : 'Following system — click to switch'
+  );
 </script>
 
-<aside class={"h-full bg-deep-900 border-r border-deep-700/50 flex flex-col transition-all duration-200 " + (sidebarOpen ? 'w-56' : 'w-16')}>
-  <div class="flex items-center justify-between p-4 border-b border-deep-700/50">
+<aside class={"h-full bg-deep-900 border-r-2 border-deep-700/60 flex flex-col transition-all duration-200 " + (sidebarOpen ? 'w-56' : 'w-16')}>
+  <div class="flex items-center justify-between p-4 border-b-2 border-deep-700/60">
     {#if sidebarOpen}
-      <div class="flex items-center gap-2.5">
-        <div class="w-4 h-4 bg-bedrock-500" style="box-shadow: 0 0 12px rgba(6,182,212,0.5);"></div>
-        <span class="font-bold text-white text-sm uppercase tracking-widest" style="font-family: 'Montserrat', sans-serif;">OmniBedrock</span>
+      <div class="flex items-center gap-2.5 min-w-0">
+        <div class="w-4 h-4 shrink-0 bg-bedrock-500 shadow-glow-accent"></div>
+        <span class="mc-heading font-bold text-strong text-sm uppercase tracking-widest truncate">OmniBedrock</span>
       </div>
     {/if}
     <button onclick={() => sidebarOpen = !sidebarOpen}
-            class="p-1.5 hover:bg-deep-800 text-deep-400 hover:text-white transition-colors rounded">
+            class="p-1.5 hover:bg-deep-700/60 text-deep-400 hover:text-strong transition-colors rounded-sm shrink-0"
+            aria-label={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}>
       <ChevronLeft size={16} class={!sidebarOpen ? 'rotate-180' : ''} />
     </button>
   </div>
 
   <!-- User info -->
   {#if sidebarOpen && $currentUser}
-    <div class="px-4 py-3 border-b border-deep-700/30 flex items-center gap-2.5">
+    <div class="px-4 py-3 border-b border-deep-700/40 flex items-center gap-2.5">
       <UserCircle size={18} class="text-bedrock-400 shrink-0" />
       <div class="min-w-0">
-        <p class="text-xs font-medium text-white truncate">{$currentUser.display_name}</p>
+        <p class="text-xs font-medium text-strong truncate">{$currentUser.display_name}</p>
         <p class="text-[10px] uppercase tracking-wider text-deep-400">{$currentUser.role}</p>
       </div>
     </div>
@@ -70,7 +82,7 @@
   <nav class="flex-1 overflow-y-auto p-2 space-y-0.5">
     {#each navItems as item}
       {#if canAccess(item.perm)}
-        <a href={item.href} class={navClass(item.href)}>
+        <a href={item.href} class={navClass(item.href)} title={sidebarOpen ? undefined : item.label}>
           <item.icon size={16} class="shrink-0" />
           {#if sidebarOpen}
             <span>{item.label}</span>
@@ -80,7 +92,7 @@
     {/each}
   </nav>
 
-  <div class="p-3 border-t border-deep-700/50 space-y-2">
+  <div class="p-3 border-t-2 border-deep-700/60 space-y-2">
     {#if sidebarOpen}
       <div class="flex items-center gap-2">
         <span class="status-dot {$serverStatus.status}"></span>
@@ -88,9 +100,24 @@
           {$serverStatus.status}
         </span>
       </div>
+    {:else}
+      <div class="flex justify-center" title="Server {$serverStatus.status}">
+        <span class="status-dot {$serverStatus.status}"></span>
+      </div>
     {/if}
+    <div class="flex items-center {sidebarOpen ? 'gap-2' : 'justify-center'}">
+      <button onclick={cycleMode} title={modeTitle} aria-label={modeTitle}
+              class="flex items-center {sidebarOpen ? 'gap-3 px-3 py-2 flex-1' : 'p-2'} text-xs uppercase tracking-wider text-deep-400 hover:text-bedrock-300 hover:bg-deep-700/60 transition-colors border-l-2 border-transparent hover:border-bedrock-500/50 rounded-none">
+        {#key $themeMode}
+          <modeIcon size={14} class="shrink-0" />
+        {/key}
+        {#if sidebarOpen}
+          <span class="capitalize">{$themeMode}</span>
+        {/if}
+      </button>
+    </div>
     <button onclick={onlogout}
-            class="flex items-center gap-3 px-3 py-2 w-full text-xs uppercase tracking-wider text-deep-400 hover:text-red-400 hover:bg-deep-800/50 transition-colors border-l-2 border-transparent hover:border-red-500/50">
+            class="flex items-center gap-3 px-3 py-2 w-full text-xs uppercase tracking-wider text-deep-400 hover:text-red-400 hover:bg-deep-700/60 transition-colors border-l-2 border-transparent hover:border-red-500/50 {sidebarOpen ? '' : 'justify-center'}">
       <LogOut size={14} class="shrink-0" />
       {#if sidebarOpen}
         <span>Disconnect</span>

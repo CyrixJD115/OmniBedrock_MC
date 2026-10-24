@@ -70,7 +70,7 @@
 <div class="space-y-4">
   <div class="flex items-center justify-between">
     <div>
-      <h1 class="text-lg font-bold text-white uppercase tracking-widest">Users</h1>
+      <h1 class="text-lg font-bold text-strong uppercase tracking-widest">Users</h1>
       <div class="pixel-divider mt-2 w-24"></div>
     </div>
     <div class="flex gap-2">
@@ -100,7 +100,7 @@
         <tbody>
           {#each users as u}
             <tr class="border-b border-deep-700/20 hover:bg-deep-800/30">
-              <td class="py-1.5 px-3 font-medium text-white">{u.username}</td>
+              <td class="py-1.5 px-3 font-medium text-strong">{u.username}</td>
               <td class="py-1.5 px-3">{u.display_name}</td>
               <td class="py-1.5 px-3">
                 <span class="text-{u.role === 'owner' ? 'amber' : u.role === 'admin' ? 'bedrock' : u.role === 'moderator' ? 'teal' : 'deep'}-400">
@@ -120,7 +120,7 @@
               {/if}
             </tr>
           {:else}
-            <tr><td colspan="{$userPermissions.includes('USERS_EDIT') || $userPermissions.includes('USERS_DELETE') ? 5 : 4}" class="text-center py-8 text-deep-500">{loading ? 'Loading...' : 'No users'}</td></tr>
+            <tr><td colspan="{$userPermissions.includes('USERS_EDIT') || $userPermissions.includes('USERS_DELETE') ? 5 : 4}" class="text-center py-8 text-deep-400">{loading ? 'Loading...' : 'No users'}</td></tr>
           {/each}
         </tbody>
       </table>
@@ -130,11 +130,11 @@
 
 <!-- Create Modal -->
 {#if showCreateModal}
-  <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabindex="-1"
+  <div class="fixed inset-0 flex items-center justify-center z-50" style="background: rgb(var(--color-overlay) / 0.85); backdrop-filter: blur(4px);" role="dialog" aria-modal="true" tabindex="-1"
        onclick={(e) => { if (e.target === e.currentTarget) showCreateModal = false; }}
        onkeydown={(e) => { if (e.key === 'Escape') showCreateModal = false; }}>
     <div class="card max-w-md w-full mx-4">
-      <h2 class="text-sm font-bold text-white uppercase tracking-wider mb-4">Create User</h2>
+      <h2 class="text-sm font-bold text-strong uppercase tracking-wider mb-4">Create User</h2>
       <div class="space-y-3">
         <input bind:value={form.username} placeholder="Username" class="input w-full text-xs" />
         <input bind:value={form.password} type="password" placeholder="Password" class="input w-full text-xs" />
@@ -156,11 +156,11 @@
 
 <!-- Edit Modal -->
 {#if showEditModal && editingUser}
-  <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabindex="-1"
+  <div class="fixed inset-0 flex items-center justify-center z-50" style="background: rgb(var(--color-overlay) / 0.85); backdrop-filter: blur(4px);" role="dialog" aria-modal="true" tabindex="-1"
        onclick={(e) => { if (e.target === e.currentTarget) { showEditModal = false; editingUser = null; } }}
        onkeydown={(e) => { if (e.key === 'Escape') { showEditModal = false; editingUser = null; } }}>
     <div class="card max-w-md w-full mx-4">
-      <h2 class="text-sm font-bold text-white uppercase tracking-wider mb-4">Edit {editingUser.username}</h2>
+      <h2 class="text-sm font-bold text-strong uppercase tracking-wider mb-4">Edit {editingUser.username}</h2>
       <div class="space-y-3">
         <input bind:value={editForm.display_name} placeholder="Display Name" class="input w-full text-xs" />
         <select bind:value={editForm.role} class="input w-full text-xs">
@@ -181,11 +181,11 @@
 
 <!-- Delete Confirmation -->
 {#if deleting}
-  <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabindex="-1"
+  <div class="fixed inset-0 flex items-center justify-center z-50" style="background: rgb(var(--color-overlay) / 0.85); backdrop-filter: blur(4px);" role="dialog" aria-modal="true" tabindex="-1"
        onclick={(e) => { if (e.target === e.currentTarget) deleting = null; }}
        onkeydown={(e) => { if (e.key === 'Escape') deleting = null; }}>
     <div class="card max-w-sm w-full mx-4">
-      <h2 class="text-sm font-bold text-white uppercase tracking-wider mb-2">Delete User</h2>
+      <h2 class="text-sm font-bold text-strong uppercase tracking-wider mb-2">Delete User</h2>
       <p class="text-xs text-deep-300 mb-4">Are you sure you want to delete <strong>{deleting}</strong>? This cannot be undone.</p>
       <div class="flex justify-end gap-2">
         <button onclick={() => deleting = null} class="btn-secondary text-xs">Cancel</button>

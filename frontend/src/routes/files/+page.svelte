@@ -40,7 +40,7 @@
 <div class="space-y-4">
   <div class="flex items-center justify-between">
     <div>
-      <h1 class="text-lg font-bold text-white uppercase tracking-widest">Config Files</h1>
+      <h1 class="text-lg font-bold text-strong uppercase tracking-widest">Config Files</h1>
       <div class="pixel-divider mt-2 w-28"></div>
     </div>
     <button onclick={async () => { try { files = await api.listIniFiles(); } catch {} }} class="btn-ghost p-2"><RotateCw size={14} /></button>
@@ -58,7 +58,7 @@
             <span class="truncate flex-1">{f.name}</span>
             <button onclick={(e) => { e.stopPropagation(); del(f.name); }} class="p-0.5 hover:text-red-400 shrink-0"><Trash2 size={10} /></button>
           </div>
-        {:else}<p class="text-deep-500 text-xs py-4">No files</p>{/each}
+        {:else}<p class="text-deep-400 text-xs py-4">No files</p>{/each}
       </div>
     </div>
 
@@ -70,7 +70,7 @@
         </div>
         <textarea bind:value={content} class="input w-full h-[55vh] font-mono text-sm" spellcheck="false"></textarea>
       {:else}
-        <div class="flex items-center justify-center h-48 text-deep-500 text-xs uppercase tracking-wider">Select a file</div>
+        <div class="flex items-center justify-center h-48 text-deep-400 text-xs uppercase tracking-wider">Select a file</div>
       {/if}
     </div>
   </div>

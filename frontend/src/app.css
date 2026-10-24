@@ -2,130 +2,466 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ============================================================================
+   OmniBedrock design tokens
+   ----------------------------------------------------------------------------
+   All values live on <html> as RGB channel triplets so Tailwind's opacity
+   modifiers keep working. Selectors, in override order (later wins at equal
+   specificity):
+
+     :root                                      dark · slate surfaces · cyan
+     :root[data-theme='X']                      accent ramp (dark values)
+     :root[data-theme='minecraft']              + earthy surface ramp (dark)
+     :root[data-mode='light']                   light · slate surfaces · status
+     :root[data-theme='X'][data-mode='light']   accent ramp (light values)
+     :root[data-theme='minecraft'][data-mode='light']  earthy light surfaces
+
+   Adding a theme = one accent block (dark + light). No component changes.
+   ========================================================================= */
+
+:root {
+  color-scheme: dark;
+
+  /* -- surfaces · slate dark ------------------------------------------- */
+  --deep-50: 226 232 240;
+  --deep-100: 200 208 220;
+  --deep-200: 158 174 196;
+  --deep-300: 111 138 168;
+  --deep-400: 84 116 156;
+  --deep-500: 45 74 106;
+  --deep-600: 26 48 80;
+  --deep-700: 15 30 54;
+  --deep-800: 10 20 36;
+  --deep-900: 6 13 24;
+  --deep-950: 3 8 16;
+
+  /* -- emphasis text / scrim / shadow / bevels -------------------------- */
+  --color-strong: 245 248 252;
+  --color-overlay: 3 8 16;
+  --shadow-block: rgb(0 0 0 / 0.55);
+  --edge-top: rgb(255 255 255 / 0.32);
+  --edge-bottom: rgb(0 0 0 / 0.45);
+  --mc-text-shadow: rgb(0 0 0 / 0.55);
+  --grid-line: 45 74 106;
+  --grid-alpha: 0.16;
+  --glow-alpha: 0.05;
+
+  /* -- terminal (the console viewport stays dark in every theme/mode, like
+     the in-game chat log; these tokens are intentionally never overridden) */
+  --term-bg: 8 13 20;
+  --term-error: 248 113 113;
+  --term-warn: 250 204 21;
+  --term-info: 103 232 249;
+  --term-debug: 74 222 128;
+  --term-local: 129 140 248;
+  --term-text: 226 232 240;
+
+  /* -- semantic status · dark ------------------------------------------ */
+  --c-red-100: 254 226 226; --c-red-200: 254 202 202; --c-red-300: 252 165 165;
+  --c-red-400: 248 113 113; --c-red-500: 239 68 68; --c-red-600: 220 38 38;
+  --c-red-700: 185 28 28; --c-red-900: 127 29 29; --c-red-950: 69 10 10;
+  --c-green-300: 134 239 172; --c-green-400: 74 222 128; --c-green-500: 34 197 94;
+  --c-green-700: 21 128 61; --c-green-900: 20 83 45;
+  --c-yellow-300: 253 224 71; --c-yellow-400: 250 204 21; --c-yellow-500: 234 179 8;
+  --c-yellow-600: 202 138 4; --c-yellow-700: 161 98 7; --c-yellow-900: 113 63 18;
+  --c-teal-300: 94 234 212; --c-teal-400: 45 212 191; --c-teal-500: 20 184 166;
+  --c-teal-600: 13 148 136; --c-teal-700: 15 118 110; --c-teal-950: 4 47 46;
+  --c-blue-400: 96 165 250;
+  --c-purple-400: 192 132 252;
+  --c-indigo-400: 129 140 248;
+
+  /* -- accent · cyan (default) · dark ---------------------------------- */
+  --bedrock-50: 236 254 255; --bedrock-100: 207 250 254; --bedrock-200: 165 243 252;
+  --bedrock-300: 103 232 249; --bedrock-400: 34 211 238; --bedrock-500: 6 182 212;
+  --bedrock-600: 8 145 178; --bedrock-700: 14 116 144; --bedrock-800: 21 94 117;
+  --bedrock-900: 22 78 99; --bedrock-950: 8 51 68;
+}
+
+/* -- accent ramps · dark variants ---------------------------------------- */
+:root[data-theme='cyan'] {
+  --bedrock-50: 236 254 255; --bedrock-100: 207 250 254; --bedrock-200: 165 243 252;
+  --bedrock-300: 103 232 249; --bedrock-400: 34 211 238; --bedrock-500: 6 182 212;
+  --bedrock-600: 8 145 178; --bedrock-700: 14 116 144; --bedrock-800: 21 94 117;
+  --bedrock-900: 22 78 99; --bedrock-950: 8 51 68;
+}
+:root[data-theme='blue'] {
+  --bedrock-50: 239 246 255; --bedrock-100: 219 234 254; --bedrock-200: 191 219 254;
+  --bedrock-300: 147 197 253; --bedrock-400: 96 165 250; --bedrock-500: 59 130 246;
+  --bedrock-600: 37 99 235; --bedrock-700: 29 78 216; --bedrock-800: 30 64 175;
+  --bedrock-900: 30 58 138; --bedrock-950: 23 37 84;
+}
+:root[data-theme='purple'] {
+  --bedrock-50: 245 243 255; --bedrock-100: 237 233 254; --bedrock-200: 221 214 254;
+  --bedrock-300: 196 181 253; --bedrock-400: 167 139 250; --bedrock-500: 139 92 246;
+  --bedrock-600: 124 58 237; --bedrock-700: 109 40 217; --bedrock-800: 91 33 182;
+  --bedrock-900: 76 29 149; --bedrock-950: 46 16 101;
+}
+:root[data-theme='red'] {
+  --bedrock-50: 254 242 242; --bedrock-100: 254 226 226; --bedrock-200: 254 202 202;
+  --bedrock-300: 252 165 165; --bedrock-400: 248 113 113; --bedrock-500: 239 68 68;
+  --bedrock-600: 220 38 38; --bedrock-700: 185 28 28; --bedrock-800: 153 27 27;
+  --bedrock-900: 127 29 29; --bedrock-950: 69 10 10;
+}
+:root[data-theme='orange'] {
+  --bedrock-50: 255 247 237; --bedrock-100: 255 237 213; --bedrock-200: 254 215 170;
+  --bedrock-300: 253 186 116; --bedrock-400: 251 146 60; --bedrock-500: 249 115 22;
+  --bedrock-600: 234 88 12; --bedrock-700: 194 65 12; --bedrock-800: 154 52 18;
+  --bedrock-900: 124 45 18; --bedrock-950: 67 20 7;
+}
+:root[data-theme='pink'] {
+  --bedrock-50: 253 242 248; --bedrock-100: 252 231 243; --bedrock-200: 251 207 232;
+  --bedrock-300: 249 168 212; --bedrock-400: 244 114 182; --bedrock-500: 236 72 153;
+  --bedrock-600: 219 39 119; --bedrock-700: 190 24 93; --bedrock-800: 157 23 77;
+  --bedrock-900: 131 24 67; --bedrock-950: 80 7 36;
+}
+:root[data-theme='teal'] {
+  --bedrock-50: 240 253 250; --bedrock-100: 204 251 241; --bedrock-200: 153 246 228;
+  --bedrock-300: 94 234 212; --bedrock-400: 45 212 191; --bedrock-500: 20 184 166;
+  --bedrock-600: 13 148 136; --bedrock-700: 15 118 110; --bedrock-800: 17 94 89;
+  --bedrock-900: 19 78 74; --bedrock-950: 4 47 46;
+}
+/* Minecraft: Bedrock-green accent + earthy deepslate surfaces (dark). */
+:root[data-theme='minecraft'] {
+  --bedrock-50: 240 253 244; --bedrock-100: 199 240 208; --bedrock-200: 148 220 163;
+  --bedrock-300: 103 197 124; --bedrock-400: 74 167 62; --bedrock-500: 60 133 39;
+  --bedrock-600: 47 106 31; --bedrock-700: 38 86 25; --bedrock-800: 29 66 19;
+  --bedrock-900: 22 51 14; --bedrock-950: 13 30 8;
+
+  --deep-50: 237 240 227; --deep-100: 212 220 198; --deep-200: 180 192 162;
+  --deep-300: 147 163 126; --deep-400: 113 131 92; --deep-500: 74 88 57;
+  --deep-600: 56 69 43; --deep-700: 43 54 33; --deep-800: 34 44 25;
+  --deep-900: 26 35 19; --deep-950: 19 26 14;
+
+  --color-strong: 238 242 226;
+  --color-overlay: 10 14 6;
+  --mc-text-shadow: rgb(0 0 0 / 0.5);
+  --grid-line: 74 88 57;
+}
+
+/* -- light mode · slate surfaces + readable status colors ----------------- */
+:root[data-mode='light'] {
+  color-scheme: light;
+
+  --deep-50: 22 35 60;
+  --deep-100: 43 58 88;
+  --deep-200: 56 72 102;
+  --deep-300: 71 88 122;
+  --deep-400: 91 109 140;
+  --deep-500: 159 176 201;
+  --deep-600: 201 212 229;
+  --deep-700: 210 220 236;
+  --deep-800: 247 249 252;
+  --deep-900: 238 242 248;
+  --deep-950: 228 234 243;
+
+  --color-strong: 19 28 46;
+  --color-overlay: 15 23 42;
+  --shadow-block: rgb(51 65 85 / 0.3);
+  --edge-top: rgb(255 255 255 / 0.85);
+  --edge-bottom: rgb(15 23 42 / 0.28);
+  --mc-text-shadow: rgb(30 41 59 / 0.16);
+  --grid-line: 100 116 139;
+  --grid-alpha: 0.14;
+  --glow-alpha: 0.04;
+
+  --c-red-100: 127 29 29; --c-red-200: 153 27 27; --c-red-300: 185 28 28;
+  --c-red-400: 185 28 28; --c-red-500: 220 38 38; --c-red-600: 185 28 28;
+  --c-red-700: 153 27 27; --c-red-900: 254 226 226; --c-red-950: 254 202 202;
+  --c-green-300: 21 128 61; --c-green-400: 22 163 74; --c-green-500: 22 163 74;
+  --c-green-700: 21 128 61; --c-green-900: 220 252 231;
+  --c-yellow-300: 133 77 14; --c-yellow-400: 146 64 14; --c-yellow-500: 161 98 7;
+  --c-yellow-600: 133 77 14; --c-yellow-700: 120 53 15; --c-yellow-900: 254 249 195;
+  --c-teal-300: 15 118 110; --c-teal-400: 13 148 136; --c-teal-500: 13 148 136;
+  --c-teal-600: 15 118 110; --c-teal-700: 17 94 89; --c-teal-950: 204 251 241;
+  --c-blue-400: 37 99 235;
+  --c-purple-400: 147 51 234;
+  --c-indigo-400: 79 70 229;
+}
+
+/* -- accent ramps · light variants (text shades deepen for contrast) ----- */
+:root[data-theme='cyan'][data-mode='light'] {
+  --bedrock-200: 103 232 249; --bedrock-300: 14 116 144; --bedrock-400: 14 116 144;
+  --bedrock-500: 6 182 212; --bedrock-600: 8 145 178; --bedrock-700: 14 116 144;
+}
+:root[data-theme='blue'][data-mode='light'] {
+  --bedrock-200: 147 197 253; --bedrock-300: 37 99 235; --bedrock-400: 37 99 235;
+  --bedrock-500: 59 130 246; --bedrock-600: 37 99 235; --bedrock-700: 29 78 216;
+}
+:root[data-theme='purple'][data-mode='light'] {
+  --bedrock-200: 221 214 254; --bedrock-300: 124 58 237; --bedrock-400: 109 40 217;
+  --bedrock-500: 139 92 246; --bedrock-600: 109 40 217; --bedrock-700: 91 33 182;
+}
+:root[data-theme='red'][data-mode='light'] {
+  --bedrock-200: 254 202 202; --bedrock-300: 185 28 28; --bedrock-400: 185 28 28;
+  --bedrock-500: 220 38 38; --bedrock-600: 185 28 28; --bedrock-700: 153 27 27;
+}
+:root[data-theme='orange'][data-mode='light'] {
+  --bedrock-200: 254 215 170; --bedrock-300: 194 65 12; --bedrock-400: 194 65 12;
+  --bedrock-500: 234 88 12; --bedrock-600: 194 65 12; --bedrock-700: 154 52 18;
+}
+:root[data-theme='pink'][data-mode='light'] {
+  --bedrock-200: 251 207 232; --bedrock-300: 190 24 93; --bedrock-400: 190 24 93;
+  --bedrock-500: 219 39 119; --bedrock-600: 190 24 93; --bedrock-700: 157 23 77;
+}
+:root[data-theme='teal'][data-mode='light'] {
+  --bedrock-200: 153 246 228; --bedrock-300: 13 148 136; --bedrock-400: 13 148 136;
+  --bedrock-500: 13 148 136; --bedrock-600: 15 118 110; --bedrock-700: 17 94 89;
+}
+/* Minecraft light: Bedrock-green accent + warm stone surfaces. */
+:root[data-theme='minecraft'][data-mode='light'] {
+  --bedrock-200: 148 220 163; --bedrock-300: 44 106 28; --bedrock-400: 47 106 31;
+  --bedrock-500: 60 133 39; --bedrock-600: 47 106 31; --bedrock-700: 38 86 25;
+
+  --deep-50: 28 33 20;
+  --deep-100: 44 51 35;
+  --deep-200: 58 66 48;
+  --deep-300: 73 82 58;
+  --deep-400: 93 102 71;
+  --deep-500: 176 174 150;
+  --deep-600: 196 194 171;
+  --deep-700: 216 214 190;
+  --deep-800: 247 246 236;
+  --deep-900: 239 237 223;
+  --deep-950: 229 227 209;
+
+  --color-strong: 26 31 18;
+  --color-overlay: 28 33 20;
+  --shadow-block: rgb(67 60 35 / 0.3);
+  --mc-text-shadow: rgb(46 42 24 / 0.18);
+  --grid-line: 132 128 100;
+}
+
+/* ============================================================================
+   Base
+   ========================================================================= */
+
 @layer base {
   * {
     scrollbar-width: thin;
-    scrollbar-color: #1a3050 #0a0c14;
+    scrollbar-color: rgb(var(--deep-500) / 0.9) rgb(var(--deep-950));
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
   }
 
   body {
-    @apply bg-deep-950 text-deep-50 font-body;
+    @apply text-deep-50 font-body;
+    background-color: rgb(var(--deep-950));
+    /* Faint accent glow + a barely-there block grid: our Minecraft nod
+       without hurting readability. */
     background-image:
-      radial-gradient(ellipse at 50% 0%, rgba(6, 145, 178, 0.03) 0%, transparent 60%),
-      radial-gradient(ellipse at 50% 100%, rgba(45, 212, 191, 0.02) 0%, transparent 60%);
+      radial-gradient(ellipse at 50% 0%, rgb(var(--bedrock-500) / var(--glow-alpha)) 0%, transparent 60%),
+      linear-gradient(rgb(var(--grid-line) / var(--grid-alpha)) 1px, transparent 1px),
+      linear-gradient(90deg, rgb(var(--grid-line) / var(--grid-alpha)) 1px, transparent 1px);
+    background-size: 100% 100%, 24px 24px, 24px 24px;
+    background-attachment: fixed;
     min-height: 100vh;
   }
 
   ::selection {
-    @apply bg-bedrock-500/30 text-white;
+    @apply bg-bedrock-500/30;
   }
+
+  /* Comfortable focus for keyboard users on anything interactive. */
+  :focus-visible {
+    outline: 2px solid rgb(var(--bedrock-400));
+    outline-offset: 2px;
+  }
+
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: rgb(var(--deep-950)); }
+  ::-webkit-scrollbar-thumb {
+    background: rgb(var(--deep-500) / 0.9);
+    border: 2px solid rgb(var(--deep-950));
+  }
+  ::-webkit-scrollbar-thumb:hover { background: rgb(var(--deep-400)); }
 }
 
+/* ============================================================================
+   Components — the Minecraft layer
+   ========================================================================= */
+
 @layer components {
+  /* Headings get the classic Minecraft "ink offset" shadow. */
+  .mc-heading {
+    text-shadow: 2px 2px 0 var(--mc-text-shadow);
+  }
+
+  .page-title {
+    @apply mc-heading text-lg font-bold uppercase tracking-widest;
+    color: rgb(var(--color-strong));
+  }
+
   .card {
-    @apply bg-deep-800/80 border border-deep-600/50 rounded-sm p-5
-           shadow-block shadow-black/40 backdrop-blur-sm;
+    @apply rounded-sm p-5;
+    background: rgb(var(--deep-800) / 0.85);
+    border: 2px solid rgb(var(--deep-600) / 0.5);
+    box-shadow:
+      inset 2px 2px 0 rgb(255 255 255 / 0.03),
+      inset -1px -1px 0 rgb(0 0 0 / 0.2),
+      3px 3px 0 0 var(--shadow-block);
+    backdrop-blur: 2px;
   }
 
   .card-header {
-    @apply text-base font-bold text-white uppercase tracking-wider mb-3
-           border-b border-deep-600/30 pb-2;
-    font-family: 'Montserrat', system-ui, sans-serif;
-    text-shadow: 0 0 20px rgba(34, 211, 238, 0.15);
+    @apply mb-3 flex items-center gap-2 border-b pb-2 text-sm font-bold uppercase tracking-wider;
+    color: rgb(var(--color-strong));
+    border-color: rgb(var(--deep-600) / 0.4);
+    text-shadow: 2px 2px 0 var(--mc-text-shadow);
   }
 
+  /* Buttons: Bedrock-style bevel (light top edge, dark bottom edge) plus the
+     hard block shadow; pressing sinks the button into the panel. */
   .btn {
-    @apply px-5 py-2.5 font-body font-semibold text-sm uppercase tracking-wider
-           transition-all duration-150 relative overflow-hidden
-           disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none;
-    box-shadow: 3px 3px 0px 0px rgba(0,0,0,0.6);
+    @apply relative overflow-hidden px-5 py-2.5 font-body text-sm font-semibold uppercase tracking-wider transition-all duration-150
+           disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none;
+    color: #fff;
+    box-shadow:
+      inset 0 2px 0 var(--edge-top),
+      inset 0 -3px 0 var(--edge-bottom),
+      3px 3px 0 0 var(--shadow-block);
   }
-
+  .btn:hover:not(:disabled) { filter: brightness(1.1); }
   .btn:active:not(:disabled) {
     transform: translate(2px, 2px);
-    box-shadow: 1px 1px 0px 0px rgba(0,0,0,0.6);
+    box-shadow:
+      inset 0 1px 0 var(--edge-top),
+      inset 0 -1px 0 var(--edge-bottom),
+      1px 1px 0 0 var(--shadow-block);
   }
 
   .btn-primary {
-    @apply btn bg-bedrock-600 hover:bg-bedrock-500 text-white border border-bedrock-400/30;
+    @apply btn;
+    background: rgb(var(--bedrock-600));
+    border: 2px solid rgb(var(--bedrock-700) / 0.6);
   }
+  .btn-primary:hover:not(:disabled) { background: rgb(var(--bedrock-500)); }
 
   .btn-secondary {
-    @apply btn bg-deep-700 hover:bg-deep-600 text-deep-100 border border-deep-500/30;
+    @apply btn;
+    background: rgb(var(--deep-700));
+    color: rgb(var(--deep-100));
+    border: 2px solid rgb(var(--deep-500) / 0.5);
   }
+  .btn-secondary:hover:not(:disabled) { background: rgb(var(--deep-600)); filter: none; }
 
   .btn-danger {
-    @apply btn bg-red-700 hover:bg-red-600 text-white border border-red-400/30;
+    @apply btn;
+    background: rgb(var(--c-red-600));
+    border: 2px solid rgb(var(--c-red-700) / 0.6);
   }
-
-  .btn-ghost {
-    @apply btn bg-transparent hover:bg-deep-800 text-deep-300 border border-transparent;
-    box-shadow: none;
-  }
-
-  .btn-ghost:active:not(:disabled) {
-    transform: none;
-    box-shadow: none;
-  }
+  .btn-danger:hover:not(:disabled) { background: rgb(var(--c-red-500)); }
 
   .btn-success {
-    @apply btn bg-teal-600 hover:bg-teal-500 text-white border border-teal-400/30;
+    @apply btn;
+    background: rgb(var(--c-teal-600));
+    border: 2px solid rgb(var(--c-teal-700) / 0.6);
   }
+  .btn-success:hover:not(:disabled) { background: rgb(var(--c-teal-500)); }
 
-  .input {
-    @apply bg-deep-900 border border-deep-600/50 rounded px-3 py-2.5
-           text-deep-50 placeholder:text-deep-400
-           focus:outline-none focus:border-bedrock-500 focus:shadow-glow-teal
-           transition-all duration-150 font-body text-sm;
+  .btn-ghost {
+    @apply btn;
+    background: transparent;
+    color: rgb(var(--deep-300));
+    border: 2px solid transparent;
+    box-shadow: none;
   }
+  .btn-ghost:hover:not(:disabled) {
+    background: rgb(var(--deep-700) / 0.6);
+    color: rgb(var(--deep-100));
+    filter: none;
+  }
+  .btn-ghost:active:not(:disabled) { transform: none; }
+
+  /* Inputs sit "carved into" the surface, Bedrock text-field style. */
+  .input {
+    @apply rounded-sm px-3 py-2.5 font-body text-sm transition-all duration-150;
+    background: rgb(var(--deep-900));
+    border: 2px solid rgb(var(--deep-600) / 0.7);
+    color: rgb(var(--deep-50));
+    box-shadow: inset 2px 2px 0 rgb(0 0 0 / 0.18);
+  }
+  .input::placeholder { color: rgb(var(--deep-400)); }
+  .input:focus {
+    outline: none;
+    border-color: rgb(var(--bedrock-500));
+    box-shadow:
+      inset 2px 2px 0 rgb(0 0 0 / 0.18),
+      0 0 0 2px rgb(var(--bedrock-500) / 0.25);
+  }
+  .input:disabled { opacity: 0.5; cursor: not-allowed; }
+  select.input option { background: rgb(var(--deep-900)); color: rgb(var(--deep-50)); }
 
   .badge {
-    @apply inline-flex items-center px-2.5 py-1 text-xs font-semibold uppercase tracking-wider;
+    @apply inline-flex items-center rounded-sm px-2.5 py-1 text-xs font-semibold uppercase tracking-wider;
     font-family: 'Montserrat', system-ui, sans-serif;
   }
 
   .badge-running {
-    @apply badge bg-teal-500/15 text-teal-400 border border-teal-500/25;
-    box-shadow: 0 0 12px rgba(45, 212, 191, 0.1);
+    @apply badge;
+    background: rgb(var(--c-teal-500) / 0.15);
+    color: rgb(var(--c-teal-400));
+    border: 1px solid rgb(var(--c-teal-500) / 0.3);
   }
-
   .badge-stopped {
-    @apply badge bg-red-500/15 text-red-400 border border-red-500/25;
+    @apply badge;
+    background: rgb(var(--c-red-500) / 0.15);
+    color: rgb(var(--c-red-400));
+    border: 1px solid rgb(var(--c-red-500) / 0.3);
   }
-
   .badge-warn {
-    @apply badge bg-yellow-500/15 text-yellow-400 border border-yellow-500/25;
+    @apply badge;
+    background: rgb(var(--c-yellow-500) / 0.15);
+    color: rgb(var(--c-yellow-400));
+    border: 1px solid rgb(var(--c-yellow-500) / 0.3);
   }
-
   .badge-info {
-    @apply badge bg-bedrock-500/15 text-bedrock-300 border border-bedrock-500/25;
+    @apply badge;
+    background: rgb(var(--bedrock-500) / 0.15);
+    color: rgb(var(--bedrock-300));
+    border: 1px solid rgb(var(--bedrock-500) / 0.3);
   }
 
   .mc-border {
-    border-style: solid;
-    border-width: 2px;
-    border-color: #1a3050;
+    border: 2px solid rgb(var(--deep-500));
     box-shadow:
-      inset 2px 2px 0 rgba(255,255,255,0.03),
-      inset -1px -1px 0 rgba(0,0,0,0.3);
+      inset 2px 2px 0 rgb(255 255 255 / 0.04),
+      inset -1px -1px 0 rgb(0 0 0 / 0.25);
   }
 
+  /* Pixel-dashed accent rule under page titles. */
   .pixel-divider {
     height: 2px;
     background: repeating-linear-gradient(
       90deg,
-      #1a3050 0px,
-      #1a3050 4px,
+      rgb(var(--bedrock-500) / 0.8) 0px,
+      rgb(var(--bedrock-500) / 0.8) 4px,
       transparent 4px,
       transparent 8px
     );
   }
 
-  .terminal-line-error { color: #f87171; border-left: 2px solid #f8717133; padding-left: 0.5rem; }
-  .terminal-line-warn { color: #fbbf24; border-left: 2px solid #fbbf2433; padding-left: 0.5rem; }
-  .terminal-line-info { color: #67e8f9; border-left: 2px solid #67e8f933; padding-left: 0.5rem; }
-  .terminal-line-debug { color: #34d399; border-left: 2px solid #34d39933; padding-left: 0.5rem; }
-  .terminal-line-local { color: #818cf8; border-left: 2px solid #818cf833; padding-left: 0.5rem; }
+  /* Dark scrim shared by every modal/popover backdrop. */
+  .modal-backdrop {
+    background: rgb(var(--color-overlay) / 0.85);
+    backdrop-filter: blur(4px);
+  }
+
+  .terminal-surface {
+    background: rgb(var(--term-bg));
+    box-shadow:
+      inset 2px 2px 0 rgb(0 0 0 / 0.45),
+      inset -1px -1px 0 rgb(255 255 255 / 0.03),
+      4px 4px 0 0 var(--shadow-block);
+  }
+
+  .terminal-line-error { color: rgb(var(--term-error)); border-left: 2px solid rgb(var(--term-error) / 0.25); padding-left: 0.5rem; }
+  .terminal-line-warn { color: rgb(var(--term-warn)); border-left: 2px solid rgb(var(--term-warn) / 0.25); padding-left: 0.5rem; }
+  .terminal-line-info { color: rgb(var(--term-info)); border-left: 2px solid rgb(var(--term-info) / 0.25); padding-left: 0.5rem; }
+  .terminal-line-debug { color: rgb(var(--term-debug)); border-left: 2px solid rgb(var(--term-debug) / 0.25); padding-left: 0.5rem; }
+  .terminal-line-local { color: rgb(var(--term-local)); border-left: 2px solid rgb(var(--term-local) / 0.25); padding-left: 0.5rem; }
+  .terminal-line-plain { color: rgb(var(--term-text)); }
 }
 
 .status-dot {
@@ -135,6 +471,6 @@
   display: inline-block;
 }
 
-.status-dot.running { background: #2dd4bf; box-shadow: 0 0 8px rgba(45,212,191,0.6); }
-.status-dot.stopped { background: #f87171; box-shadow: 0 0 8px rgba(248,113,113,0.4); }
-.status-dot.starting { background: #fbbf24; box-shadow: 0 0 8px rgba(251,191,36,0.4); animation: pulse 1s infinite; }
+.status-dot.running { background: rgb(var(--c-teal-400)); box-shadow: 0 0 8px rgb(var(--c-teal-400) / 0.6); }
+.status-dot.stopped { background: rgb(var(--c-red-400)); box-shadow: 0 0 8px rgb(var(--c-red-400) / 0.4); }
+.status-dot.starting { background: rgb(var(--c-yellow-400)); box-shadow: 0 0 8px rgb(var(--c-yellow-400) / 0.4); animation: pulse 1s infinite; }

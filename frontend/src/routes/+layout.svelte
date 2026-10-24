@@ -2,8 +2,9 @@
   import '../app.css';
   import Sidebar from '$components/layout/Sidebar.svelte';
   import ToastContainer from '$components/ui/ToastContainer.svelte';
-  import { serverStatus } from '$stores/index';
-  import { currentUser, authToken } from '$stores/auth';
+  import { serverStatus, consoleLines, errorStats, metrics } from '$stores/index';
+  import { detectLevel } from '$lib/console';
+  import { currentUser, authToken, userPermissions } from '$stores/auth';
   import { onMount, onDestroy } from 'svelte';
   import { api, getToken, setToken } from '$lib/api/client';
   import { wsManager } from '$lib/websocket';
@@ -11,39 +12,60 @@
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { initShortcuts, registerShortcut } from '$lib/shortcuts';
+  import { initTheme } from '$lib/theme';
   import type { ConsoleLine } from '$types/index';
 
   let { children }: { children: import('svelte').Snippet } = $props();
 
   let sidebarOpen = $state(true);
   let checkingAuth = $state(true);
+  let mounted = $state(false);
+  let connectedToken = '';
+
+  $effect(() => {
+    const token = $authToken;
+    // A token is optional: with login disabled the backend authenticates
+    // every request (including WebSockets) as the owner account.
+    if (mounted && $currentUser && !isLoginPage && token !== connectedToken) {
+      connectedToken = token;
+      void boot();
+    }
+    if (!token) connectedToken = '';
+  });
 
   const unsubs: Array<() => void> = [];
 
   onDestroy(() => {
     for (const unsub of unsubs) unsub();
     unsubs.length = 0;
-    wsManager.disconnect('/api/v1/console/ws');
-    wsManager.disconnect('/api/v1/performance/ws');
+    wsManager.disconnectAll();
   });
+
+  // Keeps <html data-theme/data-mode> in sync with the persisted preference
+  // (app.html already applied the saved values before first paint).
+  unsubs.push(initTheme());
 
   function logout() {
     localStorage.removeItem('omb_token');
     localStorage.removeItem('omb_user');
     setToken('');
+    consoleBuffer.length = 0;
+    consoleLines.set([]);
+    errorStats.set([]);
+    metrics.set(null);
     currentUser.set(null as any);
     authToken.set('');
     for (const unsub of unsubs) unsub();
     unsubs.length = 0;
-    wsManager.disconnect('/api/v1/console/ws');
-    wsManager.disconnect('/api/v1/performance/ws');
+    wsManager.disconnectAll();
+    goto('/login');
   }
 
   let showShortcuts = $state(false);
 
   onMount(async () => {
     const cleanup = initShortcuts();
-    if (cleanup) onDestroy(cleanup);
+    if (cleanup) unsubs.push(cleanup);
 
     registerShortcut({ key: '?', description: 'Show keyboard shortcuts', handler: () => showShortcuts = !showShortcuts });
     registerShortcut({ key: '1', ctrl: true, description: 'Dashboard', handler: () => goto('/') });
@@ -52,6 +74,13 @@
     registerShortcut({ key: '4', ctrl: true, description: 'Backups', handler: () => goto('/backups') });
     registerShortcut({ key: '5', ctrl: true, description: 'Players', handler: () => goto('/players') });
     registerShortcut({ key: '6', ctrl: true, description: 'Performance', handler: () => goto('/performance') });
+
+    const finish = () => { checkingAuth = false; mounted = true; };
+
+    // Public endpoint: tells us whether a login is even required.
+    let panel: { login_enabled: boolean; default_credentials: boolean } | null = null;
+    try { panel = await api.getPanelSettings(); } catch { /* backend still starting */ }
+    loginDisabled = panel?.login_enabled === false;
 
     const savedToken = typeof localStorage !== 'undefined' ? localStorage.getItem('omb_token') || '' : '';
     const savedUser = typeof localStorage !== 'undefined' ? localStorage.getItem('omb_user') || '' : '';
@@ -64,25 +93,40 @@
           currentUser.set(JSON.parse(savedUser));
         } catch { /* ignore */ }
       }
-      for (let attempt = 0; attempt < 30; attempt++) {
+      // Quick retries while the backend finishes booting (250ms steps).
+      for (let attempt = 0; attempt < 40; attempt++) {
         try {
           const user = await api.getMe();
           currentUser.set(user as any);
           localStorage.setItem('omb_user', JSON.stringify(user));
-          await boot();
-          checkingAuth = false;
+          finish();
           return;
         } catch {
-          if (attempt < 29) await new Promise(r => setTimeout(r, 1000));
+          if (attempt < 39) await new Promise(r => setTimeout(r, 250));
         }
       }
       logout();
+    } else if (panel && panel.login_enabled === false) {
+      // Login is disabled: the backend serves every request as Admin.
+      try {
+        const user = await api.getMe();
+        currentUser.set(user as any);
+        localStorage.setItem('omb_user', JSON.stringify(user));
+        finish();
+        if ($page.url.pathname === '/login') goto('/');
+        return;
+      } catch { /* fall through to the login page */ }
     }
-    checkingAuth = false;
-    if (!isLoginPage) {
+    finish();
+    if (!$currentUser && !isLoginPage) {
       goto('/login');
     }
   });
+
+  $effect(() => {
+    if (loginDisabled && isLoginPage) goto('/');
+  });
+  let loginDisabled = $state(false);
 
   async function boot() {
     try {
@@ -92,8 +136,8 @@
 
     const token = getToken();
     const wsToken = token ? `?token=${token}` : '';
-    unsubs.push(wsManager.connect(`/api/v1/console/ws${wsToken}`, onConsoleMessage));
-    unsubs.push(wsManager.connect(`/api/v1/performance/ws${wsToken}`, onMetricsMessage));
+    if ($userPermissions.includes('CONSOLE_VIEW')) unsubs.push(wsManager.connect(`/api/v1/console/ws${wsToken}`, onConsoleMessage));
+    if ($userPermissions.includes('SERVER_VIEW')) unsubs.push(wsManager.connect(`/api/v1/performance/ws${wsToken}`, onMetricsMessage));
   }
 
   const consoleBuffer: ConsoleLine[] = [];
@@ -103,35 +147,39 @@
     flushPending = false;
     if (consoleBuffer.length === 0) return;
     const batch = consoleBuffer.splice(0);
-    import('$stores/index').then(m => {
-      m.consoleLines.update(lines => {
+    consoleLines.update(lines => {
         for (const item of batch) {
           lines.push(item);
         }
         if (lines.length > 2000) lines.splice(0, lines.length - 2000);
         return lines;
-      });
     });
   }
 
   function onConsoleMessage(data: Record<string, unknown>) {
-    if (data.type !== 'console') return;
-    import('$lib/console').then(c => {
-      const level = (data.level as string) || c.detectLevel(data.line as string);
-      consoleBuffer.push({ text: data.line as string, level: level as never, timestamp: data.timestamp as number });
+    if (data.type === 'hello' && data.resumed === false) {
+      consoleBuffer.length = 0;
+      consoleLines.set([]);
+    } else if (data.type === 'status') {
+      serverStatus.update(status => ({ ...status, status: data.status as typeof status.status }));
+    } else if (data.type === 'error_stats') {
+      errorStats.set(data.errors as never);
+    } else if (data.type === 'gap') {
+      addToast(`Console history gap: events ${data.from}–${data.to} expired`, 'error');
+    } else if (data.type === 'console') {
+      const text = data.line as string;
+      consoleBuffer.push({ text, level: (data.level || detectLevel(text)) as ConsoleLine['level'], timestamp: data.timestamp as number,
+        sequence: data.sequence as number, stream_id: data.stream_id as string, source: data.source as ConsoleLine['source'], continued: data.continued as boolean });
+      if (consoleBuffer.length > 2000) consoleBuffer.splice(0, consoleBuffer.length - 2000);
       if (!flushPending) {
         flushPending = true;
         requestAnimationFrame(flushLines);
       }
-    });
+    }
   }
 
   function onMetricsMessage(data: Record<string, unknown>) {
-    if (data.type === 'metrics') {
-      import('$stores/index').then(m => m.metrics.set(data.data as never));
-    } else if (data.type === 'error_stats') {
-      import('$stores/index').then(m => m.errorStats.set(data.errors as never));
-    }
+    if (data.type === 'metrics') metrics.set(data.data as never);
   }
 
   let isLoginPage = $derived($page.url.pathname === '/login');
@@ -139,7 +187,7 @@
 
 {#if checkingAuth}
   <div class="min-h-screen bg-deep-950 flex items-center justify-center">
-    <div class="w-5 h-5 bg-bedrock-500 animate-pulse" style="box-shadow: 0 0 16px rgba(6,182,212,0.4);"></div>
+    <div class="w-5 h-5 bg-bedrock-500 animate-pulse shadow-glow-accent"></div>
   </div>
 {:else if isLoginPage}
   {@render children()}
@@ -156,13 +204,12 @@
   <ToastContainer />
 
   {#if showShortcuts}
-    <div class="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" tabindex="-1"
-         style="background: rgba(3,8,16,0.85); backdrop-filter: blur(4px);"
+    <div class="modal-backdrop fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" tabindex="-1"
          onclick={() => showShortcuts = false}
          onkeydown={(e) => { if (e.key === 'Escape') showShortcuts = false; }}>
-      <div class="bg-deep-900 border-2 border-deep-600/50 p-6 w-full max-w-md shadow-block-lg shadow-black/50" role="none"
+      <div class="bg-deep-900 border-2 border-deep-600/50 p-6 w-full max-w-md shadow-block-lg" role="none"
            onmousedown={(e) => e.stopPropagation()}>
-        <h2 class="text-sm font-bold text-white uppercase tracking-widest mb-4">Keyboard Shortcuts</h2>
+        <h2 class="mc-heading text-sm font-bold uppercase tracking-widest mb-4">Keyboard Shortcuts</h2>
         <div class="space-y-2 text-xs">
           <div class="flex justify-between"><span class="text-deep-300"><kbd class="text-bedrock-400">?</kbd> — Help</span><span class="text-deep-400">Toggle this overlay</span></div>
           <div class="flex justify-between"><span class="text-deep-300"><kbd class="text-bedrock-400">Ctrl+1</kbd> — Dashboard</span><span class="text-deep-400">Go to Dashboard</span></div>
@@ -172,7 +219,7 @@
           <div class="flex justify-between"><span class="text-deep-300"><kbd class="text-bedrock-400">Ctrl+5</kbd> — Players</span><span class="text-deep-400">Go to Players</span></div>
           <div class="flex justify-between"><span class="text-deep-300"><kbd class="text-bedrock-400">Ctrl+6</kbd> — Performance</span><span class="text-deep-400">Go to Performance</span></div>
         </div>
-        <p class="text-[10px] text-deep-500 mt-4 text-center uppercase tracking-wider">Press ? or click anywhere to close</p>
+        <p class="text-[10px] text-deep-400 mt-4 text-center uppercase tracking-wider">Press ? or click anywhere to close</p>
       </div>
     </div>
   {/if}

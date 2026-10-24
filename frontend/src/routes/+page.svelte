@@ -50,7 +50,7 @@
   <!-- Header -->
   <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
     <div>
-      <h1 class="text-lg font-bold text-white uppercase tracking-widest">Dashboard</h1>
+      <h1 class="text-lg font-bold text-strong uppercase tracking-widest">Dashboard</h1>
       <div class="pixel-divider mt-2 w-48"></div>
     </div>
     {#if $userPermissions.includes('SERVER_MANAGE')}
@@ -82,7 +82,7 @@
         {$serverStatus.status}
       </p>
       {#if $serverStatus.pid}
-        <p class="text-deep-500 text-xs mt-1 font-mono">PID {$serverStatus.pid}</p>
+        <p class="text-deep-400 text-xs mt-1 font-mono">PID {$serverStatus.pid}</p>
       {/if}
     </div>
 
@@ -91,7 +91,7 @@
         <span class="text-deep-400 text-xs uppercase tracking-wider">Uptime</span>
         <Clock size={16} class="text-bedrock-400" />
       </div>
-      <p class="text-xl font-bold text-white font-mono">
+      <p class="text-xl font-bold text-strong font-mono">
         {$serverStatus.uptime > 0 ? formatUptime($serverStatus.uptime) : '--:--:--'}
       </p>
     </div>
@@ -101,7 +101,7 @@
         <span class="text-deep-400 text-xs uppercase tracking-wider">CPU</span>
         <Cpu size={16} class="text-teal-400" />
       </div>
-      <p class="text-xl font-bold text-white font-mono">{$metrics?.cpu_percent?.toFixed(1) ?? '--'}</p>
+      <p class="text-xl font-bold text-strong font-mono">{$metrics?.cpu_percent?.toFixed(1) ?? '--'}</p>
       <div class="mt-2 h-1.5 bg-deep-900 rounded overflow-hidden">
         <div class="h-full bg-teal-500 transition-all duration-500" style="width: {Math.min($metrics?.cpu_percent ?? 0, 100)}%"></div>
       </div>
@@ -112,7 +112,7 @@
         <span class="text-deep-400 text-xs uppercase tracking-wider">Memory</span>
         <Activity size={16} class="text-bedrock-400" />
       </div>
-      <p class="text-xl font-bold text-white font-mono">{$metrics?.memory_mb ? $metrics.memory_mb.toFixed(0) + ' MB' : '--'}</p>
+      <p class="text-xl font-bold text-strong font-mono">{$metrics?.memory_mb ? $metrics.memory_mb.toFixed(0) + ' MB' : '--'}</p>
       <div class="mt-2 h-1.5 bg-deep-900 rounded overflow-hidden">
         <div class="h-full bg-bedrock-500 transition-all duration-500" style="width: {Math.min($metrics?.memory_percent ?? 0, 100)}%"></div>
       </div>

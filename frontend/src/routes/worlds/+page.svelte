@@ -27,7 +27,7 @@
 
 <div class="space-y-4">
   <div>
-    <h1 class="text-lg font-bold text-white uppercase tracking-widest">Worlds</h1>
+    <h1 class="text-lg font-bold text-strong uppercase tracking-widest">Worlds</h1>
     <div class="pixel-divider mt-2 w-24"></div>
   </div>
 
@@ -42,7 +42,7 @@
             <Globe size={14} class="shrink-0 text-bedrock-400" />
             <span>{w}</span>
           </div>
-        {:else}<p class="text-deep-500 text-xs py-4">No worlds</p>{/each}
+        {:else}<p class="text-deep-400 text-xs py-4">No worlds</p>{/each}
       </div>
     </div>
 
@@ -52,11 +52,11 @@
         <div class="grid grid-cols-3 gap-3 mb-4">
           <div class="bg-deep-900/80 border border-deep-600/30 p-3">
             <p class="text-[10px] text-deep-400 uppercase tracking-wider mb-1">Size</p>
-            <p class="text-sm font-bold text-white font-mono">{formatBytes(info.size_bytes)}</p>
+            <p class="text-sm font-bold text-strong font-mono">{formatBytes(info.size_bytes)}</p>
           </div>
           <div class="bg-deep-900/80 border border-deep-600/30 p-3">
             <p class="text-[10px] text-deep-400 uppercase tracking-wider mb-1">Files</p>
-            <p class="text-sm font-bold text-white font-mono">{info.files.toLocaleString()}</p>
+            <p class="text-sm font-bold text-strong font-mono">{info.files.toLocaleString()}</p>
           </div>
           <div class="bg-deep-900/80 border border-deep-600/30 p-3">
             <p class="text-[10px] text-deep-400 uppercase tracking-wider mb-1">Path</p>
@@ -64,7 +64,7 @@
           </div>
         </div>
       {:else}
-        <div class="flex items-center justify-center h-48 text-deep-500 text-xs uppercase tracking-wider">Select a world</div>
+        <div class="flex items-center justify-center h-48 text-deep-400 text-xs uppercase tracking-wider">Select a world</div>
       {/if}
     </div>
   </div>

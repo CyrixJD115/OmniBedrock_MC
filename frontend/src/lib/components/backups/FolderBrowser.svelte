@@ -43,17 +43,17 @@
 
 {#if open}
   <div class="fixed inset-0 z-50 flex items-center justify-center p-4 modal-bg"
-       style="background: rgba(3,8,16,0.85); backdrop-filter: blur(4px);"
+       style="background: rgb(var(--color-overlay) / 0.85); backdrop-filter: blur(4px);"
        onclick={(e) => { if ((e.target as HTMLElement).classList.contains('modal-bg')) oncancel(); }}
        onkeydown={(e) => e.key === 'Escape' && oncancel()}
        role="dialog" aria-modal="true" tabindex="-1">
-    <div class="bg-deep-900 border-2 border-deep-600/50 p-4 w-full max-w-md shadow-block-lg shadow-black/50"
+    <div class="bg-deep-900 border-2 border-deep-600/50 p-4 w-full max-w-md shadow-block-lg"
          style="box-shadow: inset 2px 2px 0 rgba(255,255,255,0.03), inset -1px -1px 0 rgba(0,0,0,0.3), 6px 6px 0 rgba(0,0,0,0.5);">
-      <h2 class="text-sm font-bold text-white uppercase tracking-widest mb-1">Export Folder</h2>
+      <h2 class="text-sm font-bold text-strong uppercase tracking-widest mb-1">Export Folder</h2>
       <p class="text-deep-400 text-xs mb-3">Browse to select the backup export folder.</p>
 
       <div class="flex items-center gap-2 mb-2">
-        <span class="text-deep-500 text-xs">Path:</span>
+        <span class="text-deep-400 text-xs">Path:</span>
         <span class="text-deep-200 text-xs font-mono truncate flex-1">/{base || '.'}</span>
         {#if base}
           <button onclick={goUp} class="btn-ghost text-xs px-1 py-0.5 rounded border border-deep-600/30 text-deep-300 hover:text-deep-100">&uarr; Up</button>
@@ -64,7 +64,7 @@
         {#if loading}
           <p class="text-deep-400 text-xs text-center py-4">Loading...</p>
         {:else if dirs.length === 0}
-          <p class="text-deep-500 text-xs text-center py-4">No subdirectories.</p>
+          <p class="text-deep-400 text-xs text-center py-4">No subdirectories.</p>
         {:else}
           {#each dirs as entry}
             <button

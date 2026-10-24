@@ -195,7 +195,7 @@
   <!-- header -->
   <div class="flex items-center justify-between">
     <div>
-      <h1 class="text-lg font-bold text-white uppercase tracking-widest">Backups</h1>
+      <h1 class="text-lg font-bold text-strong uppercase tracking-widest">Backups</h1>
       <div class="pixel-divider mt-2 w-32"></div>
     </div>
     <div class="flex items-center gap-2">
@@ -215,7 +215,7 @@
         onclick={() => activeTab = tab}
         class="text-xs px-4 py-2 uppercase tracking-wider font-semibold transition rounded-t
                {activeTab === tab
-                 ? 'bg-deep-800/60 text-white border-b-2 border-bedrock-500'
+                 ? 'bg-deep-800/60 text-strong border-b-2 border-bedrock-500'
                  : 'text-deep-400 hover:text-deep-200'}"
       >{tab === 'manual' ? 'Manual' : tab === 'auto' ? 'Automatic' : tab === 'backups' ? 'Backups' : tab === 'commands' ? 'Commands' : 'Logs'}</button>
     {/each}
@@ -423,7 +423,7 @@
                 </td>
               </tr>
             {:else}
-              <tr><td colspan="5" class="text-center py-8 text-deep-500">No backups</td></tr>
+              <tr><td colspan="5" class="text-center py-8 text-deep-400">No backups</td></tr>
             {/each}
           </tbody>
         </table>
@@ -565,25 +565,25 @@
       <div bind:this={logEl} class="h-80 overflow-y-auto bg-deep-900/60 border border-deep-600/30 rounded p-3 font-mono text-xs space-y-1">
         {#each filteredEvents as ev}
           <div class="flex gap-2">
-            <span class="text-deep-500 shrink-0 w-10 text-right">
+            <span class="text-deep-400 shrink-0 w-10 text-right">
               {#if ev.type === 'hello'}<span class="text-green-400">HELO</span>
               {:else if ev.type === 'status'}<span class="text-blue-400">STAT</span>
               {:else if ev.type === 'progress'}<span class="text-bedrock-400">PROG</span>
               {:else if ev.type === 'output'}<span class="text-deep-300">OUT</span>
               {:else if ev.type === 'done'}<span class="text-green-400">DONE</span>
               {:else if ev.type === 'error'}<span class="text-red-400">ERR</span>
-              {:else}<span class="text-deep-500">{ev.type.toUpperCase().slice(0,4)}</span>
+              {:else}<span class="text-deep-400">{ev.type.toUpperCase().slice(0,4)}</span>
               {/if}
             </span>
             {#if ev.percent !== undefined}
-              <span class="text-deep-500 shrink-0 w-8">[{ev.percent}%]</span>
+              <span class="text-deep-400 shrink-0 w-8">[{ev.percent}%]</span>
             {/if}
             <span class="text-deep-200">
               {ev.phase ?? ev.message ?? ev.line ?? ''}
             </span>
           </div>
         {:else}
-          <p class="text-deep-500 text-center py-8">No events yet. Run a backup to see progress here.</p>
+          <p class="text-deep-400 text-center py-8">No events yet. Run a backup to see progress here.</p>
         {/each}
       </div>
     </div>
@@ -607,12 +607,12 @@
 
 {#if showTrash}
   <div class="fixed inset-0 z-50 flex items-center justify-center p-4 modal-bg"
-       style="background: rgba(3,8,16,0.85); backdrop-filter: blur(4px);"
+       style="background: rgb(var(--color-overlay) / 0.85); backdrop-filter: blur(4px);"
        onclick={(e) => { if ((e.target as HTMLElement).classList.contains('modal-bg')) showTrash = false; }}
        onkeydown={(e) => e.key === 'Escape' && (showTrash = false)}
        role="dialog" aria-modal="true" tabindex="-1">
-    <div class="bg-deep-900 border-2 border-deep-600/50 p-4 w-full max-w-lg shadow-block-lg shadow-black/50">
-      <h2 class="text-sm font-bold text-white uppercase tracking-widest mb-3">Trash — {selBkWorld || 'All'}</h2>
+    <div class="bg-deep-900 border-2 border-deep-600/50 p-4 w-full max-w-lg shadow-block-lg">
+      <h2 class="text-sm font-bold text-strong uppercase tracking-widest mb-3">Trash — {selBkWorld || 'All'}</h2>
       <div class="max-h-64 overflow-y-auto space-y-1">
         {#each trashItems as t}
           <div class="flex justify-between items-center p-2 rounded bg-deep-800/40 border border-deep-600/20 text-xs">
@@ -625,7 +625,7 @@
             </div>
           </div>
         {:else}
-          <p class="text-deep-500 text-center py-8 text-xs">Trash is empty.</p>
+          <p class="text-deep-400 text-center py-8 text-xs">Trash is empty.</p>
         {/each}
       </div>
       <div class="flex justify-end mt-4">
@@ -637,15 +637,15 @@
 
 {#if restoreTarget}
   <div class="fixed inset-0 z-50 flex items-center justify-center p-4 modal-bg"
-       style="background: rgba(3,8,16,0.85); backdrop-filter: blur(4px);"
+       style="background: rgb(var(--color-overlay) / 0.85); backdrop-filter: blur(4px);"
        onclick={(e) => { if ((e.target as HTMLElement).classList.contains('modal-bg')) restoreTarget = null; }}
        onkeydown={(e) => e.key === 'Escape' && (restoreTarget = null)}
        role="dialog" aria-modal="true" tabindex="-1">
-    <div class="bg-deep-900 border-2 border-yellow-600/50 p-4 w-full max-w-lg shadow-block-lg shadow-black/50">
-      <h2 class="text-sm font-bold text-white uppercase tracking-widest mb-3">Restore Backup to World</h2>
+    <div class="bg-deep-900 border-2 border-yellow-600/50 p-4 w-full max-w-lg shadow-block-lg">
+      <h2 class="text-sm font-bold text-strong uppercase tracking-widest mb-3">Restore Backup to World</h2>
       <div class="text-xs space-y-3 text-deep-200">
         <p>
-          This will replace the current world <strong class="text-white">{restoreTarget.world}</strong> with the backup <code class="font-mono bg-deep-800/60 px-1 rounded">{restoreTarget.filename}</code>.
+          This will replace the current world <strong class="text-strong">{restoreTarget.world}</strong> with the backup <code class="font-mono bg-deep-800/60 px-1 rounded">{restoreTarget.filename}</code>.
         </p>
         <div class="bg-yellow-900/30 border border-yellow-700/50 rounded p-2 text-yellow-300">
           <strong>Warning:</strong> The server will be <strong>stopped</strong> automatically before restoring. The current world directory will be saved as a <code class="font-mono bg-deep-900/60 px-1 rounded">.bak</code> backup. You will need to start the server manually afterward.
@@ -654,7 +654,7 @@
       </div>
       <div class="flex justify-end gap-2 mt-4">
         <button onclick={() => { restoreTarget = null; }} class="btn-secondary text-xs">Cancel</button>
-        <button onclick={confirmRestore} class="btn-primary text-xs bg-red-700 hover:bg-red-600 border-red-600 text-white px-4 py-1.5 rounded uppercase tracking-wider">Restore</button>
+        <button onclick={confirmRestore} class="btn-danger text-xs px-4 py-1.5 rounded uppercase tracking-wider">Restore</button>
       </div>
     </div>
   </div>

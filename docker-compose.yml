@@ -1,0 +1,51 @@
+services:
+  backend:
+    build:
+      context: .
+      target: endstone
+      args:
+        ENDSTONE_VERSION: ${ENDSTONE_VERSION:-0.11.14}
+    platform: linux/amd64
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 90s
+    environment:
+      SECRET_KEY: ${SECRET_KEY:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:17755}
+    ports:
+      - "127.0.0.1:17754:17754"
+      - "19132:19132/udp"
+      - "19133:19133/udp"
+    volumes:
+      - bedrock:/data/bedrock
+      - backups:/data/backups
+      - panel-data:/data/panel
+      - panel-logs:/data/logs
+      - broadcaster:/data/broadcaster
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    init: true
+    restart: unless-stopped
+    environment:
+      ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:17755}
+  gateway:
+    image: nginx:1.28-alpine
+    restart: unless-stopped
+    ports:
+      - "17755:17755"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+volumes:
+  bedrock:
+  backups:
+  panel-data:
+  panel-logs:
+  broadcaster:

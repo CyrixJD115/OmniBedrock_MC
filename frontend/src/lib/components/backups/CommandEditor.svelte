@@ -92,7 +92,7 @@
         </div>
       </div>
     {:else}
-      <p class="text-deep-500 text-xs italic">No entries in this phase.</p>
+      <p class="text-deep-400 text-xs italic">No entries in this phase.</p>
     {/each}
   </div>
 

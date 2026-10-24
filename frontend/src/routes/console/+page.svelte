@@ -180,13 +180,13 @@
     font-smooth: never;
   }
   :global(.console-match) {
-    background: rgba(6, 182, 212, 0.3);
+    background: rgb(var(--term-info) / 0.28);
     border-radius: 2px;
-    outline: 1px solid rgba(6, 182, 212, 0.5);
+    outline: 1px solid rgb(var(--term-info) / 0.55);
   }
   :global(.console-match-active) {
-    background: rgba(6, 182, 212, 0.15);
-    outline: 2px solid rgba(6, 182, 212, 0.6);
+    background: rgb(var(--term-info) / 0.15);
+    outline: 2px solid rgb(var(--term-info) / 0.7);
     outline-offset: -2px;
   }
   .terminal-line {
@@ -194,7 +194,7 @@
     contain-intrinsic-size: 1.2em;
   }
   .filter-btn {
-    @apply flex items-center justify-center w-7 h-7 rounded text-deep-400 hover:text-white hover:bg-deep-700/50 transition-colors text-[11px] font-mono;
+    @apply flex items-center justify-center w-7 h-7 rounded text-deep-400 hover:text-strong hover:bg-deep-700/50 transition-colors text-[11px] font-mono;
   }
   .filter-btn.active {
     @apply text-bedrock-400 bg-deep-700/50;
@@ -207,7 +207,7 @@
 <div class="space-y-4">
   <div class="flex items-center justify-between">
     <div>
-      <h1 class="text-lg font-bold text-white uppercase tracking-widest">Console</h1>
+      <h1 class="text-lg font-bold text-strong uppercase tracking-widest">Console</h1>
       <div class="pixel-divider mt-2 w-32"></div>
     </div>
     <div class="flex items-center gap-2">
@@ -260,14 +260,16 @@
     </div>
   </div>
 
-  <div class="bg-black/60 border-2 border-deep-600/50 overflow-hidden" style="box-shadow: inset 2px 2px 0 rgba(255,255,255,0.02), inset -1px -1px 0 rgba(0,0,0,0.4), 4px 4px 0 rgba(0,0,0,0.5);">
-    <div class="flex items-center gap-2 px-4 py-2 bg-deep-900/80 border-b border-deep-600/30">
+  <!-- The console viewport keeps a dark surface in every theme/mode: ANSI
+       colors and the in-game log aesthetic both assume a dark backdrop. -->
+  <div class="terminal-surface border-2 border-deep-600/50 overflow-hidden">
+    <div class="flex items-center gap-2 px-4 py-2 bg-white/5 border-b border-white/10">
       <span class="w-2.5 h-2.5 bg-red-500/80"></span>
       <span class="w-2.5 h-2.5 bg-yellow-500/80"></span>
       <span class="w-2.5 h-2.5 bg-teal-500/80"></span>
-      <span class="text-deep-500 text-[10px] uppercase tracking-wider ml-2 font-mono">server-console</span>
+      <span class="text-deep-300 text-[10px] uppercase tracking-wider ml-2 font-mono">server-console</span>
       {#if filterActive()}
-        <span class="ml-auto text-[10px] font-mono text-deep-400">{filtered.length} / {lines.length} lines</span>
+        <span class="ml-auto text-[10px] font-mono text-deep-300">{filtered.length} / {lines.length} lines</span>
       {/if}
     </div>
     <div bind:this={terminalEl}
@@ -284,7 +286,7 @@
              )}>{@html renderLine(line.text)}</div>
       {/each}
       {#if filtered.length === 0}
-        <div class="text-deep-600 font-mono">
+        <div class="terminal-line-plain opacity-60 font-mono">
           {filterActive() ? '> No matches' : '> Console output appears here...'}
         </div>
       {/if}
@@ -292,9 +294,9 @@
   </div>
 
   {#if errors.length > 0}
-    <div class="border-2 border-deep-600/50 bg-black/40">
+    <div class="border-2 border-deep-600/50 bg-deep-900/40">
       <button onclick={() => showErrors = !showErrors}
-              class="w-full flex items-center gap-2 px-4 py-2 bg-deep-900/80 border-b border-deep-600/30 text-xs uppercase tracking-wider text-deep-300 hover:text-white transition-colors">
+              class="w-full flex items-center gap-2 px-4 py-2 bg-deep-900/80 border-b border-deep-600/30 text-xs uppercase tracking-wider text-deep-300 hover:text-strong transition-colors">
         {#if showErrors}<ChevronDown size={13} />{:else}<ChevronRight size={13} />{/if}
         <AlertTriangle size={13} class="text-red-400" />
         Error Tracking
@@ -305,13 +307,13 @@
           <table class="w-full text-[11px] font-mono">
             <thead>
               <tr class="border-b border-deep-600/20 text-deep-400">
-                <th onclick={() => toggleSort('signature')} class="text-left px-3 py-1.5 cursor-pointer hover:text-white transition-colors">
+                <th onclick={() => toggleSort('signature')} class="text-left px-3 py-1.5 cursor-pointer hover:text-strong transition-colors">
                   Signature{sortArrow('signature')}
                 </th>
-                <th onclick={() => toggleSort('count')} class="text-right px-3 py-1.5 cursor-pointer hover:text-white transition-colors w-16">
+                <th onclick={() => toggleSort('count')} class="text-right px-3 py-1.5 cursor-pointer hover:text-strong transition-colors w-16">
                   Count{sortArrow('count')}
                 </th>
-                <th onclick={() => toggleSort('last_seen')} class="text-right px-3 py-1.5 cursor-pointer hover:text-white transition-colors w-20">
+                <th onclick={() => toggleSort('last_seen')} class="text-right px-3 py-1.5 cursor-pointer hover:text-strong transition-colors w-20">
                   Last{sortArrow('last_seen')}
                 </th>
               </tr>

@@ -26,7 +26,9 @@ export function connectBackupWs() {
       if (next.length > 500) next.splice(0, next.length - 500);
       return next;
     });
-    if (event.type === 'status' || event.type === 'progress') {
+    if (event.type === 'hello' || event.type === 'gap') {
+      backupRunning.set(Boolean(event.active));
+    } else if (event.type === 'status' || event.type === 'progress') {
       backupRunning.set(true);
     } else if (event.type === 'done' || event.type === 'error') {
       backupRunning.set(false);

@@ -1,0 +1,23 @@
+[Unit]
+Description=OmniBedrock server panel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=omnibedrock
+Group=omnibedrock
+WorkingDirectory=/opt/omnibedrock
+EnvironmentFile=-/opt/omnibedrock/.env
+ExecStart=/usr/local/bin/omnibedrock
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+# Includes queued backup hooks and bounded pipe draining.
+TimeoutStopSec=90
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
