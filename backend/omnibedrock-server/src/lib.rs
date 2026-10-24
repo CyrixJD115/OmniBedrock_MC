@@ -2,8 +2,8 @@
 //! vanilla BDS child process, its console pipeline, derived metrics, backup
 //! jobs, addon archives, BDS version management, and the MCXboxBroadcast
 //! integration.
-pub mod addons;
 pub mod addon_cache;
+pub mod addons;
 pub mod backups;
 pub mod bds;
 pub mod broadcaster;

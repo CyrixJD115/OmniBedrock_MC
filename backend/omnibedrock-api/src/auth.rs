@@ -473,13 +473,15 @@ impl Auth {
         &self,
         mutate: impl FnOnce(&mut serde_yaml::Value),
     ) -> anyhow::Result<()> {
-        let mut settings: serde_yaml::Value =
-            match tokio::fs::read_to_string(self.config.data_dir.join(DEFAULT_PANEL_SETTINGS)).await
-            {
-                Ok(text) => serde_yaml::from_str(&text).unwrap_or_else(|_| serde_yaml::Value::Null),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_yaml::Value::Null,
-                Err(e) => return Err(e.into()),
-            };
+        let mut settings: serde_yaml::Value = match tokio::fs::read_to_string(
+            self.config.data_dir.join(DEFAULT_PANEL_SETTINGS),
+        )
+        .await
+        {
+            Ok(text) => serde_yaml::from_str(&text).unwrap_or_else(|_| serde_yaml::Value::Null),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_yaml::Value::Null,
+            Err(e) => return Err(e.into()),
+        };
         if !settings.is_mapping() {
             settings = serde_yaml::Value::Mapping(serde_yaml::Mapping::new());
         }

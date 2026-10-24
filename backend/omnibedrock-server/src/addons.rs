@@ -65,12 +65,7 @@ pub async fn read_texts(pack_dir: &Path) -> HashMap<String, String> {
 /// `pack.name` become their translation, plain strings pass through.
 pub fn resolve_lang(texts: &HashMap<String, String>, raw: Option<&str>) -> Option<String> {
     let raw = raw?;
-    Some(
-        texts
-            .get(raw)
-            .cloned()
-            .unwrap_or_else(|| raw.to_string()),
-    )
+    Some(texts.get(raw).cloned().unwrap_or_else(|| raw.to_string()))
 }
 
 const MAX_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
@@ -446,8 +441,8 @@ pub fn install_world(
         let name = match forced_name {
             Some(name) => sanitize_name(name),
             None => {
-                let level_name = std::fs::read_to_string(staging.join("levelname.txt"))
-                    .unwrap_or_default();
+                let level_name =
+                    std::fs::read_to_string(staging.join("levelname.txt")).unwrap_or_default();
                 if level_name.trim().is_empty() {
                     "world".to_string()
                 } else {

@@ -21,7 +21,7 @@ use omnibedrock_server::{
     backups::{BackupRequest, Backups, Hook, Hooks},
     bds::{self, Bds},
     broadcaster::Broadcaster,
-    curseforge::{self, CurseForge, CLASSES},
+    curseforge::{self, CLASSES, CurseForge},
     endstone::Endstone,
     metrics::Metrics,
     server::{Backend, ServerManager, ServerSettings, Status},
@@ -114,8 +114,7 @@ impl AppState {
             config.curseforge_api_key.expose_secret(),
             Some(image_cache_dir),
         );
-        let addon_meta =
-            omnibedrock_server::addon_cache::AddonMetaCache::new(&config.cache_dir);
+        let addon_meta = omnibedrock_server::addon_cache::AddonMetaCache::new(&config.cache_dir);
         // A key saved from the Settings page overrides the .env value.
         if let Some(stored) = auth.curseforge_key_override().await {
             curseforge.set_api_key(&stored);
@@ -1076,8 +1075,7 @@ async fn addons(
                             continue;
                         }
                         let manifest = read_manifest(&pack).await.ok();
-                        let store_meta =
-                            omnibedrock_server::addons::read_pack_metadata(&pack);
+                        let store_meta = omnibedrock_server::addons::read_pack_metadata(&pack);
                         let source = store_meta
                             .as_ref()
                             .and_then(|m| m["source"].as_str())
@@ -1538,10 +1536,8 @@ async fn backend_status(s: &AppState) -> Value {
         .exists();
     let install = serde_json::to_value(&*s.bds.state.borrow()).unwrap_or(Value::Null);
     let endstone_installed = s.endstone.installed().await;
-    let endstone_binary_present = omnibedrock_server::endstone::endstone_binary(&s.config)
-        .exists();
-    let endstone_install =
-        serde_json::to_value(&*s.endstone.state.borrow()).unwrap_or(Value::Null);
+    let endstone_binary_present = omnibedrock_server::endstone::endstone_binary(&s.config).exists();
+    let endstone_install = serde_json::to_value(&*s.endstone.state.borrow()).unwrap_or(Value::Null);
     json!({
         "backend": settings.backend.as_str(),
         "vanilla_version": settings.vanilla_version,
@@ -1917,7 +1913,8 @@ async fn upload_addons(
                     "source": "manual",
                     "installed_at": chrono::Utc::now().to_rfc3339(),
                 });
-                if let Err(e) = omnibedrock_server::addons::write_pack_metadata(&dir, metadata).await
+                if let Err(e) =
+                    omnibedrock_server::addons::write_pack_metadata(&dir, metadata).await
                 {
                     tracing::warn!(error = %e, pack = %pack.name, "failed to tag manual upload");
                 }
@@ -1995,19 +1992,18 @@ async fn store(
             // and the Bedrock game versions for filter dropdowns.
             let (categories, versions) =
                 tokio::try_join!(cf.categories(), cf.versions()).map_err(store_error)?;
-            let classes: Value = json!(CLASSES
-                .iter()
-                .map(|(slug, id)| json!({"slug": slug, "id": id}))
-                .collect::<Vec<_>>());
+            let classes: Value = json!(
+                CLASSES
+                    .iter()
+                    .map(|(slug, id)| json!({"slug": slug, "id": id}))
+                    .collect::<Vec<_>>()
+            );
             let mut grouped: std::collections::BTreeMap<String, Vec<&curseforge::CfCategory>> =
                 std::collections::BTreeMap::new();
             for category in &categories {
                 // Sub-categories carry their class id; root classes do not.
                 if let Some(class) = category.class_id {
-                    grouped
-                        .entry(class.to_string())
-                        .or_default()
-                        .push(category);
+                    grouped.entry(class.to_string()).or_default().push(category);
                 }
             }
             let grouped: Value = Value::Object(
@@ -2016,10 +2012,11 @@ async fn store(
                     .map(|(class, list)| {
                         (
                             class,
-                            json!(list
-                                .iter()
-                                .map(|c| json!({"id": c.id, "name": c.name}))
-                                .collect::<Vec<_>>()),
+                            json!(
+                                list.iter()
+                                    .map(|c| json!({"id": c.id, "name": c.name}))
+                                    .collect::<Vec<_>>()
+                            ),
                         )
                     })
                     .collect(),
@@ -2069,9 +2066,7 @@ async fn store(
                 .map_err(anyhow::Error::from)?
                 .into_response());
         }
-        ["store", "install"] if create => {
-            install_from_store(s, b).await?
-        }
+        ["store", "install"] if create => install_from_store(s, b).await?,
         _ => return Err(ApiError::missing("Endpoint not found")),
     };
     Ok(data_response(data))
@@ -2129,9 +2124,7 @@ async fn install_from_store(s: &AppState, b: &Value) -> Result<Value> {
     let world = value_string(b, "world")?.to_owned();
     component(&world)?;
     let root = s.config.bedrock_server_dir.join("worlds");
-    if !force_world
-        && !tokio::fs::try_exists(safe_path(&root, FsPath::new(&world)).await?).await?
-    {
+    if !force_world && !tokio::fs::try_exists(safe_path(&root, FsPath::new(&world)).await?).await? {
         return Err(ApiError::missing("World not found"));
     }
     let (project, file) = tokio::try_join!(cf.project(project_id), cf.file(project_id, file_id))
@@ -2160,22 +2153,24 @@ async fn install_from_store(s: &AppState, b: &Value) -> Result<Value> {
     let install_root = root.clone();
     let archive = temp.clone();
     let install_world_name = world.clone();
-    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<(Vec<InstalledPack>, bool)> {
-        match addons::detect_archive(&archive)? {
-            ArchiveKind::Addon => Ok((
-                addons::install_archive(&archive, &install_root, &install_world_name, forced)?,
-                false,
-            )),
-            ArchiveKind::World => {
-                Ok((vec![addons::install_world(&archive, &install_root, None)?], true))
+    let result =
+        tokio::task::spawn_blocking(move || -> anyhow::Result<(Vec<InstalledPack>, bool)> {
+            match addons::detect_archive(&archive)? {
+                ArchiveKind::Addon => Ok((
+                    addons::install_archive(&archive, &install_root, &install_world_name, forced)?,
+                    false,
+                )),
+                ArchiveKind::World => Ok((
+                    vec![addons::install_world(&archive, &install_root, None)?],
+                    true,
+                )),
+                ArchiveKind::Unknown => {
+                    anyhow::bail!("archive holds neither a pack manifest nor a level.dat world")
+                }
             }
-            ArchiveKind::Unknown => {
-                anyhow::bail!("archive holds neither a pack manifest nor a level.dat world")
-            }
-        }
-    })
-    .await
-    .map_err(anyhow::Error::from)?;
+        })
+        .await
+        .map_err(anyhow::Error::from)?;
     let _ = tokio::fs::remove_file(&temp).await;
     let (installed, is_world) = match result {
         Ok(value) => value,
@@ -2201,7 +2196,8 @@ async fn install_from_store(s: &AppState, b: &Value) -> Result<Value> {
         } else {
             root.join(&world).join(pack.pack_type).join(&pack.name)
         };
-        if let Err(e) = omnibedrock_server::addons::write_pack_metadata(&dir, metadata.clone()).await
+        if let Err(e) =
+            omnibedrock_server::addons::write_pack_metadata(&dir, metadata.clone()).await
         {
             tracing::warn!(error = %e, pack = %pack.name, "failed to write store metadata");
         }

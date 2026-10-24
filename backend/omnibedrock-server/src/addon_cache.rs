@@ -7,7 +7,7 @@
 //! directory, icons, texts). Entries survive panel restarts in one JSON file
 //! under the cache dir.
 use omnibedrock_core::files::atomic_write;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
@@ -81,7 +81,9 @@ impl AddonMetaCache {
     pub async fn store(&self, path: String, fingerprint: String, item: Value) {
         self.ensure_loaded().await;
         let mut inner = self.inner.write().await;
-        inner.entries.insert(path, json!({"fingerprint": fingerprint, "item": item}));
+        inner
+            .entries
+            .insert(path, json!({"fingerprint": fingerprint, "item": item}));
         inner.dirty = true;
     }
 
@@ -104,7 +106,12 @@ impl AddonMetaCache {
             inner.dirty = false;
             json!({"format": FORMAT, "entries": inner.entries})
         };
-        if let Err(e) = atomic_write(&self.path, serde_json::to_vec(&value).unwrap_or_default().as_slice()).await {
+        if let Err(e) = atomic_write(
+            &self.path,
+            serde_json::to_vec(&value).unwrap_or_default().as_slice(),
+        )
+        .await
+        {
             tracing::warn!(error = %e, "failed to persist addon metadata cache");
         }
     }
@@ -178,13 +185,13 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join(CACHE_FILE), "not json at all").unwrap();
         let cache = AddonMetaCache::new(dir.path());
-        cache
-            .store("/packs/a".into(), "fp".into(), item("A"))
-            .await;
+        cache.store("/packs/a".into(), "fp".into(), item("A")).await;
         cache
             .store("/packs/gone".into(), "fp".into(), item("G"))
             .await;
-        cache.retain_paths(&HashSet::from(["/packs/a".to_string()])).await;
+        cache
+            .retain_paths(&HashSet::from(["/packs/a".to_string()]))
+            .await;
         cache.flush().await;
 
         let reloaded = AddonMetaCache::new(dir.path());

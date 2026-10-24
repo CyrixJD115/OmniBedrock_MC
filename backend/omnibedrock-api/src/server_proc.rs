@@ -1,6 +1,6 @@
 //! Process bootstrap shared by both modes: logging, service startup, and the
 //! HTTP listener that serves the embedded UI and the API from one process.
-use crate::api::{router, AppState};
+use crate::api::{AppState, router};
 use anyhow::Context as _;
 use omnibedrock_core::config::{Cli, Config};
 use std::net::SocketAddr;
@@ -105,7 +105,10 @@ pub async fn run_standalone(cli: Cli) -> anyhow::Result<()> {
     let _guard = init_tracing(&config);
     let shutdown = CancellationToken::new();
     let (_state, address, server) = spawn(config, shutdown).await?;
-    tracing::info!("Open the panel at http://localhost:{} (or use --desktop for a window)", address.port());
+    tracing::info!(
+        "Open the panel at http://localhost:{} (or use --desktop for a window)",
+        address.port()
+    );
     server.await?;
     Ok(())
 }

@@ -6,10 +6,10 @@
 //! back to `index.html`, letting the client router take over.
 use axum::{
     body::Body,
-    http::{header, Method, Request, StatusCode},
+    http::{Method, Request, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use include_dir::{include_dir, Dir};
+use include_dir::{Dir, include_dir};
 
 static UI: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../frontend/build");
 
@@ -36,7 +36,9 @@ pub async fn serve(request: Request<Body>) -> Response {
     let response = Response::builder()
         .header(
             header::CONTENT_TYPE,
-            mime_guess::from_path(served_path).first_or_octet_stream().as_ref(),
+            mime_guess::from_path(served_path)
+                .first_or_octet_stream()
+                .as_ref(),
         )
         .header(
             header::CACHE_CONTROL,
@@ -48,7 +50,9 @@ pub async fn serve(request: Request<Body>) -> Response {
             },
         );
     if request.method() == Method::HEAD {
-        return response.body(Body::empty()).unwrap_or_else(|_| internal_error());
+        return response
+            .body(Body::empty())
+            .unwrap_or_else(|_| internal_error());
     }
     response
         .body(Body::from(file.contents()))
@@ -56,5 +60,9 @@ pub async fn serve(request: Request<Body>) -> Response {
 }
 
 fn internal_error() -> Response {
-    (StatusCode::INTERNAL_SERVER_ERROR, "failed to build response").into_response()
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "failed to build response",
+    )
+        .into_response()
 }

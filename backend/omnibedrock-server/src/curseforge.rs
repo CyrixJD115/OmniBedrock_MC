@@ -19,7 +19,8 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     sync::{
-        Arc, atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -335,9 +336,16 @@ impl CurseForge {
 
     /// Authenticated GET against the Core API with a TTL cache keyed on the
     /// full URL, so paged browsing and repeated detail views stay polite.
-    async fn get_json(&self, path: &str, query: &[(&str, String)], ttl: Duration) -> anyhow::Result<Value> {
+    async fn get_json(
+        &self,
+        path: &str,
+        query: &[(&str, String)],
+        ttl: Duration,
+    ) -> anyhow::Result<Value> {
         if !self.configured() {
-            anyhow::bail!("CURSEFORGE_API_KEY is not configured; set it in the panel .env to enable the Store");
+            anyhow::bail!(
+                "CURSEFORGE_API_KEY is not configured; set it in the panel .env to enable the Store"
+            );
         }
         let mut url = reqwest::Url::parse(&format!("{API_BASE}{path}"))?;
         for (key, value) in query {
@@ -392,7 +400,9 @@ impl CurseForge {
                      (see console.curseforge.com)."
                 );
             }
-            anyhow::bail!("CurseForge rejected the API key (HTTP {status}); check CURSEFORGE_API_KEY");
+            anyhow::bail!(
+                "CurseForge rejected the API key (HTTP {status}); check CURSEFORGE_API_KEY"
+            );
         }
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
             anyhow::bail!("CurseForge rate limit reached; retry in a moment");
@@ -662,14 +672,20 @@ impl CurseForge {
             .content_length()
             .is_some_and(|len| len > MAX_IMAGE_BYTES)
         {
-            anyhow::bail!("image exceeds the {} MiB proxy limit", MAX_IMAGE_BYTES / 1048576);
+            anyhow::bail!(
+                "image exceeds the {} MiB proxy limit",
+                MAX_IMAGE_BYTES / 1048576
+            );
         }
         let bytes = response
             .bytes()
             .await
             .context("CurseForge CDN image read failed")?;
         if bytes.len() as u64 > MAX_IMAGE_BYTES {
-            anyhow::bail!("image exceeds the {} MiB proxy limit", MAX_IMAGE_BYTES / 1048576);
+            anyhow::bail!(
+                "image exceeds the {} MiB proxy limit",
+                MAX_IMAGE_BYTES / 1048576
+            );
         }
         if let Some(path) = cache_path {
             self.store_cached_image(&path, &content_type, &bytes).await;
@@ -732,12 +748,18 @@ impl CurseForge {
             }
         };
         while let Ok(Some(entry)) = reader.next_entry().await {
-            let Ok(meta) = entry.metadata().await else { continue };
+            let Ok(meta) = entry.metadata().await else {
+                continue;
+            };
             if !meta.is_file() {
                 continue;
             }
             total += meta.len();
-            entries.push((entry.path(), meta.modified().unwrap_or(std::time::UNIX_EPOCH), meta.len()));
+            entries.push((
+                entry.path(),
+                meta.modified().unwrap_or(std::time::UNIX_EPOCH),
+                meta.len(),
+            ));
         }
         entries.sort_by_key(|(_, modified, _)| *modified);
         let target = IMAGE_CACHE_MAX_BYTES * 3 / 4;
@@ -829,7 +851,12 @@ mod tests {
 
     #[test]
     fn versions_sort_newest_first() {
-        let mut versions = vec!["1.21.9".to_string(), "26.50".into(), "1.21.132".into(), "1.20".into()];
+        let mut versions = vec![
+            "1.21.9".to_string(),
+            "26.50".into(),
+            "1.21.132".into(),
+            "1.20".into(),
+        ];
         versions.sort_by_key(|v| std::cmp::Reverse(version_key(v)));
         assert_eq!(versions, vec!["26.50", "1.21.132", "1.21.9", "1.20"]);
     }
@@ -903,8 +930,11 @@ mod tests {
     async fn image_cache_roundtrip_and_unknown_type_bypass() {
         let dir = tempfile::tempdir().unwrap();
         let cf = CurseForge::new("", Some(dir.path().to_path_buf()));
-        let path = dir.path().join(hex::encode(Sha256::digest(b"https://x.forgecdn.net/a.png")));
-        cf.store_cached_image(&path, "image/png", b"pretend-png").await;
+        let path = dir
+            .path()
+            .join(hex::encode(Sha256::digest(b"https://x.forgecdn.net/a.png")));
+        cf.store_cached_image(&path, "image/png", b"pretend-png")
+            .await;
         let (bytes, content_type) = read_cached_image(&path).await.expect("cached hit");
         assert_eq!(bytes, b"pretend-png");
         assert_eq!(content_type, "image/png");

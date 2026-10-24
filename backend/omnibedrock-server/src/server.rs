@@ -566,7 +566,9 @@ fn launch_endstone(config: &Config) -> anyhow::Result<Child> {
     let mut cmd = match &candidate {
         crate::endstone::EndstoneLaunch::Binary(path) => {
             let mut cmd = Command::new(path);
-            cmd.arg("--no-confirm").arg("-s").arg(&config.bedrock_server_dir);
+            cmd.arg("--no-confirm")
+                .arg("-s")
+                .arg(&config.bedrock_server_dir);
             cmd
         }
         crate::endstone::EndstoneLaunch::PythonModule(python) => {
