@@ -1,10 +1,16 @@
 //! MCXboxBroadcast Standalone integration.
 //!
-//! The broadcaster runs as its own Java process in a dedicated directory that
-//! holds `config.yml`, `screenshot.jpg`, and the `cache/` token store. Output
-//! streams through a Console ring like the game server; device-code prompts
+//! Every server instance owns its own broadcaster: a Java process running in
+//! that instance's broadcaster directory holding `config.yml`,
+//! `screenshot.jpg`, and the `cache/` token store, so accounts, settings, and
+//! sign-in state never leak between instances. Output streams through a
+//! per-instance Console ring like the game server; device-code prompts
 //! emitted during Microsoft authentication are parsed out of the log stream so
 //! the UI can surface the code and verification URL.
+//!
+//! The jar itself is shared: instance dirs stay small because `jar_path`
+//! falls back to the panel-level broadcaster directory when the instance has
+//! no jar of its own.
 use crate::server::{Console, read_pipe};
 use anyhow::{Context, bail};
 use omnibedrock_core::{config::Config, files::atomic_write};
@@ -94,10 +100,18 @@ pub struct Broadcaster {
     /// `java -version` first line, None until detection finishes or if absent.
     pub java: watch::Receiver<Option<String>>,
     config: Arc<Config>,
+    /// Panel-level broadcaster directory used to resolve the jar when this
+    /// instance's own dir has none. `None` for the default instance, whose
+    /// dir IS the panel dir.
+    jar_home: Option<PathBuf>,
 }
 
 impl Broadcaster {
-    pub fn new(config: Arc<Config>, shutdown: CancellationToken) -> anyhow::Result<Self> {
+    pub fn new(
+        config: Arc<Config>,
+        shutdown: CancellationToken,
+        jar_home: Option<PathBuf>,
+    ) -> anyhow::Result<Self> {
         let console = Console::with_journal_root(
             config.logs_dir.join("broadcaster-console"),
             config.console_max_lines,
@@ -115,6 +129,7 @@ impl Broadcaster {
             device_codes,
             java: java.clone(),
             config: config.clone(),
+            jar_home: jar_home.clone(),
         };
         // Detect the Java runtime in the background; startup never blocks on it.
         let detect_config = config.clone();
@@ -139,18 +154,25 @@ impl Broadcaster {
             }
         });
         tokio::spawn(watch_device_codes(console.clone(), codes_tx));
-        tokio::spawn(supervise(config, control_rx, status_tx, console, shutdown));
+        tokio::spawn(supervise(
+            config,
+            jar_home.clone(),
+            control_rx,
+            status_tx,
+            console,
+            shutdown,
+        ));
         Ok(manager)
     }
 
     pub fn dir(&self) -> PathBuf {
         self.config.broadcaster_dir.clone()
     }
+    /// Jar resolution: explicit override → this instance's dir → the
+    /// panel-level broadcaster dir, so a shared jar serves every instance
+    /// without copies while a per-instance jar still wins.
     pub fn jar_path(&self) -> PathBuf {
-        self.config
-            .broadcaster_jar
-            .clone()
-            .unwrap_or_else(|| self.config.broadcaster_dir.join(JAR_NAME))
+        resolve_jar(&self.config, self.jar_home.as_deref())
     }
     pub fn config_path(&self) -> PathBuf {
         self.config.broadcaster_dir.join("config.yml")
@@ -289,7 +311,26 @@ async fn watch_device_codes(console: Console, codes: watch::Sender<BTreeMap<Stri
     }
 }
 
-fn java_command(config: &Config) -> Command {
+/// Jar resolution shared by `Broadcaster::jar_path` and the supervisor:
+/// explicit override, then the instance's own dir, then the panel-level dir.
+fn resolve_jar(config: &Config, jar_home: Option<&std::path::Path>) -> PathBuf {
+    if let Some(jar) = &config.broadcaster_jar {
+        return jar.clone();
+    }
+    let local = config.broadcaster_dir.join(JAR_NAME);
+    if local.exists() {
+        return local;
+    }
+    if let Some(home) = jar_home {
+        let shared = home.join(JAR_NAME);
+        if shared.exists() {
+            return shared;
+        }
+    }
+    local
+}
+
+fn java_command(config: &Config, jar: &std::path::Path) -> Command {
     let mut cmd = Command::new(
         config
             .java_bin
@@ -297,12 +338,7 @@ fn java_command(config: &Config) -> Command {
             .unwrap_or(std::path::Path::new("java")),
     );
     cmd.arg("-jar")
-        .arg(
-            config
-                .broadcaster_jar
-                .clone()
-                .unwrap_or_else(|| config.broadcaster_dir.join(JAR_NAME)),
-        )
+        .arg(jar)
         .current_dir(&config.broadcaster_dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -313,12 +349,12 @@ fn java_command(config: &Config) -> Command {
     cmd
 }
 
-async fn launch(config: &Config, console: &Console) -> anyhow::Result<Running> {
+async fn launch(
+    jar: &std::path::Path,
+    config: &Config,
+    console: &Console,
+) -> anyhow::Result<Running> {
     tokio::fs::create_dir_all(&config.broadcaster_dir).await?;
-    let jar = config
-        .broadcaster_jar
-        .clone()
-        .unwrap_or_else(|| config.broadcaster_dir.join(JAR_NAME));
     if !jar.exists() {
         bail!(
             "broadcaster jar not found at {}; place {} there or set BROADCASTER_JAR",
@@ -326,7 +362,7 @@ async fn launch(config: &Config, console: &Console) -> anyhow::Result<Running> {
             JAR_NAME
         );
     }
-    let mut child = java_command(config)
+    let mut child = java_command(config, jar)
         .spawn()
         .context("java not found; install Java or set JAVA_BIN")?;
     let pid = child.id().context("child has no PID")?;
@@ -428,6 +464,7 @@ async fn drain(mut running: Running) {
 
 async fn supervise(
     config: Arc<Config>,
+    jar_home: Option<PathBuf>,
     mut control: mpsc::Receiver<Control>,
     status: watch::Sender<BcSnapshot>,
     console: Console,
@@ -480,7 +517,13 @@ async fn supervise(
                 let result = if running.is_some() {
                     Ok("Broadcaster is already running".into())
                 } else {
-                    match launch(&config, &console).await {
+                    match launch(
+                        &resolve_jar(&config, jar_home.as_deref()),
+                        &config,
+                        &console,
+                    )
+                    .await
+                    {
                         Ok(r) => {
                             status.send_modify(|s| {
                                 s.status = BcStatus::Running;
@@ -525,7 +568,13 @@ async fn supervise(
                         });
                         stopped?;
                     }
-                    match launch(&config, &console).await {
+                    match launch(
+                        &resolve_jar(&config, jar_home.as_deref()),
+                        &config,
+                        &console,
+                    )
+                    .await
+                    {
                         Ok(r) => {
                             status.send_modify(|s| {
                                 s.status = BcStatus::Running;

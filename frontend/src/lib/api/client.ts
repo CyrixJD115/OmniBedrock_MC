@@ -153,7 +153,7 @@ export const api = {
       body: JSON.stringify({ command }),
     }),
   getBroadcasterConfig: () =>
-    fetch(`${API_BASE}/broadcaster/config`, { headers: { Authorization: `Bearer ${authToken}` } }).then(r => {
+    fetch(`${API_BASE}/broadcaster/config`, { headers: rawHeaders() }).then(r => {
       if (!r.ok) throw new Error(`API Error ${r.status}`);
       return r.text();
     }),
@@ -170,7 +170,7 @@ export const api = {
   uploadBroadcasterScreenshot: (account: string, file: File) => {
     return fetch(`${API_BASE}/broadcaster/screenshot?account=${encodeURIComponent(account)}`, {
       method: 'PUT',
-      headers: { Authorization: `Bearer ${authToken}` },
+      headers: rawHeaders(),
       body: file,
     }).then(async r => {
       if (!r.ok) throw new Error(await r.text());

@@ -4,6 +4,7 @@
   import { wsManager } from '$lib/websocket';
   import { addToast } from '$stores/toast';
   import { userPermissions } from '$stores/auth';
+  import { activeInstance } from '$stores/instances';
   import { detectLevel } from '$lib/console';
   import type { BroadcasterStatus, DeviceCode, ConsoleLine } from '$types/index';
   import { load as yamlLoad, dump as yamlDump } from 'js-yaml';
@@ -239,9 +240,14 @@
     } catch { /* transient */ }
   }
 
-  onMount(async () => {
-    await refresh();
-    unsubs.push(wsManager.connect('/api/v1/broadcaster/ws', (data) => {
+  /** (Re)load everything for the active instance: console stream, status, config. */
+  async function loadAll() {
+    for (const unsub of unsubs.splice(0)) unsub();
+    lines = [];
+    const token = getToken();
+    const instance = $activeInstance?.id || 'default';
+    const query = `${token ? `token=${encodeURIComponent(token)}&` : ''}instance=${encodeURIComponent(instance)}`;
+    unsubs.push(wsManager.connect(`/api/v1/broadcaster/ws?${query}`, (data) => {
       if (data.type === 'hello' && data.resumed === false) lines = [];
       else if (data.type === 'console') {
         pushLine(data.line as string, data.level as string);
@@ -252,18 +258,31 @@
         codes = data.codes as Record<string, DeviceCode>;
       }
     }));
+    await refresh();
+    configDirty = false;
+    visualDirty = false;
     try {
       configText = await api.getBroadcasterConfig();
       parseConfigToModel();
     } catch (e: any) {
       addToast(`Config load failed: ${e.message}`, 'error');
     }
+  }
+
+  onMount(() => {
     poll = setInterval(refresh, 5000);
+  });
+
+  // Every broadcaster is instance-scoped: switching instances swaps the
+  // console stream, status, device codes, config, and screenshots.
+  $effect(() => {
+    void $activeInstance?.id;
+    void loadAll();
   });
 
   async function loadPreview(account: string) {
     try {
-      const r = await fetch(`/api/v1/broadcaster/screenshot?account=${encodeURIComponent(account)}&token=${getToken()}`);
+      const r = await fetch(`/api/v1/broadcaster/screenshot?account=${encodeURIComponent(account)}&token=${getToken()}&instance=${encodeURIComponent($activeInstance?.id || 'default')}`);
       if (!r.ok) throw new Error(String(r.status));
       const blob = await r.blob();
       const url = URL.createObjectURL(blob);
@@ -362,6 +381,10 @@
       <Radio size={22} class="text-bedrock-400" />
       <div>
         <h1 class="text-lg font-bold text-strong uppercase tracking-widest">MCXboxBroadcast</h1>
+        <p class="text-[10px] uppercase tracking-wider text-deep-400 mt-0.5">
+          instance: <span class="text-bedrock-300">{$activeInstance?.name ?? $activeInstance?.id ?? 'default'}</span>
+          — each server keeps its own broadcaster, accounts, and config
+        </p>
         <div class="pixel-divider mt-2 w-24"></div>
       </div>
     </div>

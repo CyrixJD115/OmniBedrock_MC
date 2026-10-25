@@ -128,7 +128,7 @@ Paths containing spaces are fully supported; the Endstone toolchain relocates to
 | `OMNI_HOST`, `OMNI_PORT` | `0.0.0.0`, `17754` | API binding |
 | `ENDSTONE_BIN` | managed toolchain → PATH | Explicit endstone executable |
 | `ENDSTONE_PYTHON` | unset | Legacy `-m endstone` fallback; probed with `import endstone` before use |
-| `BROADCASTER_DIR` | `backend/broadcaster` | MCXboxBroadcast home: config.yml, screenshot, cache, jar |
+| `BROADCASTER_DIR` | `<root>/broadcaster` | Panel-level broadcaster home (jar location + the default instance's broadcaster): config.yml, screenshot, cache |
 | `BROADCASTER_JAR` | `$BROADCASTER_DIR/MCXboxBroadcastStandalone.jar` | Explicit jar path |
 | `JAVA_BIN` | `java` on PATH | Java runtime for the broadcaster |
 | `SECRET_KEY` | generated/persisted | SHA256-derived HS256 JWT signing key |
@@ -169,9 +169,13 @@ The panel supervises either an Endstone launcher or the official `bedrock_server
 
 Vanilla installs are managed in the panel: the version registry and SHA256 checksums come from [EndstoneMC/bedrock-server-data](https://github.com/EndstoneMC/bedrock-server-data) (MIT), and the archives themselves download from the official `minecraft.net` CDN URLs that registry provides — the panel never executes an archive whose hash does not match. Pick `latest` to track the newest release or pin any registry version (release or preview). Installing extracts to a staging copy first, refuses symlink entries, replaces upstream files, preserves your user data, marks the binary executable, and records the applied version in `data/bds_version.json`. Install progress streams both into the game console and the backend status endpoint. Vanilla BDS accepts the same console commands, backups, and properties tooling as Endstone; TPS is only reported when the backend prints it.
 
+New instances get a minimal `server.properties` seeded with `transport=raknet`, `allow-list=false`, and the instance's `server-port`/`server-portv6` pair; every start re-pins the ports and adds any of those keys that are missing. The explicit values matter because modern BDS fills unset keys with defaults that break panel-managed servers: `transport=nethernet` ignores `server-port` entirely (clients can never reach the advertised port), and `allow-list=true` with an empty list spams a warning every boot and rejects joins. Deliberately chosen values always win, and a non-raknet `transport` logs a loud console warning at start so a silent port mismatch can't hide.
+
 ## MCXboxBroadcast integration
 
-The optional [MCXboxBroadcast](https://github.com/MCXboxBroadcast/Broadcaster) standalone runs as its own supervised Java process, independent of the game server (own start/stop/restart, own log ring, killed cleanly on panel shutdown). Its home is `BROADCASTER_DIR` (default `backend/broadcaster`), which holds `config.yml`, `screenshot.jpg`, the auth `cache/`, and by default `MCXboxBroadcastStandalone.jar` itself — drop the jar there or point `BROADCASTER_JAR` at it, ensure `java` is on `PATH` (or set `JAVA_BIN`), then use the Broadcaster page. The panel seeds the documented default `config.yml` on first read and validates YAML before saving.
+The optional [MCXboxBroadcast](https://github.com/MCXboxBroadcast/Broadcaster) standalone is **per server instance**: every instance runs its own supervised Java process (own start/stop/restart, own log ring, own `config.yml`, own Microsoft account token cache, killed cleanly when the instance stops or is deleted), so two servers can broadcast different worlds with different accounts without interfering. The Broadcaster page follows the active instance; all `/broadcaster/*` endpoints are scoped with `X-Instance`.
+
+Home directories: the migrated `default` instance keeps the panel-level `BROADCASTER_DIR` (default `<data root>/broadcaster`) for backward compatibility; every other instance gets `<data root>/instances/<id>/broadcaster/`. The jar itself is shared — drop `MCXboxBroadcastStandalone.jar` into `BROADCASTER_DIR` once (or point `BROADCASTER_JAR` at it) and every instance resolves it; a jar inside an instance's own dir wins over the shared one. Ensure `java` is on `PATH` (or set `JAVA_BIN`). The panel seeds the documented default `config.yml` on first read and validates YAML before saving.
 
 When a Microsoft account needs authentication, the panel parses the device-code prompt from the log stream (`open the page <url> and enter the code <code>`) and surfaces each account's code and verification URL in the UI — including sub-session accounts (`accounts add <id>`), which the panel proxies to the broadcaster console. Extra accounts persist in the broadcaster's own `cache/sub_sessions.json`; per-account screenshots are written next to each token cache. Commands (`accounts list`, `restart`, `dumpsession`, …) can be sent from the page or `POST /api/v1/broadcaster/command`; everything is also visible on `WS /api/v1/broadcaster/ws`.
 
@@ -205,13 +209,13 @@ Commands use `{"command":"list"}` on the console socket or `POST /api/v1/console
 
 ## API
 
-All protected REST routes use `Authorization: Bearer <JWT>`. WebSockets and direct ZIP downloads also accept `?token=`. `/health` is public. Main endpoint families under `/api/v1`:
+All protected REST routes use `Authorization: Bearer <JWT>`. WebSockets and direct ZIP downloads also accept `?token=`. `/health` and `GET /api/v1/openapi.json` are public — the latter is a machine-readable inventory of every endpoint family with its permission gate and request-body keys. Endpoints for a non-default instance are scoped with the `X-Instance: <id>` header (or `?instance=<id>` for browser downloads). Main endpoint families under `/api/v1`:
 
 | Family | Endpoints |
 | --- | --- |
 | auth | `POST /auth/login`, `GET /auth/me`, `GET/POST /auth/users`, `PUT/DELETE /auth/users/{username}` |
 | roles | `GET/POST /roles/`, `GET/PUT/DELETE /roles/{name}` |
-| server/console | `GET /server/status`, `POST /server/action`, `POST /console/command`, `WS /console/ws` |
+| server/console | `GET /server/status`, `POST /server/action`, `POST /console/command`, `GET /console/tail`, `WS /console/ws` |
 | server backend | `GET /server/backend`, `GET /server/backend/versions`, `POST /server/backend/install`, `POST /server/backend/switch` |
 | properties | `GET /properties/`, `GET/PUT /properties/raw`, `PUT /properties/{key}` |
 | players/worlds | `GET /players/`, `POST /players/action`, `GET /worlds/`, `GET /worlds/{world}`, `GET /worlds/{world}/contents` |
@@ -222,6 +226,41 @@ All protected REST routes use `Authorization: Bearer <JWT>`. WebSockets and dire
 | files/settings/audit | `GET /files/`, `GET/PUT/DELETE /files/{filename}`, `GET /settings/`, `GET/PUT /settings/server`, `GET /audit/` |
 | performance/logs | `GET /performance/metrics`, `WS /performance/ws`, `WS /logs/ws` |
 | broadcaster | `GET /broadcaster/status`, `POST /broadcaster/action`, `POST /broadcaster/command`, `GET/PUT /broadcaster/config`, `GET/POST /broadcaster/accounts`, `GET /broadcaster/device-code`, `GET/PUT /broadcaster/screenshot`, `WS /broadcaster/ws` |
+| instances | `GET/POST /instances`, `GET/PUT/DELETE /instances/{id}`, `POST /instances/{id}/action`, `GET /host` |
+
+`GET /console/tail?lines=200` returns the last N console lines as JSON (`{"instance","latest","events":[…]}`, same event shape as the socket) without holding a WebSocket open; add `&format=text` for one line per row, handy for `curl … | tail` health checks. The live feed stays on `WS /console/ws`.
+
+### Instances and access control
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:17754/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"Admin","password":"…"}' | jq -r .token)
+
+# Create (id derives from the name; port 0 auto-picks a free pair)
+curl -X POST http://localhost:17754/api/v1/instances \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name":"friend-server","backend":"vanilla","deployment":"native","port":0}'
+
+# Share it: PUT /instances/{id} replaces the whole access list.
+# roles are names from the shared catalog (GET /roles) — the built-in
+# instance roles are "viewer" (read-only) and "instance-manager".
+curl -X PUT http://localhost:17754/api/v1/instances/friend-server \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"access":[{"user":"friend","roles":["viewer"]}]}'
+
+curl -X POST http://localhost:17754/api/v1/instances/friend-server/action \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"action":"start"}'
+
+# Delete is destructive and two-step: ?confirm=yes (add &keep_data=1 to keep files)
+```
+
+Edits are full-document PUT (no PATCH): a `PUT /instances/{id}` with only `access` leaves everything else untouched, and an `access` array always replaces the previous list. Only the instance owner, a panel owner, or holders of `INSTANCES_SHARE` may change access; name/port/deployment/resource edits additionally need the owner path or `INSTANCES_LIMITS`. You cannot grant an instance capability you do not hold on that instance yourself. Quotas (`GET /auth/me`) apply to the creating user; the panel owner is exempt.
+
+### Upgrading the panel binary
+
+After `kill`/SIGTERM the panel drains: it waits for running instances to stop gracefully before exiting, which can take tens of seconds. Wait for the process to actually exit (`systemctl --user stop omnibedrock`, or poll the PID) before replacing the binary — an immediate swap fails with `Text file busy`.
 
 ## Development and validation
 
@@ -231,6 +270,8 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 cd frontend && npm run check && npm run build
 ```
+
+On a fresh clone, `cargo build` runs `npm ci && npm run build` in `frontend/` itself (and rebuilds the UI whenever `frontend/src` changes); if that build fails, the cargo build fails too rather than silently bundling a placeholder UI. Set `OMNI_SKIP_FRONTEND_BUILD=1` to skip npm and accept the placeholder explicitly. CI and the Dockerfile build the UI in their own steps, so they are unaffected.
 
 Integration tests use temporary stores, a fake Endstone executable, and loopback sockets. They do not touch your live server. A real Endstone/Bedrock installation and container startup should also be smoke-tested before switching production. The API's Windows build path uses Tokio child termination, but Unix process-group descendant cleanup is the tested behavior; Windows descendant cleanup is not covered. OpenAPI/Swagger generation from FastAPI is not retained.
 

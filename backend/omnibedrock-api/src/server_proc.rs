@@ -79,11 +79,6 @@ pub async fn spawn(
             tracing::error!(%e, "HTTP server failed");
         }
         tracing::info!("Shutdown requested");
-        // Stop the broadcaster while its control channel is still alive;
-        // token cancellation below also tears it down if this fails.
-        if let Err(e) = stopping.broadcaster.shutdown().await {
-            tracing::warn!(%e, "broadcaster shutdown incomplete; relying on token cancellation");
-        }
         stopping.shutdown.cancel();
         // Hooks must complete/resume saves before shutting down instances.
         for instance in stopping.instances.list().await {

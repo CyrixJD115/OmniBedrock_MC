@@ -334,6 +334,14 @@ impl Console {
         }
         Ok(batch)
     }
+    /// The last `limit` events from the in-memory ring, oldest first. The
+    /// REST counterpart of `replay` for one-shot readers (scripts, health
+    /// checks); deeper history stays on the WebSocket + disk journal.
+    pub fn tail(&self, limit: usize) -> Vec<Arc<ConsoleEvent>> {
+        let s = self.inner.lock().expect("console mutex poisoned");
+        let skip = s.lines.len().saturating_sub(limit);
+        s.lines.iter().skip(skip).cloned().collect()
+    }
     pub async fn flush(&self) -> anyhow::Result<()> {
         self.journal.lock().await.flush().await
     }
@@ -1165,6 +1173,7 @@ async fn launch(
             crate::instances::enforce_instance_port(config, ctx.port).await;
         }
     }
+    crate::instances::warn_transport_mismatch(config, console).await;
     let base_argv = match settings.backend {
         Backend::Endstone => base_argv_endstone(config)?,
         Backend::Vanilla => base_argv_vanilla(config)?,

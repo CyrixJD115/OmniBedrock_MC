@@ -162,6 +162,33 @@ async fn call_text(app: &Router, method: &str, path: &str, token: &str) -> (Stat
         .unwrap();
     (status, String::from_utf8_lossy(&bytes).into_owned())
 }
+/// GET a text body with optional X-Instance scoping.
+async fn call_text_instance(
+    app: &Router,
+    method: &str,
+    path: &str,
+    token: &str,
+    instance: Option<&str>,
+) -> (StatusCode, String) {
+    let mut request = Request::builder()
+        .method(method)
+        .uri(path)
+        .header("Authorization", format!("Bearer {token}"));
+    if let Some(instance) = instance {
+        request = request.header("X-Instance", instance);
+    }
+    let response = app
+        .clone()
+        .oneshot(request.body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 16 * 1024 * 1024)
+        .await
+        .unwrap();
+    (status, String::from_utf8_lossy(&bytes).to_string())
+}
+
 async fn call_bytes(app: &Router, method: &str, path: &str, token: &str) -> (StatusCode, Vec<u8>) {
     let response = app
         .clone()
@@ -1296,6 +1323,15 @@ async fn broadcaster_lifecycle_device_code_config_and_accounts() {
     let s = AppState::new(c, CancellationToken::new()).await.unwrap();
     let app = router(s.clone()).unwrap();
     let token = login_owner(&app, &s).await;
+    // The default instance keeps the legacy broadcaster dir; routes without
+    // X-Instance scope to it. The handle is clonable, so capture it once.
+    let bc = s
+        .instances
+        .get("default")
+        .await
+        .unwrap()
+        .broadcaster
+        .clone();
     // Initial status: stopped, jar present, config seeded on first read.
     let (status, body) = call(
         &app,
@@ -1311,8 +1347,7 @@ async fn broadcaster_lifecycle_device_code_config_and_accounts() {
     assert_eq!(body["accounts"][0]["id"], "main");
     assert!(
         wait_until(5, || {
-            s.broadcaster
-                .java
+            bc.java
                 .borrow()
                 .clone()
                 .is_some_and(|j| j.contains("17.0.0"))
@@ -1321,7 +1356,7 @@ async fn broadcaster_lifecycle_device_code_config_and_accounts() {
         "java detection completes"
     );
     assert_eq!(
-        s.broadcaster.java.borrow().clone().as_deref(),
+        bc.java.borrow().clone().as_deref(),
         Some("openjdk version \"17.0.0\" 2024-01-01")
     );
     // Config defaults are seeded and can be edited.
@@ -1359,10 +1394,10 @@ async fn broadcaster_lifecycle_device_code_config_and_accounts() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(
-        wait_until(5, || s.broadcaster.device_codes().len() >= 2).await,
+        wait_until(5, || bc.device_codes().len() >= 2).await,
         "device codes captured"
     );
-    let codes = s.broadcaster.device_codes();
+    let codes = bc.device_codes();
     assert_eq!(codes["main"].code, "ABCD1234");
     assert_eq!(codes["main"].url, "https://www.microsoft.com/link");
     assert_eq!(codes["alt1"].code, "EFGH5678");
@@ -1443,7 +1478,7 @@ async fn broadcaster_lifecycle_device_code_config_and_accounts() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
-        s.broadcaster.snapshot().status,
+        bc.snapshot().status,
         omnibedrock_server::broadcaster::BcStatus::Running
     );
     let (status, _) = call(
@@ -1456,7 +1491,7 @@ async fn broadcaster_lifecycle_device_code_config_and_accounts() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
-        s.broadcaster.snapshot().status,
+        bc.snapshot().status,
         omnibedrock_server::broadcaster::BcStatus::Stopped
     );
     // Commands are rejected while stopped.
@@ -1469,7 +1504,7 @@ async fn broadcaster_lifecycle_device_code_config_and_accounts() {
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
-    s.broadcaster.shutdown().await.unwrap();
+    bc.shutdown().await.unwrap();
 }
 #[tokio::test]
 async fn broadcaster_socket_streams_status_codes_and_commands() {
@@ -1495,7 +1530,14 @@ async fn broadcaster_socket_streams_status_codes_and_commands() {
     let s = AppState::new(c, CancellationToken::new()).await.unwrap();
     let app = router(s.clone()).unwrap();
     let token = login_owner(&app, &s).await;
-    s.broadcaster.action("start").await.unwrap();
+    s.instances
+        .get("default")
+        .await
+        .unwrap()
+        .broadcaster
+        .action("start")
+        .await
+        .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let shutdown = s.shutdown.clone();
@@ -1553,7 +1595,14 @@ async fn broadcaster_socket_streams_status_codes_and_commands() {
     })
     .await
     .expect("command output streamed back");
-    s.broadcaster.shutdown().await.unwrap();
+    s.instances
+        .get("default")
+        .await
+        .unwrap()
+        .broadcaster
+        .shutdown()
+        .await
+        .unwrap();
 }
 
 fn write_addon_zip(path: &std::path::Path, files: &[(&str, &[u8])]) {
@@ -1880,6 +1929,129 @@ async fn call_instance(
 
 /// Multi-instance lifecycle: migration, quotas, port conflicts, access
 /// control, X-Instance scoping, and deletion rules.
+/// Every instance owns an independent broadcaster: separate dirs, config.yml,
+/// accounts, and process state. Configuring one instance must never touch
+/// another, and routes are scoped through X-Instance.
+#[tokio::test]
+async fn broadcaster_is_per_instance() {
+    let (dir, _c) = setup().await;
+    let mut c = config(&dir);
+    c.java_bin = Some(dir.path().join("java-fixture"));
+    c.broadcaster_jar = Some(dir.path().join("MCXboxBroadcastStandalone.jar"));
+    c.broadcaster_dir = dir.path().join("broadcaster");
+    tokio::fs::write(
+        dir.path().join("MCXboxBroadcastStandalone.jar"),
+        b"fake jar bytes",
+    )
+    .await
+    .unwrap();
+    let s = AppState::new(c, CancellationToken::new()).await.unwrap();
+    let app = router(s.clone()).unwrap();
+    let token = login_owner(&app, &s).await;
+
+    // Create one extra instance.
+    let (code, body) = call(
+        &app,
+        "POST",
+        "/api/v1/instances",
+        Some(&token),
+        json!({"name":"Second Server","backend":"vanilla"}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{body}");
+    let second_id = body["id"].as_str().unwrap().to_owned();
+
+    // Distinct broadcaster directories: the default instance keeps the
+    // panel-level dir; the new instance gets one under its own root.
+    let (_, default_status) = call(
+        &app,
+        "GET",
+        "/api/v1/broadcaster/status",
+        Some(&token),
+        json!({}),
+    )
+    .await;
+    let (_, second_status) = call_instance(
+        &app,
+        "GET",
+        "/api/v1/broadcaster/status",
+        Some(&token),
+        Some(&second_id),
+        json!({}),
+    )
+    .await;
+    let default_dir = default_status["dir"].as_str().unwrap();
+    let second_dir = second_status["dir"].as_str().unwrap();
+    assert!(default_dir.ends_with("broadcaster"), "{default_dir}");
+    assert!(
+        second_dir.contains("instances") && second_dir.ends_with("broadcaster"),
+        "{second_dir}"
+    );
+    assert_ne!(default_dir, second_dir);
+    // The shared jar resolves for both despite the separate dirs.
+    assert_eq!(second_status["jar_exists"], true);
+
+    // Config edits are scoped: writing on the second instance never touches
+    // the default instance's config.yml.
+    let (_, text) = call_text(&app, "GET", "/api/v1/broadcaster/config", &token).await;
+    assert!(!text.contains("update-interval: 33"), "{text}");
+    let (code, _) = call_instance(
+        &app,
+        "PUT",
+        "/api/v1/broadcaster/config",
+        Some(&token),
+        Some(&second_id),
+        json!({"text":"session:\n  update-interval: 33\n"}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+    let (_, second_text) = call_text_instance(
+        &app,
+        "GET",
+        "/api/v1/broadcaster/config",
+        &token,
+        Some(&second_id),
+    )
+    .await;
+    assert!(second_text.contains("update-interval: 33"), "{second_text}");
+    let (_, default_text) = call_text(&app, "GET", "/api/v1/broadcaster/config", &token).await;
+    assert!(
+        !default_text.contains("update-interval: 33"),
+        "second instance's config leaked into the default: {default_text}"
+    );
+    let second_config_path = std::path::Path::new(second_dir).join("config.yml");
+    let default_config_path = std::path::Path::new(default_dir).join("config.yml");
+    assert!(second_config_path.is_file());
+    assert!(default_config_path.is_file());
+
+    // Statuses are independent: the second instance's broadcaster state is
+    // its own object, not a shared global.
+    let second_bc = s
+        .instances
+        .get(&second_id)
+        .await
+        .unwrap()
+        .broadcaster
+        .clone();
+    let default_bc = s
+        .instances
+        .get("default")
+        .await
+        .unwrap()
+        .broadcaster
+        .clone();
+    assert_eq!(
+        second_bc.snapshot().status,
+        omnibedrock_server::broadcaster::BcStatus::Stopped
+    );
+    assert_eq!(
+        default_bc.snapshot().status,
+        omnibedrock_server::broadcaster::BcStatus::Stopped
+    );
+    second_bc.shutdown().await.unwrap();
+    default_bc.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn instances_lifecycle_quotas_and_access() {
     let (_dir, s, app, token) = state().await;

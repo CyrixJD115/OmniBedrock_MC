@@ -1,0 +1,849 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "OmniBedrock Panel API",
+    "version": "1.0.0",
+    "description": "Machine-readable inventory of the OmniBedrock control-panel API. Every path below lives under the API prefix (default /api/v1). Authentication is a Bearer token from POST /auth/login. Endpoints marked 'any signed-in user' need a valid token but no specific permission; otherwise the permission shown in x-permission is required (globally, or scoped to the instance via the X-Instance header / ?instance= query for non-default instances). x-body lists the JSON request-body keys; entries with no x-body take an empty JSON object. Extensions: x-permission, x-body, x-query, x-public, x-websocket."
+  },
+  "servers": [{ "url": "/api/v1" }],
+  "security": [{ "bearerAuth": [] }],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": { "type": "http", "scheme": "bearer", "bearerFormat": "JWT" }
+    }
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": ["system"],
+        "summary": "Liveness probe",
+        "x-public": true,
+        "security": [],
+        "responses": { "200": { "description": "Panel is up; returns {status, version}" } }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "tags": ["system"],
+        "summary": "This document",
+        "x-public": true,
+        "security": [],
+        "responses": { "200": { "description": "OpenAPI 3.0 inventory of the API" } }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "tags": ["auth"],
+        "summary": "Exchange username + password for a bearer token",
+        "x-public": true,
+        "security": [],
+        "requestBody": { "x-body": { "username": "string", "password": "string" } },
+        "responses": { "200": { "description": "{token, user}" } }
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "tags": ["auth"],
+        "summary": "The signed-in user, roles, permissions, quotas",
+        "x-permission": "any signed-in user",
+        "responses": { "200": { "description": "User document" } }
+      }
+    },
+    "/auth/users": {
+      "get": {
+        "tags": ["auth"],
+        "summary": "List panel accounts",
+        "x-permission": "USERS_VIEW",
+        "responses": { "200": { "description": "Array of users (secrets redacted)" } }
+      },
+      "post": {
+        "tags": ["auth"],
+        "summary": "Create a panel account",
+        "x-permission": "USERS_CREATE",
+        "requestBody": { "x-body": { "username": "string", "password": "string?", "roles": "[string]?" } },
+        "responses": { "200": { "description": "Created user" } }
+      }
+    },
+    "/auth/users/{name}": {
+      "put": {
+        "tags": ["auth"],
+        "summary": "Update an account (full edited document)",
+        "x-permission": "USERS_EDIT",
+        "requestBody": { "x-body": { "username": "string", "password": "string?", "roles": "[string]?", "quotas": "object?" } },
+        "responses": { "200": { "description": "Updated user" } }
+      },
+      "delete": {
+        "tags": ["auth"],
+        "summary": "Delete an account",
+        "x-permission": "USERS_DELETE",
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/roles": {
+      "get": {
+        "tags": ["roles"],
+        "summary": "The shared role catalog (names, colors, positions, permissions)",
+        "x-permission": "any signed-in user",
+        "responses": { "200": { "description": "Array of roles" } }
+      },
+      "post": {
+        "tags": ["roles"],
+        "summary": "Create a role",
+        "x-permission": "ROLES_MANAGE",
+        "requestBody": { "x-body": { "name": "string", "color": "string?", "position": "int?", "permissions": "[string]?" } },
+        "responses": { "200": { "description": "Created role" } }
+      }
+    },
+    "/roles/{name}": {
+      "get": {
+        "tags": ["roles"],
+        "summary": "One role",
+        "x-permission": "any signed-in user",
+        "responses": { "200": { "description": "Role document" } }
+      },
+      "put": {
+        "tags": ["roles"],
+        "summary": "Update a role (may rename it; instance memberships follow)",
+        "x-permission": "ROLES_MANAGE",
+        "requestBody": { "x-body": { "name": "string?", "color": "string?", "position": "int?", "permissions": "[string]?" } },
+        "responses": { "200": { "description": "Updated role" } }
+      },
+      "delete": {
+        "tags": ["roles"],
+        "summary": "Delete a role; instance access entries lose it",
+        "x-permission": "ROLES_MANAGE",
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/server/status": {
+      "get": {
+        "tags": ["server"],
+        "summary": "Runtime snapshot of the scoped instance (state, pid, uptime, crash count)",
+        "x-permission": "SERVER_VIEW",
+        "responses": { "200": { "description": "Status object" } }
+      }
+    },
+    "/server/backend": {
+      "get": {
+        "tags": ["server"],
+        "summary": "Installed backend (BDS / Endstone) details for the instance",
+        "x-permission": "SERVER_VIEW",
+        "responses": { "200": { "description": "Backend status" } }
+      }
+    },
+    "/server/backend/versions": {
+      "get": {
+        "tags": ["server"],
+        "summary": "Downloadable BDS versions from the registry",
+        "x-permission": "SERVER_VIEW",
+        "responses": { "200": { "description": "Version list" } }
+      }
+    },
+    "/server/backend/install": {
+      "post": {
+        "tags": ["server"],
+        "summary": "Download and install BDS; progress streams to the console",
+        "x-permission": "SERVER_MANAGE",
+        "requestBody": { "x-body": { "version": "string? (default latest)" } },
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/server/backend/endstone/install": {
+      "post": {
+        "tags": ["server"],
+        "summary": "Bootstrap the Endstone toolchain (uv → CPython → venv)",
+        "x-permission": "SERVER_MANAGE",
+        "requestBody": { "x-body": { "version": "string?" } },
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/server/backend/switch": {
+      "post": {
+        "tags": ["server"],
+        "summary": "Switch the instance between vanilla and Endstone (auto-installs the target)",
+        "x-permission": "SERVER_MANAGE",
+        "requestBody": { "x-body": { "backend": "\"vanilla\"|\"endstone\"", "version": "string?" } },
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/server/action": {
+      "post": {
+        "tags": ["server"],
+        "summary": "Start / stop / kill / restart the scoped instance",
+        "x-permission": "SERVER_MANAGE",
+        "requestBody": { "x-body": { "action": "\"start\"|\"stop\"|\"kill\"|\"restart\"" } },
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/console/command": {
+      "post": {
+        "tags": ["console"],
+        "summary": "Send a server console command",
+        "x-permission": "CONSOLE_SEND",
+        "requestBody": { "x-body": { "command": "string" } },
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/console/tail": {
+      "get": {
+        "tags": ["console"],
+        "summary": "Last N console lines over plain REST (WS /console/ws is the live feed)",
+        "x-permission": "CONSOLE_VIEW",
+        "x-query": { "lines": "int 1..2000, default 200", "format": "\"text\" returns text/plain lines; default JSON {instance, latest, events[]}" },
+        "responses": { "200": { "description": "Console events, oldest first" } }
+      }
+    },
+    "/performance/metrics": {
+      "get": {
+        "tags": ["console"],
+        "summary": "Per-instance CPU/memory usage samples",
+        "x-permission": "SERVER_VIEW",
+        "responses": { "200": { "description": "Metrics object" } }
+      }
+    },
+    "/players": {
+      "get": {
+        "tags": ["players"],
+        "summary": "Players currently online",
+        "x-permission": "PLAYERS_VIEW",
+        "responses": { "200": { "description": "Array of players" } }
+      }
+    },
+    "/players/action": {
+      "post": {
+        "tags": ["players"],
+        "summary": "Kick / ban / pardon / op / deop a player",
+        "x-permission": "PLAYERS_KICK | PLAYERS_BAN | PLAYERS_OP (by action)",
+        "requestBody": { "x-body": { "action": "\"kick\"|\"ban\"|\"pardon\"|\"op\"|\"deop\"", "target": "string", "reason": "string? (kick only)" } },
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/settings": {
+      "get": {
+        "tags": ["settings"],
+        "summary": "Panel configuration (internal paths redacted)",
+        "x-permission": "SETTINGS_VIEW",
+        "responses": { "200": { "description": "Config object" } }
+      }
+    },
+    "/settings/panel": {
+      "get": {
+        "tags": ["settings"],
+        "summary": "Login-screen info (whether login is required)",
+        "x-public": true,
+        "security": [],
+        "responses": { "200": { "description": "{login_enabled, ...}" } }
+      },
+      "put": {
+        "tags": ["settings"],
+        "summary": "Toggle the login requirement",
+        "x-permission": "SETTINGS_EDIT",
+        "requestBody": { "x-body": { "login_enabled": "bool" } },
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/settings/curseforge": {
+      "get": {
+        "tags": ["settings"],
+        "summary": "CurseForge key status (hint only, never the key)",
+        "x-permission": "SETTINGS_VIEW",
+        "responses": { "200": { "description": "{configured, key_hint?, source}" } }
+      },
+      "put": {
+        "tags": ["settings"],
+        "summary": "Set or clear the CurseForge API key (empty clears, falls back to .env)",
+        "x-permission": "SETTINGS_EDIT",
+        "requestBody": { "x-body": { "api_key": "string" } },
+        "responses": { "200": { "description": "{success, message, configured}" } }
+      }
+    },
+    "/settings/server": {
+      "get": {
+        "tags": ["settings"],
+        "summary": "The scoped instance's runtime settings",
+        "x-permission": "SERVER_VIEW",
+        "responses": { "200": { "description": "ServerSettings + crash_count" } }
+      },
+      "put": {
+        "tags": ["settings"],
+        "summary": "Merge-update the scoped instance's settings",
+        "x-permission": "SERVER_MANAGE",
+        "requestBody": { "x-body": { "...": "any ServerSettings key, e.g. backend, vanilla_version, autostart" } },
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/audit": {
+      "get": {
+        "tags": ["audit"],
+        "summary": "Audit trail, newest first",
+        "x-permission": "AUDIT_VIEW",
+        "x-query": { "limit": "int 1..500 (default 100)", "offset": "int", "username": "filter", "category": "filter", "action": "substring filter" },
+        "responses": { "200": { "description": "Array of audit entries" } }
+      }
+    },
+    "/properties": {
+      "get": {
+        "tags": ["properties"],
+        "summary": "server.properties as parsed key/value entries",
+        "x-permission": "PROPERTIES_VIEW",
+        "responses": { "200": { "description": "Array of {key, value, comment?, inline_comment?}" } }
+      }
+    },
+    "/properties/raw": {
+      "get": {
+        "tags": ["properties"],
+        "summary": "server.properties verbatim (text/plain)",
+        "x-permission": "PROPERTIES_VIEW",
+        "responses": { "200": { "description": "Raw file text" } }
+      },
+      "put": {
+        "tags": ["properties"],
+        "summary": "Replace server.properties wholesale",
+        "x-permission": "PROPERTIES_EDIT",
+        "requestBody": { "x-body": { "text": "string" } },
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/properties/{key}": {
+      "put": {
+        "tags": ["properties"],
+        "summary": "Update one validated property",
+        "x-permission": "PROPERTIES_EDIT",
+        "requestBody": { "x-body": { "value": "string" } },
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/worlds": {
+      "get": {
+        "tags": ["worlds"],
+        "summary": "World folders of the scoped instance",
+        "x-permission": "SERVER_VIEW",
+        "responses": { "200": { "description": "Array of worlds" } }
+      }
+    },
+    "/worlds/{world}": {
+      "get": {
+        "tags": ["worlds"],
+        "summary": "World size and file count",
+        "x-permission": "SERVER_VIEW",
+        "responses": { "200": { "description": "{name, path, size_bytes, files}" } }
+      }
+    },
+    "/worlds/{world}/contents": {
+      "get": {
+        "tags": ["worlds"],
+        "summary": "Recursive file tree of a world",
+        "x-permission": "SERVER_VIEW",
+        "responses": { "200": { "description": "Tree object" } }
+      }
+    },
+    "/files": {
+      "get": {
+        "tags": ["files"],
+        "summary": "List editable config files (server.properties, allowlist.json, permissions.json, ...)",
+        "x-permission": "FILES_VIEW",
+        "responses": { "200": { "description": "Array of file names" } }
+      }
+    },
+    "/files/{name}": {
+      "get": {
+        "tags": ["files"],
+        "summary": "Read one config file",
+        "x-permission": "FILES_VIEW",
+        "responses": { "200": { "description": "{name, content}" } }
+      },
+      "put": {
+        "tags": ["files"],
+        "summary": "Overwrite one config file",
+        "x-permission": "FILES_EDIT",
+        "requestBody": { "x-body": { "content": "string" } },
+        "responses": { "200": { "description": "{success, message}" } }
+      },
+      "delete": {
+        "tags": ["files"],
+        "summary": "Delete one config file",
+        "x-permission": "FILES_EDIT",
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/addons": {
+      "get": {
+        "tags": ["addons"],
+        "summary": "Installed packs per world (behavior_packs / resource_packs) with metadata cache",
+        "x-permission": "ADDONS_VIEW",
+        "x-query": { "world": "world name (required)", "refresh": "\"1\" bypasses the metadata cache" },
+        "responses": { "200": { "description": "{behavior_packs: [], resource_packs: []}" } }
+      }
+    },
+    "/addons/upload": {
+      "post": {
+        "tags": ["addons"],
+        "summary": "Upload a .mcpack/.mcaddon/.zip archive (raw body, not JSON)",
+        "x-permission": "ADDONS_MANAGE",
+        "requestBody": { "content": { "application/octet-stream": {} }, "description": "Archive bytes; installed into the chosen world" },
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/addons/icon": {
+      "get": {
+        "tags": ["addons"],
+        "summary": "Pack icon image (token via ?token= allowed for <img> tags)",
+        "x-permission": "ADDONS_VIEW",
+        "x-query": { "path": "pack path (required)", "token": "bearer token, download contexts only" },
+        "responses": { "200": { "description": "Image bytes" } }
+      }
+    },
+    "/addons/delete": {
+      "post": {
+        "tags": ["addons"],
+        "summary": "Delete an installed pack",
+        "x-permission": "ADDONS_MANAGE",
+        "requestBody": { "x-body": { "path": "string" } },
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/addons/manifest": {
+      "get": {
+        "tags": ["addons"],
+        "summary": "Read a pack's manifest.json",
+        "x-permission": "ADDONS_VIEW",
+        "x-query": { "path": "pack path (required)" },
+        "responses": { "200": { "description": "Manifest object" } }
+      },
+      "put": {
+        "tags": ["addons"],
+        "summary": "Write a pack's manifest.json",
+        "x-permission": "ADDONS_MANAGE",
+        "requestBody": { "x-body": { "path": "string", "manifest": "object" } },
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/addons/rename": {
+      "put": {
+        "tags": ["addons"],
+        "summary": "Rename a pack folder",
+        "x-permission": "ADDONS_MANAGE",
+        "requestBody": { "x-body": { "path": "string", "new_name": "string" } },
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/addons/randomize-uuid": {
+      "post": {
+        "tags": ["addons"],
+        "summary": "Regenerate a pack's header UUID",
+        "x-permission": "ADDONS_MANAGE",
+        "requestBody": { "x-body": { "path": "string" } },
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/addons/change-uuid": {
+      "put": {
+        "tags": ["addons"],
+        "summary": "Set a pack's header UUID explicitly",
+        "x-permission": "ADDONS_MANAGE",
+        "requestBody": { "x-body": { "path": "string", "uuid": "string" } },
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/addons/order/{world}/{packType}": {
+      "get": {
+        "tags": ["addons"],
+        "summary": "Pack load order for a world (behavior_packs | resource_packs)",
+        "x-permission": "ADDONS_VIEW",
+        "responses": { "200": { "description": "Ordered pack list" } }
+      },
+      "put": {
+        "tags": ["addons"],
+        "summary": "Set pack load order",
+        "x-permission": "ADDONS_MANAGE",
+        "requestBody": { "x-body": { "uuids": "[string]" } },
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/store/search": {
+      "get": {
+        "tags": ["store"],
+        "summary": "Search the CurseForge Bedrock store",
+        "x-permission": "STORE_VIEW",
+        "x-query": { "query": "search text", "...": "paging/facet params" },
+        "responses": { "200": { "description": "Search results" } }
+      }
+    },
+    "/store/meta": {
+      "get": {
+        "tags": ["store"],
+        "summary": "Store categories and class IDs",
+        "x-permission": "STORE_VIEW",
+        "responses": { "200": { "description": "Metadata object" } }
+      }
+    },
+    "/store/project/{id}": {
+      "get": {
+        "tags": ["store"],
+        "summary": "One CurseForge project",
+        "x-permission": "STORE_VIEW",
+        "responses": { "200": { "description": "Project object" } }
+      }
+    },
+    "/store/project/{id}/description": {
+      "get": {
+        "tags": ["store"],
+        "summary": "Project HTML description",
+        "x-permission": "STORE_VIEW",
+        "responses": { "200": { "description": "Description" } }
+      }
+    },
+    "/store/project/{id}/files": {
+      "get": {
+        "tags": ["store"],
+        "summary": "Downloadable files of a project",
+        "x-permission": "STORE_VIEW",
+        "responses": { "200": { "description": "File list" } }
+      }
+    },
+    "/store/image": {
+      "get": {
+        "tags": ["store"],
+        "summary": "Proxy a store image (token via ?token= allowed)",
+        "x-permission": "STORE_VIEW",
+        "x-query": { "url": "image URL (required)", "token": "bearer token" },
+        "responses": { "200": { "description": "Image bytes" } }
+      }
+    },
+    "/store/install": {
+      "post": {
+        "tags": ["store"],
+        "summary": "Install a store file into a world",
+        "x-permission": "STORE_INSTALL",
+        "requestBody": { "x-body": { "project_id": "int", "file_id": "int", "target": "\"auto\"|\"world\"", "world": "string (required when target=world)" } },
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/backups": {
+      "get": {
+        "tags": ["backups"],
+        "summary": "List backups per world",
+        "x-permission": "BACKUPS_VIEW",
+        "responses": { "200": { "description": "Backup listing" } }
+      }
+    },
+    "/backups/worlds": {
+      "get": {
+        "tags": ["backups"],
+        "summary": "Worlds eligible for backup",
+        "x-permission": "BACKUPS_VIEW",
+        "responses": { "200": { "description": "Array of worlds" } }
+      }
+    },
+    "/backups/trash": {
+      "get": {
+        "tags": ["backups"],
+        "summary": "Trashed backups",
+        "x-permission": "BACKUPS_VIEW",
+        "responses": { "200": { "description": "Trash listing" } }
+      }
+    },
+    "/backups/create": {
+      "post": {
+        "tags": ["backups"],
+        "summary": "Create a backup now",
+        "x-permission": "BACKUPS_CREATE",
+        "requestBody": { "x-body": { "...": "world/label options" } },
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/backups/restore/{world}/{filename}": {
+      "post": {
+        "tags": ["backups"],
+        "summary": "Restore a backup over its world",
+        "x-permission": "BACKUPS_RESTORE",
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/backups/{world}/{filename}/restore-to-world": {
+      "post": {
+        "tags": ["backups"],
+        "summary": "Restore a backup into a different world name",
+        "x-permission": "BACKUPS_RESTORE",
+        "requestBody": { "x-body": { "world": "target world name" } },
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/backups/{world}/{filename}": {
+      "delete": {
+        "tags": ["backups"],
+        "summary": "Delete (trash) a backup",
+        "x-permission": "BACKUPS_DELETE",
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/backups/{world}/{filename}/download": {
+      "get": {
+        "tags": ["backups"],
+        "summary": "Download a backup archive (token via ?token= allowed)",
+        "x-permission": "BACKUPS_VIEW",
+        "responses": { "200": { "description": "Archive bytes" } }
+      }
+    },
+    "/backups/settings": {
+      "get": {
+        "tags": ["backups"],
+        "summary": "Backup settings",
+        "x-permission": "BACKUPS_VIEW",
+        "responses": { "200": { "description": "Settings object" } }
+      },
+      "put": {
+        "tags": ["backups"],
+        "summary": "Update backup settings",
+        "x-permission": "SETTINGS_EDIT",
+        "requestBody": { "x-body": { "...": "backup settings keys" } },
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/backups/scheduler": {
+      "get": {
+        "tags": ["backups"],
+        "summary": "Backup schedule state",
+        "x-permission": "BACKUPS_VIEW",
+        "responses": { "200": { "description": "Scheduler state" } }
+      },
+      "put": {
+        "tags": ["backups"],
+        "summary": "Update the backup schedule",
+        "x-permission": "SETTINGS_EDIT",
+        "requestBody": { "x-body": { "...": "schedule keys" } },
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/backups/test-command": {
+      "post": {
+        "tags": ["backups"],
+        "summary": "Test a pre/post-backup hook command",
+        "x-permission": "BACKUPS_CREATE",
+        "requestBody": { "x-body": { "entry": "hook object" } },
+        "responses": { "200": { "description": "Hook outcome" } }
+      }
+    },
+    "/backups/include-items": {
+      "get": {
+        "tags": ["backups"],
+        "summary": "Configured backup include entries",
+        "x-permission": "BACKUPS_VIEW",
+        "responses": { "200": { "description": "Include list" } }
+      }
+    },
+    "/backups/folders": {
+      "get": {
+        "tags": ["backups"],
+        "summary": "Backup storage folders",
+        "x-permission": "BACKUPS_VIEW",
+        "responses": { "200": { "description": "Folder list" } }
+      }
+    },
+    "/broadcaster/status": {
+      "get": {
+        "tags": ["broadcaster"],
+        "summary": "MCXboxBroadcast integration status",
+        "x-permission": "BROADCASTER_VIEW",
+        "responses": { "200": { "description": "Status object" } }
+      }
+    },
+    "/broadcaster/action": {
+      "post": {
+        "tags": ["broadcaster"],
+        "summary": "Start / stop the broadcaster",
+        "x-permission": "BROADCASTER_MANAGE",
+        "requestBody": { "x-body": { "action": "string" } },
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/broadcaster/command": {
+      "post": {
+        "tags": ["broadcaster"],
+        "summary": "Send a broadcaster command",
+        "x-permission": "BROADCASTER_MANAGE",
+        "requestBody": { "x-body": { "command": "string" } },
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/broadcaster/config": {
+      "get": {
+        "tags": ["broadcaster"],
+        "summary": "Broadcaster config.yml",
+        "x-permission": "BROADCASTER_VIEW",
+        "responses": { "200": { "description": "{text, ...}" } }
+      },
+      "put": {
+        "tags": ["broadcaster"],
+        "summary": "Replace broadcaster config.yml",
+        "x-permission": "BROADCASTER_MANAGE",
+        "requestBody": { "x-body": { "text": "string" } },
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/broadcaster/accounts": {
+      "get": {
+        "tags": ["broadcaster"],
+        "summary": "Broadcast accounts",
+        "x-permission": "BROADCASTER_VIEW",
+        "responses": { "200": { "description": "Account list" } }
+      },
+      "post": {
+        "tags": ["broadcaster"],
+        "summary": "Add / remove / refresh an account (runs through the console)",
+        "x-permission": "BROADCASTER_MANAGE",
+        "requestBody": { "x-body": { "action": "string", "id": "string" } },
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/broadcaster/device-code": {
+      "get": {
+        "tags": ["broadcaster"],
+        "summary": "Xbox device-code login session",
+        "x-permission": "BROADCASTER_VIEW",
+        "responses": { "200": { "description": "Device code object" } }
+      }
+    },
+    "/broadcaster/screenshot": {
+      "get": {
+        "tags": ["broadcaster"],
+        "summary": "Current gamerpic/screenshot",
+        "x-permission": "BROADCASTER_VIEW",
+        "x-query": { "account": "account id, default main", "token": "bearer token for <img> contexts" },
+        "responses": { "200": { "description": "Image bytes" } }
+      },
+      "put": {
+        "tags": ["broadcaster"],
+        "summary": "Upload a JPEG/PNG screenshot (raw body, ?account=)",
+        "x-permission": "BROADCASTER_MANAGE",
+        "requestBody": { "content": { "image/jpeg": {}, "image/png": {} } },
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/instances": {
+      "get": {
+        "tags": ["instances"],
+        "summary": "Instances the signed-in user can access (default instance + shared ones)",
+        "x-permission": "any signed-in user",
+        "responses": { "200": { "description": "Array of instance summaries + usage" } }
+      },
+      "post": {
+        "tags": ["instances"],
+        "summary": "Create an instance (quota + port availability checked; id derives from name)",
+        "x-permission": "INSTANCES_CREATE",
+        "requestBody": {
+          "x-body": {
+            "name": "string 1..64 (path-safe; becomes the id)",
+            "backend": "\"vanilla\"|\"endstone\"",
+            "deployment": "\"native\"|\"docker\"|\"systemd\" (default native)",
+            "port": "int UDP port, 0 = auto-pick (default 0)",
+            "memory_mb": "int? soft resource cap",
+            "cpus": "float? soft resource cap",
+            "autostart": "bool? (systemd deployment only)",
+            "vanilla_version": "string? BDS version to pin"
+          }
+        },
+        "responses": { "200": { "description": "Instance summary" } }
+      }
+    },
+    "/instances/{id}": {
+      "get": {
+        "tags": ["instances"],
+        "summary": "One instance summary + usage",
+        "x-permission": "instance access",
+        "responses": { "200": { "description": "Instance summary" } }
+      },
+      "put": {
+        "tags": ["instances"],
+        "summary": "Update editable fields and/or replace the access list. access requires the instance owner, a panel owner, or INSTANCES_SHARE; name/port/deployment/memory_mb/cpus require the owner path or INSTANCES_LIMITS. Port changes need the instance stopped.",
+        "x-permission": "INSTANCES_LIMITS | INSTANCES_SHARE | owner",
+        "requestBody": {
+          "x-body": {
+            "name": "string?",
+            "port": "int?",
+            "deployment": "\"native\"|\"docker\"|\"systemd\"?",
+            "autostart": "bool? (systemd only)",
+            "memory_mb": "int?",
+            "cpus": "float?",
+            "access": "[{user: \"username\", roles: [\"viewer\"|\"instance-manager\"|<catalog role name>\"]}? — full replacement of the share list; empty array revokes everyone]"
+          }
+        },
+        "responses": { "200": { "description": "Updated instance summary" } }
+      },
+      "delete": {
+        "tags": ["instances"],
+        "summary": "Delete an instance (owner, panel owner, or INSTANCES_DELETE)",
+        "x-permission": "INSTANCES_DELETE | owner",
+        "x-query": { "confirm": "\"yes\" required", "keep_data": "\"1\" keeps files on disk" },
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/instances/{id}/action": {
+      "post": {
+        "tags": ["instances"],
+        "summary": "Start / stop / kill / restart one instance (auto-installs the backend on start)",
+        "x-permission": "SERVER_MANAGE + instance access",
+        "requestBody": { "x-body": { "action": "\"start\"|\"stop\"|\"kill\"|\"restart\"" } },
+        "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/host": {
+      "get": {
+        "tags": ["instances"],
+        "summary": "Host capacity, aggregate instance allocations, overcommit warnings",
+        "x-permission": "SERVER_VIEW",
+        "responses": { "200": { "description": "Host object" } }
+      }
+    },
+    "/console/ws": {
+      "get": {
+        "tags": ["websockets"],
+        "summary": "Live console feed (JSON events; same shape as /console/tail events)",
+        "x-permission": "CONSOLE_VIEW",
+        "x-websocket": true,
+        "x-query": { "instance": "instance id", "token": "bearer token for browser WebSocket clients" },
+        "responses": { "101": { "description": "WebSocket upgrade" } }
+      }
+    },
+    "/performance/ws": {
+      "get": {
+        "tags": ["websockets"],
+        "summary": "Live performance metrics stream",
+        "x-permission": "SERVER_VIEW",
+        "x-websocket": true,
+        "x-query": { "instance": "instance id", "token": "bearer token" },
+        "responses": { "101": { "description": "WebSocket upgrade" } }
+      }
+    },
+    "/backups/ws": {
+      "get": {
+        "tags": ["websockets"],
+        "summary": "Live backup progress stream",
+        "x-permission": "BACKUPS_VIEW",
+        "x-websocket": true,
+        "x-query": { "instance": "instance id", "token": "bearer token" },
+        "responses": { "101": { "description": "WebSocket upgrade" } }
+      }
+    },
+    "/logs/ws": {
+      "get": {
+        "tags": ["websockets"],
+        "summary": "Live panel log stream",
+        "x-permission": "panel logs permission",
+        "x-websocket": true,
+        "x-query": { "token": "bearer token" },
+        "responses": { "101": { "description": "WebSocket upgrade" } }
+      }
+    },
+    "/broadcaster/ws": {
+      "get": {
+        "tags": ["websockets"],
+        "summary": "Live broadcaster log stream",
+        "x-permission": "BROADCASTER_VIEW",
+        "x-websocket": true,
+        "x-query": { "instance": "instance id", "token": "bearer token" },
+        "responses": { "101": { "description": "WebSocket upgrade" } }
+      }
+    }
+  }
+}

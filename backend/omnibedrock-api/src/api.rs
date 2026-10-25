@@ -20,7 +20,6 @@ use omnibedrock_server::{
     addons::{self, ArchiveKind, InstalledPack},
     backups::{BackupRequest, Hook, Hooks},
     bds,
-    broadcaster::Broadcaster,
     curseforge::{self, CLASSES, CurseForge},
     endstone::Endstone,
     instances::{
@@ -55,7 +54,6 @@ pub struct AppState {
     pub metrics: Metrics,
     pub bds: omnibedrock_server::bds::Bds,
     pub endstone: Endstone,
-    pub broadcaster: Broadcaster,
     pub curseforge: CurseForge,
     pub addon_meta: omnibedrock_server::addon_cache::AddonMetaCache,
     pub shutdown: CancellationToken,
@@ -125,7 +123,6 @@ impl AppState {
                 .unwrap_or("not installed"),
             "toolchain status"
         );
-        let broadcaster = Broadcaster::new(config.clone(), shutdown.clone())?;
         let curseforge = CurseForge::new(
             config.curseforge_api_key.expose_secret(),
             Some(image_cache_dir),
@@ -143,7 +140,7 @@ impl AppState {
         tracing::info!(
             elapsed_ms = started.elapsed().as_millis() as u64,
             broadcaster_dir = %config.broadcaster_dir.display(),
-            "broadcaster manager ready (Java probe runs in the background)"
+            "broadcaster jar home ready (each instance runs its own broadcaster; Java probe runs per instance)"
         );
         let backups = default.backups.clone();
         let metrics = Metrics::start(instances.clone(), config.clone(), shutdown.clone());
@@ -172,7 +169,6 @@ impl AppState {
             metrics,
             bds,
             endstone,
-            broadcaster,
             curseforge,
             addon_meta,
             shutdown,
@@ -280,6 +276,9 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .map(|s| s.parse::<axum::http::HeaderValue>())
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let api = Router::new()
+        // Machine-readable endpoint inventory, public like /health so tools
+        // and agents can discover the API without a source dive.
+        .route("/openapi.json", get(|| async { openapi_doc() }))
         .route("/console/ws", get(websocket::console_upgrade))
         .route("/performance/ws", get(websocket::metrics_upgrade))
         .route("/backups/ws", get(websocket::backups_upgrade))
@@ -317,6 +316,16 @@ fn optional_string<'a>(v: &'a Value, key: &str, default: &'a str) -> &'a str {
 }
 fn data_response(value: Value) -> Response {
     Json(value).into_response()
+}
+/// The static endpoint inventory served at `{prefix}/openapi.json`. Kept as a
+/// checked-in document (not generated) so each entry can carry the real
+/// permission gate and body keys; update it alongside `dispatch_authenticated`.
+fn openapi_doc() -> Response {
+    (
+        [(header::CONTENT_TYPE, "application/json")],
+        include_str!("../openapi.json"),
+    )
+        .into_response()
 }
 fn success(message: impl Into<String>) -> Value {
     json!({"success":true,"message":message.into()})
@@ -369,7 +378,10 @@ async fn dispatch(
     // endpoint uses, so they are handled before the generic body parse.
     if path == "broadcaster/screenshot" && method == Method::PUT {
         let user = state.auth.resolve_user(header_token.as_deref()).await?;
-        state.auth.require(&user, "BROADCASTER_MANAGE").await?;
+        let svc = state
+            .resolve_instance(instance_id.as_deref(), &user)
+            .await?;
+        state.require_for(&user, "BROADCASTER_MANAGE", &svc).await?;
         let account = query.get("account").map_or(Ok("main"), |a| component(a))?;
         if bytes.is_empty() {
             return Err(ApiError::bad("Screenshot body is required"));
@@ -379,17 +391,18 @@ async fn dispatch(
         if !jpeg && !png {
             return Err(ApiError::bad("Screenshot must be a JPEG or PNG image"));
         }
-        let destination = state.broadcaster.screenshot_path(account);
+        let destination = svc.broadcaster.screenshot_path(account);
         if let Some(parent) = destination.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
         atomic_write(&destination, &bytes).await?;
         state
-            .audit(
+            .audit_instance(
                 &user,
                 "broadcaster.screenshot_update",
                 account,
                 "broadcaster",
+                &svc.record().id,
             )
             .await
             .ok();
@@ -740,6 +753,38 @@ async fn dispatch_authenticated(
                 .map_err(|e| ApiError::conflict(e.to_string()))?;
             success("")
         }
+        ["console", "tail"] if read => {
+            s.require_for(u, "CONSOLE_VIEW", svc).await?;
+            let limit = q
+                .get("lines")
+                .map_or(Ok(200), |v| v.parse::<usize>())
+                .map_err(|_| ApiError::bad("Invalid 'lines'"))?;
+            if !(1..=2000).contains(&limit) {
+                return Err(ApiError::bad("'lines' must be 1..2000"));
+            }
+            let events = svc.server.console.tail(limit);
+            if q.get("format").map(String::as_str) == Some("text") {
+                let body = events
+                    .iter()
+                    .map(|e| e.line.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                return Ok((
+                    [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+                    body + "\n",
+                )
+                    .into_response());
+            }
+            let owned = events
+                .iter()
+                .map(|e| (**e).clone())
+                .collect::<Vec<omnibedrock_server::server::ConsoleEvent>>();
+            json!({
+                "instance": svc.record().id,
+                "latest": owned.last().map(|e| e.sequence).unwrap_or(0),
+                "events": owned,
+            })
+        }
         ["performance", "metrics"] if read => {
             s.require_for(u, "SERVER_VIEW", svc).await?;
             s.instance_metrics(&svc.record().id)
@@ -1041,7 +1086,7 @@ async fn dispatch_authenticated(
             return backups(s, svc, u, m, p, q, b).await;
         }
         ["broadcaster", ..] => {
-            return broadcaster(s, u, m, p, q, b).await;
+            return broadcaster(s, svc, u, m, p, q, b).await;
         }
         // ---- Multi-instance management ----
         ["instances"] if read => {
@@ -2363,6 +2408,7 @@ async fn switch_backend(svc: &Arc<Instance>, b: &Value) -> Result<Value> {
 }
 async fn broadcaster(
     s: &AppState,
+    svc: &Arc<Instance>,
     u: &User,
     m: &Method,
     p: &[&str],
@@ -2371,10 +2417,10 @@ async fn broadcaster(
 ) -> Result<Response> {
     let read = m == Method::GET;
     let create = m == Method::POST;
-    let bc = &s.broadcaster;
+    let bc = &svc.broadcaster;
     let data = match p {
         ["broadcaster", "status"] if read => {
-            s.auth.require(u, "BROADCASTER_VIEW").await?;
+            s.require_for(u, "BROADCASTER_VIEW", svc).await?;
             json!({
                 "status": bc.snapshot(),
                 "jar": bc.jar_path(),
@@ -2387,7 +2433,7 @@ async fn broadcaster(
             })
         }
         ["broadcaster", "action"] if create => {
-            s.auth.require(u, "BROADCASTER_MANAGE").await?;
+            s.require_for(u, "BROADCASTER_MANAGE", svc).await?;
             let action = value_string(b, "action")?;
             if !["start", "stop", "restart"].contains(&action) {
                 return Err(ApiError::bad("Invalid broadcaster action"));
@@ -2399,14 +2445,14 @@ async fn broadcaster(
             )
         }
         ["broadcaster", "command"] if create => {
-            s.auth.require(u, "BROADCASTER_MANAGE").await?;
+            s.require_for(u, "BROADCASTER_MANAGE", svc).await?;
             bc.send_command(value_string(b, "command")?)
                 .await
                 .map_err(|e| ApiError::conflict(e.to_string()))?;
             success("Command sent")
         }
         ["broadcaster", "config"] if read => {
-            s.auth.require(u, "BROADCASTER_VIEW").await?;
+            s.require_for(u, "BROADCASTER_VIEW", svc).await?;
             return Ok((
                 [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
                 bc.read_config().await?,
@@ -2414,7 +2460,7 @@ async fn broadcaster(
                 .into_response());
         }
         ["broadcaster", "config"] if *m == Method::PUT => {
-            s.auth.require(u, "BROADCASTER_MANAGE").await?;
+            s.require_for(u, "BROADCASTER_MANAGE", svc).await?;
             let _lock = s.edits.lock().await;
             bc.write_config(value_string(b, "text")?)
                 .await
@@ -2422,11 +2468,11 @@ async fn broadcaster(
             success("Config saved; restart the broadcaster to apply")
         }
         ["broadcaster", "accounts"] if read => {
-            s.auth.require(u, "BROADCASTER_VIEW").await?;
+            s.require_for(u, "BROADCASTER_VIEW", svc).await?;
             bc.accounts().await
         }
         ["broadcaster", "accounts"] if create => {
-            s.auth.require(u, "BROADCASTER_MANAGE").await?;
+            s.require_for(u, "BROADCASTER_MANAGE", svc).await?;
             let action = value_string(b, "action")?;
             if !["add", "remove"].contains(&action) {
                 return Err(ApiError::bad("Invalid account action"));
@@ -2441,11 +2487,11 @@ async fn broadcaster(
             ))
         }
         ["broadcaster", "device-code"] if read => {
-            s.auth.require(u, "BROADCASTER_VIEW").await?;
+            s.require_for(u, "BROADCASTER_VIEW", svc).await?;
             json!(bc.device_codes())
         }
         ["broadcaster", "screenshot"] if read => {
-            s.auth.require(u, "BROADCASTER_VIEW").await?;
+            s.require_for(u, "BROADCASTER_VIEW", svc).await?;
             let account = q.get("account").map_or(Ok("main"), |a| component(a))?;
             let path = bc.screenshot_path(account);
             let file = tokio::fs::File::open(&path)

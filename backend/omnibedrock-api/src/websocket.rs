@@ -107,7 +107,15 @@ pub async fn broadcaster_upgrade(
     Query(q): Query<WsQuery>,
     ws: WebSocketUpgrade,
 ) -> Result<Response> {
-    user_perm(&state, &q, "BROADCASTER_VIEW").await?;
+    let user = {
+        let user = user(&state, &q).await?;
+        let instance = resolve_instance(&state, &q, &user).await?;
+        state
+            .require_for(&user, "BROADCASTER_VIEW", &instance)
+            .await?;
+        user
+    };
+    resolve_instance(&state, &q, &user).await?;
     Ok(ws
         .max_message_size(16 * 1024)
         .on_upgrade(move |ws| broadcaster_socket(state, q, ws)))
@@ -329,11 +337,23 @@ async fn logs_socket(state: AppState, q: WsQuery, ws: WebSocket) {
     }
 }
 
-/// Broadcaster stream: console replay plus status and device-code events.
-/// Commands require BROADCASTER_MANAGE and are revalidated on each send.
+/// Broadcaster stream: console replay plus status and device-code events,
+/// scoped to the query's instance. Commands require BROADCASTER_MANAGE on
+/// that instance and are revalidated on each send.
 async fn broadcaster_socket(state: AppState, q: WsQuery, ws: WebSocket) {
     let (mut writer, mut reader) = ws.split();
-    let bc = &state.broadcaster;
+    let account = match state.auth.resolve_user(Some(&q.token)).await {
+        Ok(account) => account,
+        Err(_) => return,
+    };
+    let instance = match state
+        .resolve_instance(q.instance.as_deref(), &account)
+        .await
+    {
+        Ok(instance) => instance,
+        Err(_) => return,
+    };
+    let bc = &instance.broadcaster;
     let console = &bc.console;
     let mut lines = console.changed.subscribe();
     let mut status = bc.status.clone();
@@ -384,7 +404,7 @@ async fn broadcaster_socket(state: AppState, q: WsQuery, ws: WebSocket) {
                     Some(Ok(Message::Text(text)))=>{
                         match serde_json::from_str::<Value>(&text) {
                             Ok(v) if v["command"].is_string()=>{
-                                let outcome=async {let u=user_perm(&state,&q,"BROADCASTER_MANAGE").await?; let cmd=v["command"].as_str().unwrap_or_default(); state.broadcaster.send_command(cmd).await.map_err(|e|ApiError::bad(e.to_string()))?; state.audit(&u,"broadcaster.command",cmd,"broadcaster").await?; Ok::<_,ApiError>(())}.await;
+                                let outcome=async {let u=state.auth.resolve_user(Some(&q.token)).await?; let cmd=v["command"].as_str().unwrap_or_default(); state.require_for(&u,"BROADCASTER_MANAGE",&instance).await?; instance.broadcaster.send_command(cmd).await.map_err(|e|ApiError::bad(e.to_string()))?; state.audit_instance(&u,"broadcaster.command",cmd,"broadcaster",&instance.record().id).await?; Ok::<_,ApiError>(())}.await;
                                 if let Err(e)=outcome&& send(&mut writer,&json!({"type":"error","message":e.message})).await.is_err(){break;}
                             }, Ok(_)=>{}, Err(_)=>{if send(&mut writer,&json!({"type":"error","message":"Invalid JSON message"})).await.is_err(){break;}}
                         }
@@ -399,15 +419,15 @@ async fn broadcaster_socket(state: AppState, q: WsQuery, ws: WebSocket) {
             change=status.changed()=>{
                 if change.is_err(){break;}
                 status.borrow_and_update();
-                if send(&mut writer,&json!({"type":"status","status":state.broadcaster.snapshot()})).await.is_err(){break;}
+                if send(&mut writer,&json!({"type":"status","status":instance.broadcaster.snapshot()})).await.is_err(){break;}
             }
             change=codes.changed()=>{
                 if change.is_err(){break;}
                 codes.borrow_and_update();
-                if send(&mut writer,&json!({"type":"device_codes","codes":state.broadcaster.device_codes()})).await.is_err(){break;}
+                if send(&mut writer,&json!({"type":"device_codes","codes":instance.broadcaster.device_codes()})).await.is_err(){break;}
             }
             _=heartbeat.tick()=>{
-                if user_perm(&state,&q,"BROADCASTER_VIEW").await.is_err(){let _=writer.send(Message::Close(Some(CloseFrame{code:1008,reason:"Authentication or permission expired".into()}))).await;break;}
+                if async {let u=state.auth.resolve_user(Some(&q.token)).await?; state.require_for(&u,"BROADCASTER_VIEW",&instance).await}.await.is_err(){let _=writer.send(Message::Close(Some(CloseFrame{code:1008,reason:"Authentication or permission expired".into()}))).await;break;}
                 if send(&mut writer,&json!({"type":"ping"})).await.is_err(){break;}
             }
         }
