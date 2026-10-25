@@ -7,6 +7,7 @@
   import { Settings as SettingsIcon, Server, Download, RefreshCw, Check, Save, ArrowRightLeft, LockKeyhole, LockOpen, Store as StoreIcon, Palette, Sun, Moon, Monitor } from '@lucide/svelte';
   import { setToken } from '$lib/api/client';
   import { currentUser, authToken as authTokenStore } from '$stores/auth';
+  import { activeInstance } from '$stores/instances';
   import { THEMES, THEME_MODES, theme, themeMode } from '$lib/theme';
 
   let s = $state<Record<string, unknown>>({});
@@ -49,12 +50,7 @@
     try { s = await api.getSettings(); } catch { /* silent */ }
     try { panel = await api.getPanelSettings(); } catch { /* silent */ }
     try { cfSettings = await api.getCurseForgeSettings(); } catch { /* silent */ }
-    await refreshBackend();
     await loadRegistry();
-    if (backend) {
-      selectedVersion = backend.vanilla_version;
-      try { serverSettings = await api.getServerSettings(); } catch { /* silent */ }
-    }
     poll = setInterval(async () => {
       await refreshBackend();
       if (installing && backend) {
@@ -62,6 +58,20 @@
         selectedVersion = backend.install.version ?? selectedVersion;
       }
     }, 800);
+  });
+
+  // The backend card edits the ACTIVE instance: reload its info and settings
+  // when the user switches instances (same fix as the properties page).
+  let backendLoadedFor = $state('');
+  $effect(() => {
+    const id = $activeInstance?.id ?? 'default';
+    if (backendLoadedFor === id) return;
+    backendLoadedFor = id;
+    void (async () => {
+      await refreshBackend();
+      if (backend) selectedVersion = backend.vanilla_version;
+      try { serverSettings = await api.getServerSettings(); } catch { /* silent */ }
+    })();
   });
 
   onDestroy(() => clearInterval(poll));
@@ -233,88 +243,65 @@
 
   <!-- Server backend -->
   <div class="card">
-    <h2 class="card-header flex items-center gap-2"><Server size={13} /> Server backend</h2>
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-      <button onclick={() => switchTo('endstone')} disabled={!canManage || !!busy || backend?.backend === 'endstone'}
-              class={"text-left border-2 p-4 transition-all " + (backend?.backend === 'endstone'
-                ? 'border-bedrock-400 bg-bedrock-500/10'
-                : 'border-deep-600/40 hover:border-deep-500 bg-deep-900/40')}>
-        <div class="flex items-center justify-between">
-          <span class="text-sm font-bold text-strong uppercase tracking-wider">Endstone</span>
-          {#if backend?.backend === 'endstone'}<Check size={16} class="text-bedrock-400" />{/if}
-        </div>
-        <p class="text-xs text-deep-400 mt-1">Python plugin runtime over the vanilla server. Plugin API, Endstone console features.</p>
-        {#if backend?.endstone.installed}
-          <p class="text-[10px] text-green-400 font-mono mt-1.5">
-            toolchain ✓ endstone {backend.endstone.installed.endstone_version ?? '?'} · py {backend.endstone.installed.python_version}
-          </p>
-        {:else if backend}
-          <p class="text-[10px] text-yellow-400 mt-1.5">toolchain not installed — needs uv/Python/Endstone</p>
-        {/if}
-      </button>
-      <button onclick={() => switchTo('vanilla')} disabled={!canManage || !!busy || backend?.backend === 'vanilla'}
-              class={"text-left border-2 p-4 transition-all " + (backend?.backend === 'vanilla'
-                ? 'border-bedrock-400 bg-bedrock-500/10'
-                : 'border-deep-600/40 hover:border-deep-500 bg-deep-900/40')}>
-        <div class="flex items-center justify-between">
-          <span class="text-sm font-bold text-strong uppercase tracking-wider">Vanilla BDS</span>
-          {#if backend?.backend === 'vanilla'}<Check size={16} class="text-bedrock-400" />{/if}
-        </div>
-        <p class="text-xs text-deep-400 mt-1">Official Bedrock Dedicated Server binary managed by the panel.
-          {#if backend && !backend.binary_present}<span class="text-red-400">Not installed yet.</span>{/if}</p>
-      </button>
-    </div>
+    <h2 class="card-header flex items-center gap-2">
+      <Server size={13} /> Server backend
+      {#if $activeInstance}
+        <span class="ml-auto text-[10px] font-normal normal-case tracking-normal text-deep-400">
+          editing <span class="text-strong font-bold">{$activeInstance.name}</span>
+        </span>
+      {/if}
+    </h2>
 
     {#if backend}
-      <div class="mt-4 space-y-3">
-        <div class="flex flex-wrap items-center gap-x-6 gap-y-1 text-xs">
-          <span class="text-deep-400">Active: <span class="text-strong capitalize font-bold">{backend.backend}</span></span>
-          <span class="text-deep-400">Installed BDS:
-            {#if backend.installed}<span class="font-mono text-strong">{backend.installed.version}</span>
-            {:else}<span class="text-red-400">none</span>{/if}
-          </span>
-          {#if backend.latest}
-            <span class="text-deep-400">Latest: <span class="font-mono text-strong">{backend.latest}</span></span>
-            {#if updateAvailable}<span class="text-yellow-400">update available</span>{/if}
-          {/if}
+      <div class="flex flex-wrap items-center gap-x-6 gap-y-1 text-xs">
+        <span class="text-deep-400">Active runtime: <span class="text-strong capitalize font-bold">{backend.backend}</span></span>
+        <span class="text-deep-400">Installed BDS:
+          {#if backend.installed}<span class="font-mono text-strong">{backend.installed.version}</span>
+          {:else}<span class="text-red-400">none</span>{/if}
+        </span>
+        {#if backend.latest}
+          <span class="text-deep-400">Latest: <span class="font-mono text-strong">{backend.latest}</span></span>
+          {#if updateAvailable}<span class="text-yellow-400">update available</span>{/if}
+        {/if}
+      </div>
+
+      {#if installing}
+        <div class="mt-4 border-2 border-bedrock-500/40 bg-bedrock-950/30 p-3">
+          <div class="flex items-center justify-between text-xs mb-2">
+            <span class="text-bedrock-300 uppercase tracking-wider">
+              BDS {backend.install.phase} {backend.install.version ?? ''}
+            </span>
+            <span class="font-mono text-strong">{backend.install.detail ?? ''} {pct(backend)}</span>
+          </div>
+          <div class="h-2 bg-deep-800 overflow-hidden">
+            <div class="h-full bg-bedrock-500 transition-all duration-300"
+                 style="width: {typeof backend.install.progress === 'number' ? Math.round(backend.install.progress * 100) : 10}%"></div>
+          </div>
+          <p class="text-[10px] text-deep-400 mt-2">User data (worlds, server.properties, allowlist) is preserved; progress is also logged to the console.</p>
         </div>
+      {/if}
 
-        {#if installing}
-          <div class="border-2 border-bedrock-500/40 bg-bedrock-950/30 p-3">
-            <div class="flex items-center justify-between text-xs mb-2">
-              <span class="text-bedrock-300 uppercase tracking-wider">
-                BDS {backend.install.phase} {backend.install.version ?? ''}
-              </span>
-              <span class="font-mono text-strong">{backend.install.detail ?? ''} {pct(backend)}</span>
-            </div>
-            <div class="h-2 bg-deep-800 overflow-hidden">
-              <div class="h-full bg-bedrock-500 transition-all duration-300"
-                   style="width: {typeof backend.install.progress === 'number' ? Math.round(backend.install.progress * 100) : 10}%"></div>
-            </div>
-            <p class="text-[10px] text-deep-400 mt-2">User data (worlds, server.properties, allowlist) is preserved; progress is also logged to the console.</p>
+      {#if endstoneInstalling}
+        <div class="mt-4 border-2 border-teal-500/40 bg-teal-950/20 p-3">
+          <div class="flex items-center justify-between text-xs mb-2">
+            <span class="text-teal-300 uppercase tracking-wider">
+              Endstone toolchain: {backend.endstone.install.phase}
+            </span>
+            <span class="font-mono text-strong">{backend.endstone.install.detail ?? ''} {pctEndstone()}</span>
           </div>
-        {/if}
-
-        {#if endstoneInstalling && backend}
-          <div class="border-2 border-teal-500/40 bg-teal-950/20 p-3">
-            <div class="flex items-center justify-between text-xs mb-2">
-              <span class="text-teal-300 uppercase tracking-wider">
-                Endstone toolchain: {backend.endstone.install.phase}
-              </span>
-              <span class="font-mono text-strong">{backend.endstone.install.detail ?? ''} {pctEndstone()}</span>
-            </div>
-            <div class="h-2 bg-deep-800 overflow-hidden">
-              <div class="h-full bg-teal-500 transition-all duration-300"
-                   style="width: {typeof backend.endstone.install.progress === 'number' ? Math.round(backend.endstone.install.progress * 100) : 10}%"></div>
-            </div>
-            <p class="text-[10px] text-deep-400 mt-2">
-              Downloading uv, a managed CPython, and Endstone into the panel data dir — no system Python needed. Progress is also logged to the console.
-            </p>
+          <div class="h-2 bg-deep-800 overflow-hidden">
+            <div class="h-full bg-teal-500 transition-all duration-300"
+                 style="width: {typeof backend.endstone.install.progress === 'number' ? Math.round(backend.endstone.install.progress * 100) : 10}%"></div>
           </div>
-        {/if}
+          <p class="text-[10px] text-deep-400 mt-2">
+            Downloading uv, a managed CPython, and Endstone into the panel data dir — no system Python needed. Progress is also logged to the console.
+          </p>
+        </div>
+      {/if}
 
-        {#if canManage && !anyInstalling}
-          <div class="flex flex-wrap items-center gap-2">
+      {#if canManage && !anyInstalling}
+        {#if backend.backend === 'vanilla'}
+          <div class="mt-4 flex flex-wrap items-center gap-2">
             <select bind:value={channel} class="input text-xs w-auto">
               <option value="release">release</option>
               <option value="preview">preview</option>
@@ -330,28 +317,73 @@
               <Download size={13} />
               {backend.installed ? 'Install / upgrade' : 'Install'} BDS
             </button>
-            <button onclick={installEndstoneToolchain} disabled={!!busy}
-                    class="btn-primary flex items-center gap-1.5 text-xs !bg-teal-600 hover:!bg-teal-500"
-                    title="Downloads uv, a managed CPython, and Endstone into the panel data dir — no system Python required">
-              <Download size={13} />
-              {backend.endstone.installed ? 'Update Endstone toolchain' : 'Install Endstone toolchain'}
-            </button>
-            <button onclick={loadRegistry} class="btn-ghost p-2" title="Refresh version list">
-              <RefreshCw size={13} />
-            </button>
-            {#if backend.backend === 'vanilla' && backend.installed}
+            {#if backend.installed}
               <button onclick={() => switchTo('vanilla')} disabled={!!busy}
                       class="btn-ghost flex items-center gap-1.5 text-xs">
                 <ArrowRightLeft size={13} /> Restart on selected version
               </button>
             {/if}
+            <button onclick={loadRegistry} class="btn-ghost p-2" title="Refresh version list">
+              <RefreshCw size={13} />
+            </button>
           </div>
-          <p class="text-[10px] text-deep-400">
+          <p class="text-[10px] text-deep-400 mt-2">
             Archives come from the official Minecraft CDN with SHA256 verification; the version registry is
-            EndstoneMC/bedrock-server-data. Switching backends restarts the server if it is running.
+            EndstoneMC/bedrock-server-data.
+          </p>
+        {:else}
+          <div class="mt-4 flex flex-wrap items-center gap-2">
+            {#if backend.endstone.installed}
+              <span class="text-[10px] text-green-400 font-mono">
+                toolchain ✓ endstone {backend.endstone.installed.endstone_version ?? '?'} · py {backend.endstone.installed.python_version}
+              </span>
+              <button onclick={installEndstoneToolchain} disabled={!!busy}
+                      class="btn-primary flex items-center gap-1.5 text-xs !bg-teal-600 hover:!bg-teal-500">
+                <Download size={13} /> Update Endstone toolchain
+              </button>
+            {:else}
+              <span class="text-[10px] text-yellow-400">Endstone toolchain not installed</span>
+              <button onclick={installEndstoneToolchain} disabled={!!busy}
+                      class="btn-primary flex items-center gap-1.5 text-xs !bg-teal-600 hover:!bg-teal-500"
+                      title="Downloads uv, a managed CPython, and Endstone into the panel data dir — no system Python required">
+                <Download size={13} /> Install Endstone toolchain
+              </button>
+            {/if}
+          </div>
+          <p class="text-[10px] text-deep-400 mt-2">
+            The toolchain (uv + managed CPython + Endstone) lives in the panel data dir — no system Python needed.
+            Starting without it also works: the panel installs it automatically first.
           </p>
         {/if}
+      {/if}
+
+      <!-- Switch affordance: the only place the other runtime appears -->
+      <div class="mt-4 border-2 border-dashed border-deep-600/40 p-3">
+        <p class="text-[10px] text-deep-400 uppercase tracking-wider mb-2">Switch runtime</p>
+        {#if backend.backend === 'vanilla'}
+          <button onclick={() => switchTo('endstone')} disabled={!canManage || !!busy}
+                  class="btn-secondary flex items-center gap-1.5 text-xs">
+            <ArrowRightLeft size={13} /> Switch to Endstone
+          </button>
+          <p class="text-[10px] text-deep-400 mt-2">
+            {#if backend.endstone.installed}Endstone toolchain is ready — the switch applies immediately.{:else}The Endstone toolchain installs automatically as part of the switch.{/if}
+          </p>
+        {:else}
+          <button onclick={() => switchTo('vanilla')} disabled={!canManage || !!busy}
+                  class="btn-secondary flex items-center gap-1.5 text-xs">
+            <ArrowRightLeft size={13} /> Switch to Vanilla BDS
+          </button>
+          <p class="text-[10px] text-deep-400 mt-2">
+            {#if backend.installed}BDS {backend.installed.version} is installed — the switch applies immediately.{:else}Vanilla BDS is not installed yet; it downloads automatically as part of the switch.{/if}
+          </p>
+        {/if}
+        <p class="text-[10px] text-deep-400 mt-1">
+          Worlds, allowlist and player permissions carry over — both runtimes share the same server directory.
+          Switching restarts the server if it is running.
+        </p>
       </div>
+    {:else}
+      <p class="text-xs text-deep-400">Backend information unavailable — retrying…</p>
     {/if}
   </div>
 

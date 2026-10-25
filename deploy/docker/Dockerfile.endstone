@@ -1,0 +1,17 @@
+# Runtime image for Endstone instances.
+#
+# Endstone runs on CPython; the panel mounts the instance directory at /data
+# and the server software lives there. Build once:
+#
+#   docker build -f deploy/docker/Dockerfile.endstone -t omnibedrock-endstone:latest .
+#
+# The Endstone version installed at build time is the one every container
+# runs; rebuild the image to upgrade it (or pin ENDSTONE_VERSION).
+FROM python:3.12-slim
+
+ARG ENDSTONE_VERSION=
+RUN if [ -n "$ENDSTONE_VERSION" ]; then pip install --no-cache-dir "endstone==$ENDSTONE_VERSION"; \
+    else pip install --no-cache-dir endstone; fi
+
+WORKDIR /data
+CMD ["python", "-m", "endstone", "--no-confirm", "-s", "/data"]

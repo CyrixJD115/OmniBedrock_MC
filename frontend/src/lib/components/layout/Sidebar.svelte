@@ -2,17 +2,20 @@
   import { page } from '$app/stores';
   import { serverStatus } from '$stores/index';
   import { currentUser, userPermissions } from '$stores/auth';
+  import { instances, activeInstanceId, activeInstance, switchInstance } from '$stores/instances';
   import { themeMode, cycleMode } from '$lib/theme';
   import {
     LayoutDashboard, Terminal, FileCode, HardDrive, Package, Globe,
     Users, UserCog, FileText, BarChart3, Settings, ChevronLeft, Server, Power, LogOut,
-    UserCircle, Shield, ClipboardList, Radio, Store, Sun, Moon, Monitor
+    UserCircle, Shield, ClipboardList, Radio, Store, Sun, Moon, Monitor, Layers, ChevronsUpDown, Check
   } from '@lucide/svelte';
+  import { goto } from '$app/navigation';
 
   let { sidebarOpen, onlogout }: { sidebarOpen: boolean; onlogout?: () => void } = $props();
 
   const navItems = [
     { href: '/', icon: LayoutDashboard, label: 'Dashboard', perm: '' },
+    { href: '/instances', icon: Layers, label: 'Instances', perm: '' },
     { href: '/console', icon: Terminal, label: 'Console', perm: 'CONSOLE_VIEW' },
     { href: '/properties', icon: FileCode, label: 'Properties', perm: 'PROPERTIES_VIEW' },
     { href: '/backups', icon: HardDrive, label: 'Backups', perm: 'BACKUPS_VIEW' },
@@ -76,6 +79,37 @@
         <p class="text-xs font-medium text-strong truncate">{$currentUser.display_name}</p>
         <p class="text-[10px] uppercase tracking-wider text-deep-400">{$currentUser.role}</p>
       </div>
+    </div>
+  {/if}
+
+  <!-- Instance switcher -->
+  {#if sidebarOpen && $instances.length > 0}
+    <div class="px-3 py-3 border-b border-deep-700/40">
+      <p class="text-[10px] uppercase tracking-wider text-deep-400 mb-1.5 px-1">Instance</p>
+      <div class="relative" >
+        <select
+          class="input w-full text-xs appearance-none pr-7 cursor-pointer"
+          value={$activeInstanceId}
+          onchange={(e) => switchInstance((e.currentTarget as HTMLSelectElement).value)}
+          aria-label="Active instance">
+          {#each $instances as i}
+            <option value={i.id}>{i.name}</option>
+          {/each}
+        </select>
+        <ChevronsUpDown size={12} class="absolute right-2.5 top-1/2 -translate-y-1/2 text-deep-400 pointer-events-none" />
+      </div>
+      {#if $activeInstance}
+        <div class="flex items-center gap-2 mt-2 px-1">
+          <span class="status-dot {$activeInstance.status}"></span>
+          <span class="text-[10px] uppercase tracking-wider text-deep-300 truncate">
+            {$activeInstance.status} · {$activeInstance.backend}
+          </span>
+        </div>
+      {/if}
+      <button onclick={() => goto('/instances')}
+              class="mt-2 w-full text-left text-[10px] uppercase tracking-wider text-bedrock-400 hover:text-bedrock-300 transition-colors px-1 flex items-center gap-1">
+        <Layers size={10} /> Manage instances
+      </button>
     </div>
   {/if}
 

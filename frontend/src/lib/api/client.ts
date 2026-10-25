@@ -1,7 +1,8 @@
-import type { ServerStatus, ServerActionResponse, Backup, AddonList, Addon, Player, PropertyEntry, IniFile, WorldInfo, BackupSettings, SchedulerConfig, CommandEntry, IncludeItem, FolderEntry, BackendInfo, VersionRegistry, BroadcasterStatus, CfProject, StoreSearchResponse, StoreMeta, StoreFilesResponse, StoreInstallResponse } from '$types/index';
+import type { ServerStatus, ServerActionResponse, Backup, AddonList, Addon, Player, PropertyEntry, IniFile, WorldInfo, BackupSettings, SchedulerConfig, CommandEntry, IncludeItem, FolderEntry, BackendInfo, VersionRegistry, BroadcasterStatus, CfProject, StoreSearchResponse, StoreMeta, StoreFilesResponse, StoreInstallResponse, Instance, HostInfo } from '$types/index';
 
 const API_BASE = '/api/v1';
 let authToken = '';
+let activeInstance = '';
 
 export function setToken(token: string) {
   authToken = token;
@@ -9,6 +10,23 @@ export function setToken(token: string) {
 
 export function getToken(): string {
   return authToken;
+}
+
+/** Scope every request (and instance-aware WS URLs) to one instance. */
+export function setInstance(id: string) {
+  activeInstance = id;
+}
+
+export function getInstance(): string {
+  return activeInstance;
+}
+
+/** Headers for raw (non-JSON) fetches: auth + active-instance scoping. */
+function rawHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const headers: Record<string, string> = { ...extra };
+  if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+  if (activeInstance) headers['X-Instance'] = activeInstance;
+  return headers;
 }
 
 type Method = 'GET' | 'POST' | 'PUT' | 'DELETE';
@@ -20,6 +38,9 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   };
   if (authToken) {
     headers['Authorization'] = `Bearer ${authToken}`;
+  }
+  if (activeInstance) {
+    headers['X-Instance'] = activeInstance;
   }
 
   const res = await fetch(`${API_BASE}${path}`, {
@@ -44,7 +65,7 @@ export const api = {
     }),
   getMe: () => request<Record<string, unknown>>('/auth/me'),
   listUsers: () => request<Array<Record<string, unknown>>>('/auth/users'),
-  createUser: (data: { username: string; password: string; role: string; display_name?: string }) =>
+  createUser: (data: { username: string; password: string; roles?: string[]; role?: string; display_name?: string }) =>
     request<Record<string, unknown>>('/auth/users', {
       method: 'POST',
       body: JSON.stringify(data),
@@ -56,6 +77,35 @@ export const api = {
     }),
   deleteUser: (username: string) =>
     request<{ success: boolean }>(`/auth/users/${username}`, { method: 'DELETE' }),
+
+  // Instances & host
+  listInstances: () => request<Instance[]>('/instances'),
+  getInstanceDetail: (id: string) => request<Instance>(`/instances/${encodeURIComponent(id)}`),
+  createInstance: (data: {
+    name: string; backend: 'endstone' | 'vanilla'; deployment?: string;
+    memory_mb?: number | null; cpus?: number | null; port?: number; vanilla_version?: string;
+    endstone_version?: string;
+  }) =>
+    request<Instance>('/instances', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateInstance: (id: string, data: Record<string, unknown>) =>
+    request<Instance>(`/instances/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  deleteInstance: (id: string, keepData: boolean) =>
+    request<{ success: boolean; message: string }>(
+      `/instances/${encodeURIComponent(id)}?confirm=yes${keepData ? '&keep_data=1' : ''}`,
+      { method: 'DELETE' },
+    ),
+  instanceAction: (id: string, action: string) =>
+    request<ServerActionResponse>(`/instances/${encodeURIComponent(id)}/action`, {
+      method: 'POST',
+      body: JSON.stringify({ action }),
+    }),
+  getHost: () => request<HostInfo>('/host'),
 
   // Server
   getServerStatus: () => request<ServerStatus>('/server/status'),
@@ -137,7 +187,7 @@ export const api = {
 
   // Properties
   getProperties: () => request<PropertyEntry[]>('/properties/'),
-  getPropertiesRaw: () => fetch(`${API_BASE}/properties/raw`, { headers: { Authorization: `Bearer ${authToken}` } }).then(r => r.text()),
+  getPropertiesRaw: () => fetch(`${API_BASE}/properties/raw`, { headers: rawHeaders() }).then(r => r.text()),
   updateProperty: (key: string, value: string) =>
     request<{ success: boolean }>(`/properties/${encodeURIComponent(key)}`, {
       method: 'PUT',
@@ -166,7 +216,7 @@ export const api = {
     request<{ success: boolean }>(`/backups/restore/${world}/${filename}`, { method: 'POST' }),
   listTrash: (world?: string) => request<Array<any>>(`/backups/trash${world ? `?world=${world}` : ''}`),
   downloadBackup: (world: string, filename: string) => {
-    const url = `${API_BASE}/backups/${encodeURIComponent(world)}/${encodeURIComponent(filename)}/download?token=${authToken}`;
+    const url = `${API_BASE}/backups/${encodeURIComponent(world)}/${encodeURIComponent(filename)}/download?token=${authToken}&instance=${encodeURIComponent(activeInstance || 'default')}`;
     const a = document.createElement('a');
     a.href = url;
     a.download = filename;
@@ -205,7 +255,7 @@ export const api = {
   uploadAddon: (world: string, file: File, packType: 'auto' | 'behavior_packs' | 'resource_packs' = 'auto') => {
     return fetch(`${API_BASE}/addons/upload?world=${encodeURIComponent(world)}&type=${packType}`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${authToken}` },
+      headers: rawHeaders(),
       body: file,
     }).then(async r => {
       const body = await r.json().catch(() => ({}));
@@ -219,7 +269,7 @@ export const api = {
       body: JSON.stringify({ path }),
     }),
   addonIconUrl: (path: string, version?: string) =>
-    `${API_BASE}/addons/icon?path=${encodeURIComponent(path)}&token=${authToken}${version ? `&v=${encodeURIComponent(version)}` : ''}`,
+    `${API_BASE}/addons/icon?path=${encodeURIComponent(path)}&token=${authToken}&instance=${encodeURIComponent(activeInstance || 'default')}${version ? `&v=${encodeURIComponent(version)}` : ''}`,
   getManifest: (path: string) => request<Record<string, unknown>>(`/addons/manifest?path=${encodeURIComponent(path)}`),
   updateManifest: (path: string, manifest: Record<string, unknown>) =>
     request<{ success: boolean }>('/addons/manifest', {
@@ -297,7 +347,10 @@ export const api = {
 
   // Roles
   listRoles: () => request<Array<Record<string, unknown>>>('/roles/'),
-  createRole: (data: { name: string; display_name?: string; permissions: string[]; is_default?: boolean }) =>
+  createRole: (data: {
+    name: string; display_name?: string; permissions: string[]; is_default?: boolean;
+    description?: string; color?: string; position?: number; duplicate_of?: string;
+  }) =>
     request<Record<string, unknown>>('/roles/', {
       method: 'POST',
       body: JSON.stringify(data),

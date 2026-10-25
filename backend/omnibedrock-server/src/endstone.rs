@@ -285,6 +285,22 @@ async fn worker(
                     )));
                     continue;
                 }
+                // Every instance shares one toolchain under <data_dir>/tools;
+                // serialize installs panel-wide, then re-check in case another
+                // instance's install just finished the same work.
+                static TOOLCHAIN: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+                let _guard = TOOLCHAIN.lock().await;
+                if version.is_none()
+                    && tokio::task::spawn_blocking({
+                        let config = config.clone();
+                        move || resolve_launch(&config).is_some()
+                    })
+                    .await
+                    .unwrap_or(false)
+                {
+                    let _ = reply.send(Ok("Endstone toolchain already installed".into()));
+                    continue;
+                }
                 let result = run_install(&config, &state, &http, &console, version).await;
                 state.send_modify(|s| {
                     s.phase = "idle".into();

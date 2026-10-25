@@ -1,20 +1,35 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import { api } from '$lib/api/client';
   import { addToast } from '$stores/toast';
   import { userPermissions } from '$stores/auth';
+  import { activeInstance } from '$stores/instances';
   import { Eye, RotateCw, Save } from '@lucide/svelte';
 
   let properties = $state<{ key: string; value: string; comment: string; inline_comment: string }[]>([]);
   let rawText = $state('');
   let showRaw = $state(false);
   let loading = $state(true);
+  // Bumps on every (re)load so a slow response for a previously selected
+  // instance can never overwrite the freshly loaded one.
+  let epoch = 0;
 
-  onMount(async () => {
+  async function load() {
+    const mine = ++epoch;
+    loading = true;
+    showRaw = false;
+    rawText = '';
     try {
-      properties = await api.getProperties();
+      const list = await api.getProperties();
+      if (mine !== epoch) return;
+      properties = list;
     } catch (e: any) { addToast(`Failed to load properties: ${e.message}`, 'error'); }
-    loading = false;
+    if (mine === epoch) loading = false;
+  }
+
+  // Properties are instance-scoped: reload whenever the active instance changes.
+  $effect(() => {
+    void $activeInstance?.id;
+    void load();
   });
 
   async function updateValue(key: string, value: string) {
@@ -60,10 +75,14 @@
       <button onclick={loadRaw} class="btn-secondary flex items-center gap-2 text-xs">
         <Eye size={14} /> Raw
       </button>
-      <button onclick={async () => { try { properties = await api.getProperties(); addToast('Reloaded', 'success'); } catch {} }}
-              class="btn-ghost p-2"><RotateCw size={14} /></button>
+      <button onclick={load} class="btn-ghost p-2" title="Reload from disk"
+              disabled={loading}><RotateCw size={14} /></button>
     </div>
   </div>
+
+  {#if loading}
+    <div class="card py-3 text-xs text-deep-400 uppercase tracking-wider">Loading properties…</div>
+  {/if}
 
   {#if showRaw}
     <div class="card">

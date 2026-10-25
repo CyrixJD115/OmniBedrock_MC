@@ -7,6 +7,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::paths::{self, DataMode, Layout};
+
 #[derive(Parser, Debug)]
 #[command(version, about = "OmniBedrock native server control panel")]
 pub struct Cli {
@@ -14,10 +16,15 @@ pub struct Cli {
     /// auto-discovered one; the file must exist when given.
     #[arg(long)]
     pub config: Option<PathBuf>,
-    /// Portable mode: keep config, data, server files, logs, and backups
-    /// under `<executable dir>/portable/` and ignore other config locations.
+    /// Portable mode: keep all application data under `<executable dir>/data/`
+    /// and read only `<executable dir>/data/config.toml`. Mutually exclusive
+    /// with --global-data-dir.
     #[arg(long)]
     pub portable: bool,
+    /// Use this directory as the global data root (overriding the platform
+    /// app-data location). Mutually exclusive with --portable.
+    #[arg(long, env = "OMNI_GLOBAL_DATA_DIR")]
+    pub global_data_dir: Option<PathBuf>,
     #[arg(long, env = "OMNI_HOST")]
     pub host: Option<IpAddr>,
     #[arg(long, env = "OMNI_PORT")]
@@ -43,6 +50,17 @@ pub struct Cli {
     pub broadcaster_jar: Option<PathBuf>,
     #[arg(long, env = "JAVA_BIN")]
     pub java_bin: Option<PathBuf>,
+    /// Docker image used for instances with the `docker` deployment backend.
+    /// Missing local images are built automatically from the generated
+    /// Dockerfiles (see deploy/docker).
+    #[arg(long, env = "DOCKER_IMAGE_VANILLA")]
+    pub docker_image_vanilla: Option<String>,
+    #[arg(long, env = "DOCKER_IMAGE_ENDSTONE")]
+    pub docker_image_endstone: Option<String>,
+    /// Memory (MiB) kept free for the OS and the panel itself; instance
+    /// allocations beyond total − reserve trigger overcommit warnings.
+    #[arg(long, env = "HOST_RESERVE_MB")]
+    pub host_reserve_mb: Option<u64>,
     /// Open the panel in a Tauri desktop window instead of the plain web
     /// server (requires the binary to be built with `--features desktop`).
     #[arg(long)]
@@ -72,6 +90,11 @@ pub struct Config {
     pub broadcaster_dir: PathBuf,
     pub broadcaster_jar: Option<PathBuf>,
     pub java_bin: Option<PathBuf>,
+    /// Docker images used by the `docker` deployment backend (one per runtime).
+    pub docker_image_vanilla: String,
+    pub docker_image_endstone: String,
+    /// Headroom reserved for the OS/panel when judging overcommit (MiB).
+    pub host_reserve_mb: u64,
     pub ws_heartbeat_interval: u64,
     pub console_max_lines: usize,
     pub console_max_bytes: usize,
@@ -83,16 +106,24 @@ pub struct Config {
     /// CurseForge Core API key; empty disables the Store.
     #[serde(skip)]
     pub curseforge_api_key: SecretString,
-    /// True when `--portable` resolved the layout. Never serialized.
+    /// True when the data root is `<executable dir>/data` (portable mode).
+    /// Never serialized.
     #[serde(skip)]
     pub portable: bool,
+    /// How the data root was resolved (diagnostics only).
+    #[serde(skip)]
+    pub data_mode: String,
     /// Where the effective configuration came from (diagnostics only).
     #[serde(skip)]
     pub config_source: String,
 }
 
-impl Default for Config {
-    fn default() -> Self {
+impl Config {
+    /// Defaults derived from one data root. This is the single place that
+    /// knows how the layout under the root looks; explicit per-path settings
+    /// layer on top of it.
+    pub fn for_root(root: &Path) -> Self {
+        let layout = Layout::from_root(root);
         Self {
             app_name: "OmniBedrock MC".into(),
             debug: false,
@@ -104,16 +135,19 @@ impl Default for Config {
                 "http://localhost:5173".into(),
                 "http://localhost:3000".into(),
             ],
-            bedrock_server_dir: "bedrock_server".into(),
-            backups_dir: "backend/backups".into(),
-            data_dir: "backend/data".into(),
-            logs_dir: "backend/logs".into(),
-            cache_dir: "backend/data/cache".into(),
+            bedrock_server_dir: layout.bedrock_server_dir,
+            backups_dir: layout.backups_dir,
+            data_dir: layout.data_dir,
+            logs_dir: layout.logs_dir,
+            cache_dir: layout.cache_dir,
             endstone_bin: None,
             endstone_python: None,
-            broadcaster_dir: "backend/broadcaster".into(),
+            broadcaster_dir: layout.broadcaster_dir,
             broadcaster_jar: None,
             java_bin: None,
+            docker_image_vanilla: "omnibedrock-vanilla:latest".into(),
+            docker_image_endstone: "omnibedrock-endstone:latest".into(),
+            host_reserve_mb: 1024,
             ws_heartbeat_interval: 30,
             console_max_lines: 2000,
             console_max_bytes: 16 * 1024 * 1024,
@@ -123,8 +157,38 @@ impl Default for Config {
             secret_key: SecretString::new(String::new()),
             curseforge_api_key: SecretString::new(String::new()),
             portable: false,
+            data_mode: DataMode::Default.label().into(),
             config_source: "defaults".into(),
         }
+    }
+
+    /// Create every directory the panel writes to under the resolved layout.
+    /// Called once at boot so a fresh installation is ready to use.
+    pub async fn ensure_dirs(&self) -> anyhow::Result<()> {
+        for dir in [
+            &self.data_dir,
+            &self.bedrock_server_dir,
+            &self.backups_dir,
+            &self.logs_dir,
+            &self.cache_dir,
+            &self.broadcaster_dir,
+        ] {
+            tokio::fs::create_dir_all(dir)
+                .await
+                .with_context(|| format!("create data directory {}", dir.display()))?;
+        }
+        Ok(())
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        // Default construction is only a fallback shape (tests override the
+        // path fields explicitly); `Config::load` computes the real root with
+        // proper error reporting when the platform directory is unavailable.
+        let root =
+            paths::platform_data_root().unwrap_or_else(|_| PathBuf::from("omnibedrock-data"));
+        Self::for_root(&root)
     }
 }
 
@@ -150,12 +214,21 @@ struct FileConfig {
     broadcaster_dir: Option<PathBuf>,
     broadcaster_jar: Option<PathBuf>,
     java_bin: Option<PathBuf>,
+    docker_image_vanilla: Option<String>,
+    docker_image_endstone: Option<String>,
+    host_reserve_mb: Option<u64>,
     ws_heartbeat_interval: Option<u64>,
     console_max_lines: Option<usize>,
     console_max_bytes: Option<usize>,
     console_max_line_bytes: Option<usize>,
     console_journal_bytes: Option<u64>,
     command_queue_capacity: Option<usize>,
+    /// Data-root selection, mirroring the CLI flags. `portable = true` puts
+    /// all data under `<executable dir>/data`.
+    portable: Option<bool>,
+    /// Custom global data root (relative paths resolve against this file's
+    /// directory).
+    global_data_dir: Option<PathBuf>,
 }
 
 fn apply_file(c: &mut Config, file: FileConfig, cache_dir_explicit: &mut bool) {
@@ -207,6 +280,15 @@ fn apply_file(c: &mut Config, file: FileConfig, cache_dir_explicit: &mut bool) {
     }
     if let Some(v) = file.java_bin {
         c.java_bin = Some(v);
+    }
+    if let Some(v) = file.docker_image_vanilla {
+        c.docker_image_vanilla = v;
+    }
+    if let Some(v) = file.docker_image_endstone {
+        c.docker_image_endstone = v;
+    }
+    if let Some(v) = file.host_reserve_mb {
+        c.host_reserve_mb = v;
     }
     if let Some(v) = file.ws_heartbeat_interval {
         c.ws_heartbeat_interval = v;
@@ -260,6 +342,8 @@ fn exe_dir() -> Option<PathBuf> {
 
 /// Auto-discovered config file, checked only when `--config` is absent:
 /// first next to the executable, then the user-level location on Unix.
+/// Discovery never consults the data directory, so data-root settings in a
+/// config file cannot create a circular resolution.
 fn discover_config(exe_dir: Option<&Path>) -> Option<PathBuf> {
     if let Some(dir) = exe_dir {
         let candidate = dir.join("config.toml");
@@ -283,46 +367,103 @@ fn discover_config(exe_dir: Option<&Path>) -> Option<PathBuf> {
 
 impl Config {
     /// Load configuration from defaults, an optional config file, the
-    /// environment, and finally CLI flags. Precedence (lowest to highest):
-    /// defaults → portable layout → config file → environment → CLI.
+    /// environment, and finally CLI flags.
+    ///
+    /// Data-root precedence (highest wins): `--portable` /
+    /// `--global-data-dir` → `portable` / `global_data_dir` in the config
+    /// file → the platform app-data directory. Setting both flags (or both
+    /// file keys) is an error. Remaining settings follow the usual order:
+    /// defaults → config file → environment → CLI.
     pub fn load(cli: Cli) -> anyhow::Result<Self> {
         Self::load_with(&cli, exe_dir().as_deref())
     }
 
     fn load_with(cli: &Cli, exe_dir: Option<&Path>) -> anyhow::Result<Self> {
-        let mut c = Self::default();
+        ensure!(
+            !(cli.portable && cli.global_data_dir.is_some()),
+            "--portable and --global-data-dir are mutually exclusive; pick one data location"
+        );
         let mut cache_dir_explicit = false;
-        if cli.portable {
-            let base = exe_dir
-                .context("--portable requires locating the running executable")?
-                .join("portable");
-            // Portable mode keeps everything under one tree and deliberately
-            // ignores the exe-dir and user-level config files so portable and
-            // system state can never mix.
-            c.portable = true;
-            c.data_dir = base.join("data");
-            c.bedrock_server_dir = base.join("server");
-            c.logs_dir = base.join("logs");
-            c.backups_dir = base.join("backups");
-            let path = base.join("config.toml");
-            if path.is_file() {
-                c.config_source = path.display().to_string();
-                apply_file(&mut c, parse_file(&path)?, &mut cache_dir_explicit);
-            } else {
-                c.config_source = format!("{} (no config.toml)", base.display());
-            }
+        // Step 1: CLI flags choose the mode outright.
+        let mut mode = if cli.portable {
+            let dir = exe_dir.context(
+                "--portable requires locating the running executable to find <exe dir>/data",
+            )?;
+            Some(DataMode::Portable(paths::portable_root(dir)))
         } else {
-            let path = match &cli.config {
+            cli.global_data_dir.clone().map(DataMode::Global)
+        };
+        // Step 2: read the config file. Portable mode reads only
+        // `<exe dir>/data/config.toml` so portable and system state never
+        // mix; otherwise --config beats exe-dir then user-level discovery.
+        let portable_root = match &mode {
+            Some(DataMode::Portable(root)) => Some(root.clone()),
+            _ => None,
+        };
+        let file = if let Some(root) = portable_root {
+            let path = root.join("config.toml");
+            path.is_file().then_some(path)
+        } else {
+            match &cli.config {
                 Some(p) => {
                     ensure!(p.is_file(), "config file {} does not exist", p.display());
                     Some(p.clone())
                 }
                 None => discover_config(exe_dir),
-            };
-            if let Some(path) = path {
-                c.config_source = path.display().to_string();
-                apply_file(&mut c, parse_file(&path)?, &mut cache_dir_explicit);
             }
+        };
+        let file_config = file.as_ref().map(|p| parse_file(p)).transpose()?;
+        // Step 3: without a CLI mode, the file may choose one.
+        if mode.is_none()
+            && let Some(f) = &file_config
+        {
+            let portable = f.portable.unwrap_or(false);
+            let global = f.global_data_dir.as_ref();
+            ensure!(
+                !(portable && global.is_some()),
+                "config file sets both 'portable' and 'global_data_dir'; pick one data location{}",
+                file.map(|p| format!(" ({})", p.display()))
+                    .unwrap_or_default()
+            );
+            mode = if portable {
+                let dir = exe_dir.context(
+                    "portable = true requires locating the running executable to find <exe dir>/data",
+                )?;
+                Some(DataMode::Portable(paths::portable_root(dir)))
+            } else {
+                global.map(|g| {
+                    // Relative file roots resolve against the config file's
+                    // directory so a config can point at a tree beside itself.
+                    let base = file
+                        .as_ref()
+                        .and_then(|p| p.parent())
+                        .map(Path::to_path_buf)
+                        .unwrap_or_default();
+                    let path = if g.is_absolute() {
+                        g.clone()
+                    } else {
+                        base.join(g)
+                    };
+                    DataMode::Global(path)
+                })
+            };
+        }
+        // Step 4: fall back to the platform app-data directory.
+        let mode = mode.unwrap_or(DataMode::Default);
+        let root = match &mode {
+            DataMode::Default => paths::platform_data_root()?,
+            DataMode::Global(p) | DataMode::Portable(p) => p.clone(),
+        };
+        let mut c = Self::for_root(&root);
+        c.portable = matches!(mode, DataMode::Portable(_));
+        c.data_mode = mode.label().into();
+        if let Some(path) = &file {
+            c.config_source = path.display().to_string();
+        } else if let DataMode::Portable(root) = &mode {
+            c.config_source = format!("{} (no config.toml)", root.display());
+        }
+        if let Some(f) = file_config {
+            apply_file(&mut c, f, &mut cache_dir_explicit);
         }
         macro_rules! setting {
             ($name:literal, $field:ident) => {
@@ -385,6 +526,15 @@ impl Config {
         if let Some(v) = cli.java_bin.clone() {
             c.java_bin = Some(v);
         }
+        if let Some(v) = cli.docker_image_vanilla.clone() {
+            c.docker_image_vanilla = v;
+        }
+        if let Some(v) = cli.docker_image_endstone.clone() {
+            c.docker_image_endstone = v;
+        }
+        if let Some(v) = cli.host_reserve_mb {
+            c.host_reserve_mb = v;
+        }
         // The cache root follows the data dir unless it was set explicitly,
         // so relocating data never leaves the cache behind.
         if !cache_dir_explicit {
@@ -422,6 +572,7 @@ mod tests {
         Cli {
             config: None,
             portable: false,
+            global_data_dir: None,
             host: None,
             port: None,
             bedrock_server_dir: None,
@@ -434,6 +585,9 @@ mod tests {
             broadcaster_dir: None,
             broadcaster_jar: None,
             java_bin: None,
+            docker_image_vanilla: None,
+            docker_image_endstone: None,
+            host_reserve_mb: None,
             desktop: false,
         }
     }
@@ -444,51 +598,141 @@ mod tests {
     }
 
     #[test]
-    fn defaults_without_any_files() {
+    fn defaults_without_any_files_use_platform_root() {
         let dir = tempfile::tempdir().unwrap();
         let c = Config::load_with(&cli(), Some(dir.path())).unwrap();
         assert!(!c.portable);
+        assert_eq!(c.data_mode, "default");
         assert_eq!(c.config_source, "defaults");
         assert_eq!(c.port, 17754);
-        assert_eq!(c.cache_dir, PathBuf::from("backend/data/cache"));
+        // Every path derives from the platform root (absolute on every host).
+        assert!(c.data_dir.is_absolute());
+        assert_eq!(c.bedrock_server_dir, c.data_dir.join("server"));
+        assert_eq!(c.backups_dir, c.data_dir.join("backups"));
+        assert_eq!(c.logs_dir, c.data_dir.join("logs"));
+        assert_eq!(c.cache_dir, c.data_dir.join("cache"));
+        assert_eq!(c.broadcaster_dir, c.data_dir.join("broadcaster"));
     }
 
     #[test]
-    fn portable_layout_and_config_file() {
-        let exe = tempfile::tempdir().unwrap();
-        write(
-            &exe.path().join("portable/config.toml"),
-            "port = 18000\ndata_dir = \"/custom/data\"\n",
+    fn global_data_dir_cli_overrides_platform_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut c = cli();
+        c.global_data_dir = Some(PathBuf::from("/srv/omb-data"));
+        let config = Config::load_with(&c, Some(dir.path())).unwrap();
+        assert_eq!(config.data_dir, PathBuf::from("/srv/omb-data"));
+        assert_eq!(config.data_mode, "global-data-dir");
+        assert_eq!(
+            config.bedrock_server_dir,
+            PathBuf::from("/srv/omb-data/server")
         );
+        assert_eq!(config.cache_dir, PathBuf::from("/srv/omb-data/cache"));
+    }
+
+    #[test]
+    fn global_data_dir_from_config_file_resolves_relative_to_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        write(&path, "global_data_dir = \"storage\"\nport = 18001\n");
+        let mut c = cli();
+        c.config = Some(path);
+        let config = Config::load_with(&c, Some(dir.path())).unwrap();
+        assert_eq!(config.data_mode, "global-data-dir");
+        assert_eq!(config.data_dir, dir.path().join("storage"));
+        assert_eq!(config.port, 18001);
+        // The layout followed the file-provided root.
+        assert_eq!(config.logs_dir, dir.path().join("storage/logs"));
+    }
+
+    #[test]
+    fn portable_flag_uses_data_dir_next_to_exe() {
+        let exe = tempfile::tempdir().unwrap();
         let mut c = cli();
         c.portable = true;
         let config = Config::load_with(&c, Some(exe.path())).unwrap();
         assert!(config.portable);
-        assert_eq!(config.port, 18000);
-        assert_eq!(config.data_dir, PathBuf::from("/custom/data"));
-        assert_eq!(
-            config.bedrock_server_dir,
-            exe.path().join("portable/server")
-        );
-        assert_eq!(config.logs_dir, exe.path().join("portable/logs"));
-        assert_eq!(config.backups_dir, exe.path().join("portable/backups"));
-        // cache follows the relocated data dir
-        assert_eq!(config.cache_dir, PathBuf::from("/custom/data/cache"));
-        assert!(config.config_source.contains("portable/config.toml"));
+        assert_eq!(config.data_mode, "portable");
+        assert_eq!(config.data_dir, exe.path().join("data"));
+        assert_eq!(config.bedrock_server_dir, exe.path().join("data/server"));
+        assert_eq!(config.logs_dir, exe.path().join("data/logs"));
+        assert_eq!(config.backups_dir, exe.path().join("data/backups"));
     }
 
     #[test]
-    fn portable_ignores_exe_dir_config() {
+    fn portable_reads_only_its_own_config() {
         let exe = tempfile::tempdir().unwrap();
+        write(&exe.path().join("data/config.toml"), "port = 18000\n");
         write(&exe.path().join("config.toml"), "port = 19999\n");
         let mut c = cli();
         c.portable = true;
         let config = Config::load_with(&c, Some(exe.path())).unwrap();
         assert!(config.portable);
-        assert_eq!(
-            config.port, 17754,
-            "exe-dir config must not leak into portable mode"
+        assert_eq!(config.port, 18000, "portable reads <exe>/data/config.toml");
+        assert!(
+            config.config_source.contains("data/config.toml"),
+            "exe-dir config must not leak into portable mode: {}",
+            config.config_source
         );
+    }
+
+    #[test]
+    fn portable_from_config_file_key() {
+        let exe = tempfile::tempdir().unwrap();
+        write(&exe.path().join("config.toml"), "portable = true\n");
+        let config = Config::load_with(&cli(), Some(exe.path())).unwrap();
+        assert!(config.portable);
+        assert_eq!(config.data_dir, exe.path().join("data"));
+    }
+
+    #[test]
+    fn portable_and_global_conflict_rejected() {
+        let mut c = cli();
+        c.portable = true;
+        c.global_data_dir = Some(PathBuf::from("/srv/x"));
+        let err = Config::load_with(&c, None)
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(err.contains("mutually exclusive"), "{err}");
+    }
+
+    #[test]
+    fn file_level_conflict_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        write(&path, "portable = true\nglobal_data_dir = \"/srv/x\"\n");
+        let mut c = cli();
+        c.config = Some(path);
+        let err = Config::load_with(&c, Some(dir.path()))
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(err.contains("pick one data location"), "{err}");
+    }
+
+    #[test]
+    fn cli_portable_beats_file_global_data_dir() {
+        let exe = tempfile::tempdir().unwrap();
+        write(
+            &exe.path().join("data/config.toml"),
+            "global_data_dir = \"/elsewhere\"\n",
+        );
+        let mut c = cli();
+        c.portable = true;
+        let config = Config::load_with(&c, Some(exe.path())).unwrap();
+        assert!(config.portable);
+        assert_eq!(config.data_dir, exe.path().join("data"));
+    }
+
+    #[test]
+    fn cli_global_data_dir_beats_file_portable() {
+        let exe = tempfile::tempdir().unwrap();
+        write(&exe.path().join("config.toml"), "portable = true\n");
+        let mut c = cli();
+        c.global_data_dir = Some(PathBuf::from("/srv/wanted"));
+        let config = Config::load_with(&c, Some(exe.path())).unwrap();
+        assert!(!config.portable);
+        assert_eq!(config.data_dir, PathBuf::from("/srv/wanted"));
     }
 
     #[test]
@@ -556,5 +800,22 @@ mod tests {
                 .to_string()
                 .contains("unsupported config format")
         );
+    }
+
+    #[tokio::test]
+    async fn ensure_dirs_creates_the_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::for_root(&dir.path().join("root"));
+        config.ensure_dirs().await.unwrap();
+        for d in [
+            &config.data_dir,
+            &config.bedrock_server_dir,
+            &config.backups_dir,
+            &config.logs_dir,
+            &config.cache_dir,
+            &config.broadcaster_dir,
+        ] {
+            assert!(d.is_dir(), "{} missing", d.display());
+        }
     }
 }

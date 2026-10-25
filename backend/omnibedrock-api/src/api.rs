@@ -1,6 +1,6 @@
 //! API v1 compatibility layer. Services own process, auth, backup and filesystem logic.
 use crate::{
-    auth::{Auth, User},
+    auth::{Auth, INSTANCE_PERMISSIONS, User},
     websocket,
 };
 use axum::{
@@ -18,11 +18,15 @@ use omnibedrock_core::{
 };
 use omnibedrock_server::{
     addons::{self, ArchiveKind, InstalledPack},
-    backups::{BackupRequest, Backups, Hook, Hooks},
-    bds::{self, Bds},
+    backups::{BackupRequest, Hook, Hooks},
+    bds,
     broadcaster::Broadcaster,
     curseforge::{self, CLASSES, CurseForge},
     endstone::Endstone,
+    instances::{
+        AccessEntry, DEFAULT_INSTANCE, Deployment, Instance, InstanceManager, InstanceRecord,
+        ResourcePolicy,
+    },
     metrics::Metrics,
     server::{Backend, ServerManager, ServerSettings, Status},
 };
@@ -40,11 +44,16 @@ use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLay
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<Config>,
+    /// Every managed instance, including the migrated legacy `default`.
+    pub instances: Arc<InstanceManager>,
+    /// Handles to the default instance's services; kept for the single-server
+    /// code paths and tests. Instance-scoped requests resolve through
+    /// `resolve_instance` instead.
     pub server: ServerManager,
     pub auth: Auth,
-    pub backups: Backups,
+    pub backups: omnibedrock_server::backups::Backups,
     pub metrics: Metrics,
-    pub bds: Bds,
+    pub bds: omnibedrock_server::bds::Bds,
     pub endstone: Endstone,
     pub broadcaster: Broadcaster,
     pub curseforge: CurseForge,
@@ -80,18 +89,25 @@ impl AppState {
             elapsed_ms = started.elapsed().as_millis() as u64,
             "loading users, roles, and the signing key"
         );
-        let server_job = ServerManager::new(config.clone(), CancellationToken::new());
-        let (auth_result, server_result) = tokio::join!(Auth::new(config.clone()), server_job);
-        let auth = auth_result?;
-        let server = server_result?;
+        let auth = Auth::new(config.clone()).await?;
         tracing::info!(
             elapsed_ms = started.elapsed().as_millis() as u64,
             accounts = auth.users().await.as_array().map_or(0, Vec::len),
             login_enabled = auth.login_enabled(),
             "authentication ready"
         );
-        let bds = Bds::new(config.clone(), server.console.clone(), shutdown.clone());
-        let endstone = Endstone::new(config.clone(), server.console.clone(), shutdown.clone());
+        // The legacy single server migrates into the `default` instance; its
+        // services keep every legacy path so existing installs are unaffected.
+        let instances = Arc::new(
+            InstanceManager::new(config.clone(), auth.first_owner_username().await).await?,
+        );
+        let default = instances
+            .get(DEFAULT_INSTANCE)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("default instance missing after migration"))?;
+        let server = default.server.clone();
+        let bds = default.bds.clone();
+        let endstone = default.endstone.clone();
         // Detected facts from the on-disk toolchain markers, not assumptions:
         // what each backend would actually launch with right now.
         let toolchain = endstone.installed().await;
@@ -129,8 +145,16 @@ impl AppState {
             broadcaster_dir = %config.broadcaster_dir.display(),
             "broadcaster manager ready (Java probe runs in the background)"
         );
-        let backups = Backups::new(config.clone(), server.clone(), shutdown.clone()).await?;
-        let metrics = Metrics::start(server.clone(), config.clone(), shutdown.clone());
+        let backups = default.backups.clone();
+        let metrics = Metrics::start(instances.clone(), config.clone(), shutdown.clone());
+        // Every instance runs its own backup scheduler against its own settings.
+        for instance in instances.list().await {
+            if instance.record().id != DEFAULT_INSTANCE {
+                instance
+                    .backups
+                    .start_scheduler(instance.operations.clone());
+            }
+        }
         let audit = match tokio::fs::read_to_string(config.logs_dir.join("audit.jsonl")).await {
             Ok(s) => s
                 .lines()
@@ -141,6 +165,7 @@ impl AppState {
         };
         let state = Self {
             config,
+            instances,
             server,
             auth,
             backups,
@@ -155,12 +180,50 @@ impl AppState {
             edits: Arc::new(Mutex::new(())),
             audit_entries: Arc::new(Mutex::new(audit)),
         };
-        state.backups.start_scheduler(state.operations.clone());
+        default.backups.start_scheduler(default.operations.clone());
         tracing::info!(
             elapsed_ms = started.elapsed().as_millis() as u64,
             "all services initialized"
         );
         Ok(state)
+    }
+    /// Resolve the instance a request targets: the `X-Instance` header value,
+    /// or the migrated default. Access is checked at view level here; write
+    /// endpoints re-check manage access individually.
+    /// Instance-scoped permission gate for one resolved instance.
+    pub async fn require_for(&self, u: &User, permission: &str, svc: &Instance) -> Result<()> {
+        self.auth
+            .require_instance(u, permission, &svc.record())
+            .await
+    }
+    pub async fn resolve_instance(&self, id: Option<&str>, user: &User) -> Result<Arc<Instance>> {
+        let id = id.unwrap_or(DEFAULT_INSTANCE);
+        let instance = self
+            .instances
+            .get(id)
+            .await
+            .ok_or_else(|| ApiError::missing(format!("Instance '{id}' not found")))?;
+        let record = instance.record();
+        // The migrated default instance keeps the legacy panel's model: every
+        // authenticated user reaches it and role permissions gate each
+        // endpoint. Instances created afterwards are reachable by their owner,
+        // users with an access entry, the panel owner, and holders of the
+        // global INSTANCES_VIEW_ALL capability.
+        if record.id != DEFAULT_INSTANCE && !self.auth.can_access_instance(user, &record).await {
+            // Do not reveal whether the instance exists.
+            return Err(ApiError::missing(format!("Instance '{id}' not found")));
+        }
+        Ok(instance)
+    }
+    /// Latest metrics sample for one instance in the legacy single-server shape.
+    pub fn instance_metrics(&self, id: &str) -> Value {
+        if id == DEFAULT_INSTANCE {
+            return self.metrics.latest.borrow().clone();
+        }
+        self.metrics.all.borrow()["instances"]
+            .get(id)
+            .cloned()
+            .unwrap_or(Value::Null)
     }
     pub async fn audit(
         &self,
@@ -169,8 +232,19 @@ impl AppState {
         detail: &str,
         category: &str,
     ) -> Result<()> {
+        self.audit_instance(user, action, detail, category, "")
+            .await
+    }
+    pub async fn audit_instance(
+        &self,
+        user: &User,
+        action: &str,
+        detail: &str,
+        category: &str,
+        instance: &str,
+    ) -> Result<()> {
         use tokio::io::AsyncWriteExt;
-        let entry = json!({"timestamp":chrono::Utc::now().to_rfc3339(),"username":user.username,"action":action,"detail":detail,"category":category,"ip":""});
+        let entry = json!({"timestamp":chrono::Utc::now().to_rfc3339(),"username":user.username,"action":action,"detail":detail,"category":category,"instance":instance,"ip":""});
         let mut entries = self.audit_entries.lock().await;
         let path = self.config.logs_dir.join("audit.jsonl");
         let mut text = serde_json::to_vec(&entry).map_err(anyhow::Error::from)?;
@@ -262,6 +336,16 @@ async fn dispatch(
     let method = request.method().clone();
     let path = path.trim_matches('/');
     let segments = path.split('/').collect::<Vec<_>>();
+    // Optional instance scoping for every endpoint; absent means the default.
+    // Downloads pass it as a query param because browsers cannot set headers.
+    let instance_id = request
+        .headers()
+        .get("x-instance")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_owned)
+        .or_else(|| query.get("instance").cloned());
     let header_token = request
         .headers()
         .get(header::AUTHORIZATION)
@@ -273,7 +357,10 @@ async fn dispatch(
     if path == "addons/upload" && method == Method::POST {
         let user = state.auth.resolve_user(header_token.as_deref()).await?;
         state.auth.require(&user, "ADDONS_MANAGE").await?;
-        return upload_addons(state, user, query, request.into_body()).await;
+        let svc = state
+            .resolve_instance(instance_id.as_deref(), &user)
+            .await?;
+        return upload_addons(state, svc, user, query, request.into_body()).await;
     }
     let bytes = to_bytes(request.into_body(), 2 * 1024 * 1024)
         .await
@@ -343,11 +430,24 @@ async fn dispatch(
         }
     });
     let user = state.auth.resolve_user(token.as_deref()).await?;
-    let result = dispatch_authenticated(&state, &user, &method, &segments, &query, &body).await?;
+    let svc = state
+        .resolve_instance(instance_id.as_deref(), &user)
+        .await?;
+    let result =
+        dispatch_authenticated(&state, &svc, &user, &method, &segments, &query, &body).await?;
     // Never include passwords, JWTs, or full edited documents in the audit trail.
     if method != Method::GET && result.status().is_success() {
         let (action, detail, category) = audit_action(&segments, &method, &body);
-        if let Err(e) = state.audit(&user, &action, &detail, category).await {
+        if let Err(e) = state
+            .audit_instance(
+                &user,
+                &action,
+                &detail,
+                category,
+                instance_id.as_deref().unwrap_or_default(),
+            )
+            .await
+        {
             tracing::error!(%e,"Action succeeded but audit persistence failed");
         }
     }
@@ -458,6 +558,30 @@ fn audit_action(p: &[&str], method: &Method, b: &Value) -> (String, String, &'st
             detail,
             "addons",
         ),
+        ["instances", id, "action"] => (
+            format!(
+                "instance:{}:{}",
+                id,
+                optional_string(b, "action", "unknown")
+            ),
+            detail,
+            "instances",
+        ),
+        ["instances", ..] => (
+            format!(
+                "instance.{}",
+                if *method == Method::POST {
+                    "create"
+                } else if *method == Method::DELETE {
+                    "delete"
+                } else {
+                    "update"
+                }
+            ),
+            detail,
+            "instances",
+        ),
+        ["host"] => ("host.view".into(), detail, "instances"),
         ["files", ..] => (
             format!("files.{}", method.as_str().to_lowercase()),
             detail,
@@ -474,8 +598,10 @@ fn audit_action(p: &[&str], method: &Method, b: &Value) -> (String, String, &'st
         ),
     }
 }
+#[allow(clippy::too_many_lines)]
 async fn dispatch_authenticated(
     s: &AppState,
+    svc: &Arc<Instance>,
     u: &User,
     m: &Method,
     p: &[&str],
@@ -506,65 +632,94 @@ async fn dispatch_authenticated(
                 .mutate_user(u, name, if delete { None } else { Some(b.clone()) }, false)
                 .await?
         }
-        ["roles"] if read => {
-            s.auth.require(u, "USERS_VIEW").await?;
-            s.auth.roles().await
-        }
-        ["roles", name] if read => {
-            s.auth.require(u, "USERS_VIEW").await?;
-            s.auth.role(name).await?
-        }
+        // Role metadata is readable by every signed-in user: the UI renders
+        // role chips with names and colors across pages. Mutations are gated.
+        ["roles"] if read => s.auth.roles().await,
+        ["roles", name] if read => s.auth.role(name).await?,
         ["roles"] if create => {
-            s.auth.require(u, "USERS_CREATE").await?;
-            s.auth
-                .mutate_role(value_string(b, "name")?, Some(b.clone()), true)
-                .await?
-        }
-        ["roles", name] if write || delete => {
-            s.auth
-                .require(u, if delete { "USERS_DELETE" } else { "USERS_EDIT" })
+            s.auth.require(u, "ROLES_MANAGE").await?;
+            let (role, renamed) = s
+                .auth
+                .mutate_role(u, value_string(b, "name")?, Some(b.clone()), true)
                 .await?;
-            s.auth
-                .mutate_role(name, if delete { None } else { Some(b.clone()) }, false)
-                .await?
+            if let Some(old) = renamed {
+                s.instances
+                    .rename_access_role(&old, role["name"].as_str().unwrap_or_default())
+                    .await?;
+            }
+            s.audit(
+                u,
+                "roles.create",
+                role["name"].as_str().unwrap_or("role"),
+                "settings",
+            )
+            .await?;
+            role
+        }
+        ["roles", name] if write => {
+            s.auth.require(u, "ROLES_MANAGE").await?;
+            let (role, renamed) = s.auth.mutate_role(u, name, Some(b.clone()), false).await?;
+            if let Some(old) = renamed {
+                s.instances
+                    .rename_access_role(&old, role["name"].as_str().unwrap_or_default())
+                    .await?;
+            }
+            s.audit(u, "roles.update", name, "settings").await?;
+            role
+        }
+        ["roles", name] if delete => {
+            s.auth.require(u, "ROLES_MANAGE").await?;
+            let (result, _) = s.auth.mutate_role(u, name, None, false).await?;
+            // Memberships in instance access entries are dropped with the role.
+            s.instances.strip_access_role(name).await?;
+            s.audit(u, "roles.delete", name, "settings").await?;
+            result
         }
         ["server", "status"] if read => {
-            s.auth.require(u, "SERVER_VIEW").await?;
-            json!(s.server.snapshot())
+            s.require_for(u, "SERVER_VIEW", svc).await?;
+            json!(svc.server.snapshot())
         }
         ["server", "backend"] if read => {
-            s.auth.require(u, "SERVER_VIEW").await?;
-            backend_status(s).await
+            s.require_for(u, "SERVER_VIEW", svc).await?;
+            backend_status(svc).await
         }
         ["server", "backend", "versions"] if read => {
-            s.auth.require(u, "SERVER_VIEW").await?;
+            s.require_for(u, "SERVER_VIEW", svc).await?;
             serde_json::to_value(s.bds.registry().await?).map_err(anyhow::Error::from)?
         }
         ["server", "backend", "install"] if create => {
-            s.auth.require(u, "SERVER_MANAGE").await?;
-            install_bds(s, optional_string(b, "version", "latest")).await?
+            s.require_for(u, "SERVER_MANAGE", svc).await?;
+            install_bds(svc, optional_string(b, "version", "latest")).await?
         }
         ["server", "backend", "endstone", "install"] if create => {
-            s.auth.require(u, "SERVER_MANAGE").await?;
-            install_endstone(s, b["version"].as_str().map(str::to_string)).await?
+            s.require_for(u, "SERVER_MANAGE", svc).await?;
+            install_endstone(svc, b["version"].as_str().map(str::to_string)).await?
         }
         ["server", "backend", "switch"] if create => {
-            s.auth.require(u, "SERVER_MANAGE").await?;
-            switch_backend(s, b).await?
+            s.require_for(u, "SERVER_MANAGE", svc).await?;
+            switch_backend(svc, b).await?
         }
         ["server", "action"] if create => {
-            s.auth.require(u, "SERVER_MANAGE").await?;
+            s.require_for(u, "SERVER_MANAGE", svc).await?;
             let action = value_string(b, "action")?.to_owned();
             // Starting on Endstone with no launcher available bootstraps the
             // panel toolchain inline instead of failing or crash-looping.
-            if action == "start"
-                && s.server.settings.borrow().backend == Backend::Endstone
-                && let Err(e) = ensure_endstone_toolchain(s).await
-            {
+            // Copy the backend out: the settings read guard is not Send and
+            // must not live across the bootstrap awaits.
+            let backend = svc.server.settings.borrow().backend;
+            let bootstrap = if action == "start" {
+                match backend {
+                    Backend::Vanilla => ensure_vanilla_installed(svc).await,
+                    Backend::Endstone => ensure_endstone_toolchain(svc).await,
+                }
+            } else {
+                Ok(())
+            };
+            if let Err(e) = bootstrap {
                 json!({"success": false, "message": e.to_string()})
             } else {
-                let server = s.server.clone();
-                let lock = s.operations.clone().lock_owned().await;
+                let server = svc.server.clone();
+                let lock = svc.operations.clone().lock_owned().await;
                 let result = tokio::spawn(async move {
                     let _lock = lock;
                     server.action(&action).await
@@ -578,34 +733,34 @@ async fn dispatch_authenticated(
             }
         }
         ["console", "command"] if create => {
-            s.auth.require(u, "CONSOLE_SEND").await?;
-            s.server
+            s.require_for(u, "CONSOLE_SEND", svc).await?;
+            svc.server
                 .send_command(value_string(b, "command")?)
                 .await
                 .map_err(|e| ApiError::conflict(e.to_string()))?;
             success("")
         }
         ["performance", "metrics"] if read => {
-            s.auth.require(u, "SERVER_VIEW").await?;
-            s.metrics.latest.borrow().clone()
+            s.require_for(u, "SERVER_VIEW", svc).await?;
+            s.instance_metrics(&svc.record().id)
         }
         ["players"] if read => {
-            s.auth.require(u, "PLAYERS_VIEW").await?;
-            list_players(s).await?
+            s.require_for(u, "PLAYERS_VIEW", svc).await?;
+            list_players(svc).await?
         }
         ["players", "action"] if create => {
             let action = value_string(b, "action")?;
-            s.auth
-                .require(
-                    u,
-                    match action {
-                        "kick" => "PLAYERS_KICK",
-                        "ban" | "pardon" => "PLAYERS_BAN",
-                        "op" | "deop" => "PLAYERS_OP",
-                        _ => return Err(ApiError::bad("Invalid player action")),
-                    },
-                )
-                .await?;
+            s.require_for(
+                u,
+                match action {
+                    "kick" => "PLAYERS_KICK",
+                    "ban" | "pardon" => "PLAYERS_BAN",
+                    "op" | "deop" => "PLAYERS_OP",
+                    _ => return Err(ApiError::bad("Invalid player action")),
+                },
+                svc,
+            )
+            .await?;
             let target = value_string(b, "target")?;
             if target.contains(['\n', '\r', '\0', '"']) || target.is_empty() {
                 return Err(ApiError::bad("Invalid player name"));
@@ -619,7 +774,7 @@ async fn dispatch_authenticated(
                     String::new()
                 }
             );
-            s.server
+            svc.server
                 .send_command(&command)
                 .await
                 .map_err(|e| ApiError::conflict(e.to_string()))?;
@@ -635,9 +790,9 @@ async fn dispatch_authenticated(
             v
         }
         ["settings", "server"] if read => {
-            s.auth.require(u, "SETTINGS_VIEW").await?;
-            let mut v = json!(s.server.settings.borrow().clone());
-            v["crash_count"] = json!(s.server.snapshot().crash_count);
+            s.require_for(u, "SERVER_VIEW", svc).await?;
+            let mut v = json!(svc.server.settings.borrow().clone());
+            v["crash_count"] = json!(svc.server.snapshot().crash_count);
             v
         }
         ["settings", "panel"] if write => {
@@ -687,8 +842,8 @@ async fn dispatch_authenticated(
             })
         }
         ["settings", "server"] if write => {
-            s.auth.require(u, "SETTINGS_EDIT").await?;
-            let mut v = json!(s.server.settings.borrow().clone());
+            s.require_for(u, "SERVER_MANAGE", svc).await?;
+            let mut v = json!(svc.server.settings.borrow().clone());
             let obj = b
                 .as_object()
                 .ok_or_else(|| ApiError::bad("Settings must be an object"))?;
@@ -702,7 +857,7 @@ async fn dispatch_authenticated(
             options
                 .validate()
                 .map_err(|e| ApiError::bad(e.to_string()))?;
-            success(s.server.configure(options).await?)
+            success(svc.server.configure(options).await?)
         }
         ["audit"] if read => {
             s.auth.require(u, "AUDIT_VIEW").await?;
@@ -733,19 +888,19 @@ async fn dispatch_authenticated(
             )
         }
         ["properties"] if read => {
-            s.auth.require(u, "PROPERTIES_VIEW").await?;
-            json!(files::properties(&properties_text(s).await?))
+            s.require_for(u, "PROPERTIES_VIEW", svc).await?;
+            json!(files::properties(&properties_text(svc).await?))
         }
         ["properties", "raw"] if read => {
-            s.auth.require(u, "PROPERTIES_VIEW").await?;
+            s.require_for(u, "PROPERTIES_VIEW", svc).await?;
             return Ok((
                 [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-                properties_text(s).await?,
+                properties_text(svc).await?,
             )
                 .into_response());
         }
         ["properties", "raw"] if write => {
-            s.auth.require(u, "PROPERTIES_EDIT").await?;
+            s.require_for(u, "PROPERTIES_EDIT", svc).await?;
             let _lock = s.edits.lock().await;
             atomic_write(
                 &safe_path(
@@ -759,11 +914,11 @@ async fn dispatch_authenticated(
             success("Properties saved")
         }
         ["properties", key] if write => {
-            s.auth.require(u, "PROPERTIES_EDIT").await?;
+            s.require_for(u, "PROPERTIES_EDIT", svc).await?;
             let value = value_string(b, "value")?;
             files::validate_property(key, value)?;
             let _lock = s.edits.lock().await;
-            let text = properties_text(s).await?;
+            let text = properties_text(svc).await?;
             let mut entries = files::properties(&text);
             let mut found = false;
             for e in &mut entries {
@@ -811,14 +966,14 @@ async fn dispatch_authenticated(
             success(format!("'{key}' updated to '{value}'"))
         }
         ["worlds"] if read => {
-            s.auth.require(u, "SERVER_VIEW").await?;
-            json!(files::dirs(&s.config.bedrock_server_dir.join("worlds")).await?)
+            s.require_for(u, "SERVER_VIEW", svc).await?;
+            json!(files::dirs(&svc.config.bedrock_server_dir.join("worlds")).await?)
         }
         ["worlds", world] if read => {
-            s.auth.require(u, "SERVER_VIEW").await?;
+            s.require_for(u, "SERVER_VIEW", svc).await?;
             component(world)?;
             let path = safe_path(
-                &s.config.bedrock_server_dir.join("worlds"),
+                &svc.config.bedrock_server_dir.join("worlds"),
                 FsPath::new(world),
             )
             .await?;
@@ -847,7 +1002,7 @@ async fn dispatch_authenticated(
             s.auth.require(u, "SERVER_VIEW").await?;
             component(world)?;
             let path = safe_path(
-                &s.config.bedrock_server_dir.join("worlds"),
+                &svc.config.bedrock_server_dir.join("worlds"),
                 FsPath::new(world),
             )
             .await?;
@@ -856,7 +1011,7 @@ async fn dispatch_authenticated(
                 .map_err(anyhow::Error::from)??
         }
         ["files"] if read => {
-            s.auth.require(u, "FILES_VIEW").await?;
+            s.require_for(u, "FILES_VIEW", svc).await?;
             list_files(s).await?
         }
         ["files", filename] if read || write || delete => {
@@ -877,25 +1032,428 @@ async fn dispatch_authenticated(
             }
         }
         ["addons", ..] => {
-            return addons(s, u, m, p, q, b).await;
+            return addons(s, svc, u, m, p, q, b).await;
         }
         ["store", ..] => {
-            return store(s, u, m, p, q, b).await;
+            return store(s, svc, u, m, p, q, b).await;
         }
         ["backups", ..] => {
-            return backups(s, u, m, p, q, b).await;
+            return backups(s, svc, u, m, p, q, b).await;
         }
         ["broadcaster", ..] => {
             return broadcaster(s, u, m, p, q, b).await;
+        }
+        // ---- Multi-instance management ----
+        ["instances"] if read => {
+            // Every user sees the instances they can access.
+            let mut list = Vec::new();
+            for instance in s.instances.list().await {
+                let record = instance.record();
+                if record.id != DEFAULT_INSTANCE && !s.auth.can_access_instance(u, &record).await {
+                    continue;
+                }
+                let mut item = instance.summary();
+                item["usage"] = usage_json(&s.instance_metrics(&record.id));
+                list.push(item);
+            }
+            json!(list)
+        }
+        ["instances"] if create => {
+            s.auth.require(u, "INSTANCES_CREATE").await?;
+            create_instance(s, u, b).await?
+        }
+        ["instances", id] if read => {
+            let instance = s.resolve_instance(Some(id), u).await?;
+            let mut item = instance.summary();
+            item["usage"] = usage_json(&s.instance_metrics(&instance.record().id));
+            item
+        }
+        ["instances", id] if write => {
+            let instance = s.resolve_instance(Some(id), u).await?;
+            update_instance(s, u, &instance, b).await?
+        }
+        ["instances", id] if delete => {
+            let instance = s.resolve_instance(Some(id), u).await?;
+            let record = instance.record();
+            let may_delete = s.auth.is_owner(u).await
+                || record.owner == u.username
+                || s.auth.require(u, "INSTANCES_DELETE").await.is_ok();
+            if !may_delete {
+                return Err(ApiError::forbidden(
+                    "Only the instance owner, a panel owner, or a holder of INSTANCES_DELETE may delete it",
+                ));
+            }
+            if q.get("confirm").map(String::as_str) != Some("yes") {
+                return Err(ApiError::bad(
+                    "Pass ?confirm=yes to delete; this cannot be undone",
+                ));
+            }
+            let keep_data = q.get("keep_data").is_some_and(|v| v == "1" || v == "true");
+            s.instances
+                .remove(id, !keep_data)
+                .await
+                .map_err(|e| ApiError::conflict(e.to_string()))?;
+            success(format!(
+                "Instance '{id}' removed{}",
+                if keep_data {
+                    " (data kept on disk)"
+                } else {
+                    ""
+                }
+            ))
+        }
+        ["instances", id, "action"] if create => {
+            let instance = s.resolve_instance(Some(id), u).await?;
+            let record = instance.record();
+            if !s.auth.can_access_instance(u, &record).await {
+                return Err(ApiError::forbidden(
+                    "You can view this instance but cannot control its runtime",
+                ));
+            }
+            s.require_for(u, "SERVER_MANAGE", &instance).await?;
+            let action = value_string(b, "action")?.to_owned();
+            let backend = instance.server.settings.borrow().backend;
+            let bootstrap = if action == "start" {
+                match backend {
+                    Backend::Vanilla => ensure_vanilla_installed(&instance).await,
+                    Backend::Endstone => ensure_endstone_toolchain(&instance).await,
+                }
+            } else {
+                Ok(())
+            };
+            if let Err(e) = bootstrap {
+                json!({"success": false, "message": e.to_string()})
+            } else {
+                let server = instance.server.clone();
+                let lock = instance.operations.clone().lock_owned().await;
+                let result = tokio::spawn(async move {
+                    let _lock = lock;
+                    server.action(&action).await
+                })
+                .await
+                .map_err(anyhow::Error::from)?;
+                match result {
+                    Ok(message) => success(message),
+                    Err(e) => json!({"success":false,"message":e.to_string()}),
+                }
+            }
+        }
+        ["host"] if read => {
+            s.auth.require(u, "SERVER_VIEW").await?;
+            let mut host = s.metrics.all.borrow()["host"].clone();
+            host["capabilities"] = json!(s.instances.capabilities());
+            let records = s.instances.records().await;
+            let allocated_memory: u64 = records
+                .iter()
+                .map(|r| r.resources.memory_mb.unwrap_or(0))
+                .sum();
+            let allocated_cpus: f64 = records
+                .iter()
+                .map(|r| r.resources.cpus.unwrap_or(0.0))
+                .sum();
+            host["allocated"] = json!({
+                "memory_mb": allocated_memory,
+                "cpus": allocated_cpus,
+                "instances": records.len(),
+            });
+            // Overcommitment: aggregate allocations vs capacity minus the
+            // configurable reserve. Warnings are advisory — per-instance
+            // limits stay enforced regardless.
+            let reserve = s.config.host_reserve_mb;
+            let (memory, cpu) = omnibedrock_server::instances::overcommit_status(
+                host["memory_total_mb"].as_f64().unwrap_or(0.0),
+                reserve,
+                allocated_memory,
+                host["cpu_count"].as_u64().unwrap_or(0) as usize,
+                allocated_cpus,
+            );
+            host["reserve_mb"] = json!(reserve);
+            host["overcommit"] = json!({
+                "memory_exceeded": memory.is_some(),
+                "memory_warning": memory,
+                "cpu_exceeded": cpu.is_some(),
+                "cpu_warning": cpu,
+            });
+            host
         }
         _ => return Err(ApiError::missing("Endpoint not found")),
     };
     Ok(data_response(data))
 }
-async fn properties_text(s: &AppState) -> Result<String> {
+
+fn usage_json(metrics: &Value) -> Value {
+    json!({
+        "cpu_percent": metrics["cpu_percent"].as_f64().unwrap_or(0.0),
+        "memory_mb": metrics["memory_mb"].as_f64().unwrap_or(0.0),
+        "disk_mb": metrics["disk_mb"].as_f64().unwrap_or(0.0),
+        "usage_source": metrics["usage_source"].as_str().unwrap_or("unknown"),
+    })
+}
+
+/// Create an instance after checking quotas, port availability, and the
+/// deployment backend's availability on this host.
+async fn create_instance(s: &AppState, u: &User, b: &Value) -> Result<Value> {
+    let name = value_string(b, "name")?.trim().to_owned();
+    if name.is_empty() || name.chars().count() > 64 {
+        return Err(ApiError::bad("name must be 1..64 characters"));
+    }
+    omnibedrock_core::files::component(&name).map_err(|e| ApiError::bad(e.message))?;
+    let backend = Backend::parse(value_string(b, "backend")?)?;
+    let deployment = Deployment::parse(optional_string(b, "deployment", "native"))?;
+    let resources = ResourcePolicy {
+        memory_mb: b.get("memory_mb").and_then(Value::as_u64),
+        cpus: b.get("cpus").and_then(Value::as_f64),
+    };
+    resources
+        .validate()
+        .map_err(|e| ApiError::bad(e.to_string()))?;
+    let port = match b.get("port") {
+        None | Some(Value::Null) => 0u16,
+        Some(v) => v
+            .as_u64()
+            .and_then(|p| u16::try_from(p).ok())
+            .ok_or_else(|| ApiError::bad("'port' must be a UDP port number (0 = auto)"))?,
+    };
+    let id = omnibedrock_server::instances::slug(&name);
+    if !omnibedrock_server::instances::valid_id(&id) {
+        return Err(ApiError::bad(format!(
+            "could not derive a valid instance id from '{name}'"
+        )));
+    }
+    let record = InstanceRecord {
+        id,
+        name,
+        owner: u.username.clone(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        port,
+        deployment,
+        resources,
+        access: vec![],
+        autostart: b["autostart"].as_bool().unwrap_or(false),
+    };
+    // Quotas apply to everyone except the panel owner, who sets them.
+    let quotas = u.quotas.clone();
+    let is_owner_role = s.auth.is_owner(u).await;
+    let username = u.username.clone();
+    let extra = record.resources;
+    let instance = s
+        .instances
+        .create(record, move |records| {
+            if is_owner_role {
+                return Ok(());
+            }
+            let owned: Vec<&InstanceRecord> =
+                records.iter().filter(|r| r.owner == username).collect();
+            quotas.check(&owned, extra)
+        })
+        .await
+        .map_err(|e| ApiError::bad(e.to_string()))?;
+    // Seed the instance's runtime settings (backend + version) now that the
+    // per-instance settings file exists.
+    let mut settings = ServerSettings {
+        backend,
+        ..ServerSettings::default()
+    };
+    if let Some(version) = b["vanilla_version"].as_str() {
+        omnibedrock_core::files::component(version).map_err(|e| ApiError::bad(e.message))?;
+        settings.vanilla_version = version.into();
+    }
+    if let Err(e) = instance.server.configure(settings).await {
+        return Err(ApiError::conflict(format!(
+            "instance created but saving its settings failed: {e}"
+        )));
+    }
+    let mut item = instance.summary();
+    item["usage"] = usage_json(&Value::Null);
+    Ok(item)
+}
+
+/// Update an instance's editable fields. Deployment, resources, and port
+/// changes require the instance to be stopped (enforced by the manager).
+async fn update_instance(
+    s: &AppState,
+    u: &User,
+    instance: &Arc<Instance>,
+    b: &Value,
+) -> Result<Value> {
+    let record = instance.record();
+    let actor_is_owner = s.auth.is_owner(u).await;
+    let is_instance_owner = record.owner == u.username;
+    // Resource/limit changes are a granular permission (INSTANCES_LIMITS,
+    // grantable globally or through an instance share) on top of the owner
+    // paths; the quota check below still runs for everyone. Access-list
+    // management additionally accepts INSTANCES_SHARE.
+    let can_edit_limits = actor_is_owner
+        || is_instance_owner
+        || s.auth.require(u, "INSTANCES_LIMITS").await.is_ok()
+        || s.auth
+            .instance_permissions(u, &record)
+            .await
+            .iter()
+            .any(|p| p == "INSTANCES_LIMITS");
+    let can_edit_access = can_edit_limits || s.auth.require(u, "INSTANCES_SHARE").await.is_ok();
+    let touches_limits = ["name", "port", "deployment", "memory_mb", "cpus"]
+        .iter()
+        .any(|k| b.get(*k).is_some());
+    if b.get("access").is_some() && !can_edit_access {
+        return Err(ApiError::forbidden(
+            "Only the instance owner, a panel owner, or a holder of INSTANCES_SHARE may manage instance access",
+        ));
+    }
+    if touches_limits && !can_edit_limits {
+        return Err(ApiError::forbidden(
+            "Only the instance owner, a panel owner, or a holder of INSTANCES_LIMITS may change its resources",
+        ));
+    }
+    if !touches_limits && b.get("access").is_none() {
+        return Err(ApiError::bad("Nothing to update"));
+    }
+    let mut next = record.clone();
+    if let Some(name) = b["name"].as_str() {
+        let name = name.trim();
+        if name.is_empty() || name.chars().count() > 64 {
+            return Err(ApiError::bad("name must be 1..64 characters"));
+        }
+        omnibedrock_core::files::component(name).map_err(|e| ApiError::bad(e.message))?;
+        next.name = name.into();
+    }
+    if let Some(port) = b["port"].as_u64() {
+        let port =
+            u16::try_from(port).map_err(|_| ApiError::bad("'port' must be a UDP port number"))?;
+        next.port = port;
+    }
+    if let Some(deployment) = b["deployment"].as_str() {
+        next.deployment =
+            Deployment::parse(deployment).map_err(|e| ApiError::bad(e.to_string()))?;
+    }
+    if let Some(autostart) = b["autostart"].as_bool() {
+        if autostart && next.deployment != Deployment::Systemd {
+            return Err(ApiError::bad(
+                "autostart applies to systemd instances only (it enables the user unit)",
+            ));
+        }
+        next.autostart = autostart;
+    }
+    if b.get("memory_mb").is_some() {
+        next.resources.memory_mb = b["memory_mb"].as_u64();
+    }
+    if b.get("cpus").is_some() {
+        next.resources.cpus = b["cpus"].as_f64();
+    }
+    if let Some(access) = b["access"].as_array() {
+        let mut entries = Vec::new();
+        for entry in access {
+            let user = entry["user"]
+                .as_str()
+                .ok_or_else(|| ApiError::bad("access entries need a user"))?;
+            omnibedrock_core::files::component(user).map_err(|e| ApiError::bad(e.message))?;
+            // Roles reference the shared catalog; the legacy two-level field is
+            // still accepted from old clients and maps the same way as files.
+            let mut roles: Vec<String> = match entry.get("roles") {
+                Some(Value::Array(arr)) => arr
+                    .iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect(),
+                Some(Value::String(role)) => vec![role.clone()],
+                _ => match entry["level"].as_str().unwrap_or("view") {
+                    "manage" => vec!["instance-manager".into()],
+                    _ => vec!["viewer".into()],
+                },
+            };
+            roles.sort();
+            roles.dedup();
+            if roles.is_empty() {
+                continue;
+            }
+            // Delegation guard: without the owner sentinel you cannot grant an
+            // instance capability you do not hold on this very instance. Only
+            // instance-scoped permissions are effective here, so only those
+            // are checked.
+            if !actor_is_owner {
+                let granted: Vec<String> = s
+                    .auth
+                    .roles()
+                    .await
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                    .iter()
+                    .filter(|r| roles.contains(&r["name"].as_str().unwrap_or_default().to_string()))
+                    .flat_map(|r| r["permissions"].as_array().cloned().unwrap_or_default())
+                    .filter_map(|p| p.as_str().map(str::to_string))
+                    .filter(|p| INSTANCE_PERMISSIONS.contains(&p.as_str()))
+                    .collect();
+                let held = s.auth.instance_permissions(u, &record).await;
+                if let Some(missing) = granted.iter().find(|p| !held.contains(p)) {
+                    return Err(ApiError::forbidden(format!(
+                        "You cannot grant {perm} on this instance — you do not hold it yourself",
+                        perm = missing
+                    )));
+                }
+            }
+            entries.push(AccessEntry {
+                user: user.into(),
+                roles,
+                level: None,
+            });
+        }
+        next.access = entries;
+    }
+    next.resources
+        .validate()
+        .map_err(|e| ApiError::bad(e.to_string()))?;
+    // A resource increase must respect the instance owner's quota (panel
+    // owner exempt); the check runs inside the manager's write lock.
+    let quotas = s.auth.user_quotas(&next.owner).await.unwrap_or_default();
+    let is_panel_owner = actor_is_owner;
+    let owner = next.owner.clone();
+    let target_id = next.id.clone();
+    s.instances
+        .configure(&record.id, next, move |records| {
+            if is_panel_owner {
+                return Ok(());
+            }
+            let memory: u64 = records
+                .iter()
+                .filter(|r| r.owner == owner)
+                .map(|r| r.resources.memory_mb.unwrap_or(0))
+                .sum();
+            let cpus: f64 = records
+                .iter()
+                .filter(|r| r.owner == owner)
+                .map(|r| r.resources.cpus.unwrap_or(0.0))
+                .sum();
+            if let Some(limit) = quotas.memory_mb
+                && memory > limit
+            {
+                return Err(anyhow::anyhow!(format!(
+                    "memory quota exceeded: {memory} MiB allocated > {limit} MiB"
+                )));
+            }
+            if let Some(limit) = quotas.cpus
+                && cpus > limit + 1e-9
+            {
+                return Err(anyhow::anyhow!(format!(
+                    "cpu quota exceeded: {cpus:.2} allocated > {limit:.2}"
+                )));
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| ApiError::forbidden(e.to_string()))?;
+    let instance = s
+        .instances
+        .get(&target_id)
+        .await
+        .ok_or_else(|| ApiError::missing("Instance vanished"))?;
+    let mut item = instance.summary();
+    item["usage"] = usage_json(&s.instance_metrics(&target_id));
+    Ok(item)
+}
+async fn properties_text(svc: &Arc<Instance>) -> Result<String> {
     match tokio::fs::read_to_string(
         safe_path(
-            &s.config.bedrock_server_dir,
+            &svc.config.bedrock_server_dir,
             FsPath::new("server.properties"),
         )
         .await?,
@@ -952,14 +1510,14 @@ async fn list_files(s: &AppState) -> Result<Value> {
     result.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
     Ok(json!(result))
 }
-async fn list_players(s: &AppState) -> Result<Value> {
-    if s.server.snapshot().status != Status::Running {
+async fn list_players(svc: &Arc<Instance>) -> Result<Value> {
+    if svc.server.snapshot().status != Status::Running {
         return Ok(json!({"players":[],"count":0}));
     }
-    let console = &s.server.console;
+    let console = &svc.server.console;
     let mut changes = console.changed.subscribe();
     let mut cursor = Some(console.replay(None, 0).latest);
-    s.server.send_command("list").await?;
+    svc.server.send_command("list").await?;
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
     loop {
         let batch = console.replay(cursor, 256);
@@ -996,6 +1554,7 @@ async fn list_players(s: &AppState) -> Result<Value> {
 }
 async fn addons(
     s: &AppState,
+    svc: &Arc<Instance>,
     u: &User,
     m: &Method,
     p: &[&str],
@@ -1007,7 +1566,7 @@ async fn addons(
     s.auth
         .require(u, if read { "ADDONS_VIEW" } else { "ADDONS_MANAGE" })
         .await?;
-    let root = s.config.bedrock_server_dir.join("worlds");
+    let root = svc.config.bedrock_server_dir.join("worlds");
     let _lock = if read {
         None
     } else {
@@ -1311,6 +1870,7 @@ async fn write_manifest(path: &FsPath, value: &Value) -> Result<()> {
 }
 async fn backups(
     s: &AppState,
+    svc: &Arc<Instance>,
     u: &User,
     m: &Method,
     p: &[&str],
@@ -1322,26 +1882,28 @@ async fn backups(
     let write = m == Method::PUT;
     let data = match p {
         ["backups", "worlds"] if read => {
-            s.auth.require(u, "BACKUPS_VIEW").await?;
-            json!(s.backups.worlds().await?)
+            s.require_for(u, "BACKUPS_VIEW", svc).await?;
+            json!(svc.backups.worlds().await?)
         }
         ["backups"] if read => {
-            s.auth.require(u, "BACKUPS_VIEW").await?;
-            let backups = s.backups.list(q.get("world").cloned(), false).await?;
+            s.require_for(u, "BACKUPS_VIEW", svc).await?;
+            let backups = svc.backups.list(q.get("world").cloned(), false).await?;
             json!({"total":backups.len(),"backups":backups})
         }
         ["backups", "trash"] if read => {
-            s.auth.require(u, "BACKUPS_VIEW").await?;
-            json!(s.backups.list(q.get("world").cloned(), true).await?)
+            s.require_for(u, "BACKUPS_VIEW", svc).await?;
+            json!(svc.backups.list(q.get("world").cloned(), true).await?)
         }
         ["backups", "create"] if create => {
-            s.auth.require(u, "BACKUPS_CREATE").await?;
+            s.require_for(u, "BACKUPS_CREATE", svc).await?;
             let r: BackupRequest =
                 serde_json::from_value(b.clone()).map_err(|e| ApiError::bad(e.to_string()))?;
-            let lock = s.operations.clone().try_lock_owned().map_err(|_| {
-                ApiError::conflict("A server operation or backup is already running")
+            let lock = svc.operations.clone().try_lock_owned().map_err(|_| {
+                ApiError::conflict(
+                    "A server operation or backup is already running on this instance",
+                )
             })?;
-            let service = s.backups.clone();
+            let service = svc.backups.clone();
             tokio::spawn(async move {
                 let _lock = lock;
                 service.run(r).await
@@ -1350,21 +1912,23 @@ async fn backups(
             .map_err(anyhow::Error::from)??
         }
         ["backups", "restore", world, filename] if create => {
-            s.auth.require(u, "BACKUPS_RESTORE").await?;
-            s.backups.move_trash(world, filename, true).await?;
+            s.require_for(u, "BACKUPS_RESTORE", svc).await?;
+            svc.backups.move_trash(world, filename, true).await?;
             success(format!("Restored {filename}"))
         }
         ["backups", world, filename] if *m == Method::DELETE => {
-            s.auth.require(u, "BACKUPS_DELETE").await?;
-            s.backups.move_trash(world, filename, false).await?;
+            s.require_for(u, "BACKUPS_DELETE", svc).await?;
+            svc.backups.move_trash(world, filename, false).await?;
             success(format!("Moved {filename} to trash"))
         }
         ["backups", world, filename, "restore-to-world"] if create => {
-            s.auth.require(u, "BACKUPS_RESTORE").await?;
-            let lock = s.operations.clone().try_lock_owned().map_err(|_| {
-                ApiError::conflict("A server operation or backup is already running")
+            s.require_for(u, "BACKUPS_RESTORE", svc).await?;
+            let lock = svc.operations.clone().try_lock_owned().map_err(|_| {
+                ApiError::conflict(
+                    "A server operation or backup is already running on this instance",
+                )
             })?;
-            let service = s.backups.clone();
+            let service = svc.backups.clone();
             let world = world.to_string();
             let filename = filename.to_string();
             let message = format!(
@@ -1379,8 +1943,8 @@ async fn backups(
             success(message)
         }
         ["backups", world, filename, "download"] if read => {
-            s.auth.require(u, "BACKUPS_VIEW").await?;
-            let path = s.backups.path(world, filename, false).await?;
+            s.require_for(u, "BACKUPS_VIEW", svc).await?;
+            let path = svc.backups.path(world, filename, false).await?;
             let file = tokio::fs::File::open(path).await?;
             let size = file.metadata().await?.len();
             // RFC 5987 filename encoding avoids header injection from imported archives.
@@ -1408,25 +1972,25 @@ async fn backups(
                 .into_response());
         }
         ["backups", "settings"] if read => {
-            s.auth.require(u, "BACKUPS_VIEW").await?;
-            s.backups.settings()
+            s.require_for(u, "BACKUPS_VIEW", svc).await?;
+            svc.backups.settings()
         }
         ["backups", "settings"] if write => {
-            s.auth.require(u, "SETTINGS_EDIT").await?;
-            s.backups.update_settings(b.clone()).await?;
+            s.require_for(u, "SETTINGS_EDIT", svc).await?;
+            svc.backups.update_settings(b.clone()).await?;
             success("Backup settings saved")
         }
         ["backups", "scheduler"] if read => {
-            s.auth.require(u, "BACKUPS_VIEW").await?;
-            s.backups.settings()["auto"].clone()
+            s.require_for(u, "BACKUPS_VIEW", svc).await?;
+            svc.backups.settings()["auto"].clone()
         }
         ["backups", "scheduler"] if write => {
-            s.auth.require(u, "SETTINGS_EDIT").await?;
-            s.backups.update_settings(json!({"auto":b})).await?;
+            s.require_for(u, "SETTINGS_EDIT", svc).await?;
+            svc.backups.update_settings(json!({"auto":b})).await?;
             success("Backup scheduler updated")
         }
         ["backups", "test-command"] if create => {
-            s.auth.require(u, "BACKUPS_CREATE").await?;
+            s.require_for(u, "BACKUPS_CREATE", svc).await?;
             let h: Hook = serde_json::from_value(b["entry"].clone())
                 .map_err(|e| ApiError::bad(e.to_string()))?;
             Hooks {
@@ -1441,7 +2005,7 @@ async fn backups(
                 .unwrap_or_else(|| h.value.to_string());
             match h.r#type.as_str() {
                 "send" => {
-                    s.auth.require(u, "CONSOLE_SEND").await?;
+                    s.require_for(u, "CONSOLE_SEND", svc).await?;
                     let output = s
                         .backups
                         .send_capture(&text)
@@ -1454,8 +2018,8 @@ async fn backups(
                     json!({"kind":"wait","output":format!("Wait directive: {text}s (not executed in test)"),"exit_code":0})
                 }
                 "command" => {
-                    s.auth.require(u, "SETTINGS_EDIT").await?;
-                    match s.backups.shell(&text, "test", 10).await {
+                    s.require_for(u, "SETTINGS_EDIT", svc).await?;
+                    match svc.backups.shell(&text, "test", 10).await {
                         Ok((code, output)) => {
                             json!({"kind":"command","output":output,"exit_code":code})
                         }
@@ -1466,13 +2030,13 @@ async fn backups(
             }
         }
         ["backups", "include-items"] if read => {
-            s.auth.require(u, "BACKUPS_VIEW").await?;
+            s.require_for(u, "BACKUPS_VIEW", svc).await?;
             let world = q
                 .get("world")
                 .ok_or_else(|| ApiError::bad("World required"))?;
             component(world)?;
             let path = safe_path(
-                &s.config.bedrock_server_dir.join("worlds"),
+                &svc.config.bedrock_server_dir.join("worlds"),
                 FsPath::new(world),
             )
             .await?;
@@ -1502,12 +2066,12 @@ async fn backups(
             json!({"items":items})
         }
         ["backups", "folders"] if read => {
-            s.auth.require(u, "BACKUPS_VIEW").await?;
+            s.require_for(u, "BACKUPS_VIEW", svc).await?;
             let base = q.get("base").map(String::as_str).unwrap_or("");
             let path = if base.is_empty() {
-                tokio::fs::canonicalize(&s.config.backups_dir).await?
+                tokio::fs::canonicalize(&svc.config.backups_dir).await?
             } else {
-                safe_path(&s.config.backups_dir, FsPath::new(base)).await?
+                safe_path(&svc.config.backups_dir, FsPath::new(base)).await?
             };
             let mut result = Vec::new();
             for name in files::dirs(&path).await? {
@@ -1520,12 +2084,12 @@ async fn backups(
     Ok(data_response(data))
 }
 
-async fn backend_status(s: &AppState) -> Value {
-    let settings = s.server.settings.borrow().clone();
-    let installed = s.bds.installed_version().await;
+async fn backend_status(svc: &Arc<Instance>) -> Value {
+    let settings = svc.server.settings.borrow().clone();
+    let installed = svc.bds.installed_version().await;
     // Only surface a cached registry here; fetching stays on the versions endpoint.
-    let latest = s.bds.registry().await.ok().map(|r| r.release.latest);
-    let binary_present = s
+    let latest = svc.bds.registry().await.ok().map(|r| r.release.latest);
+    let binary_present = svc
         .config
         .bedrock_server_dir
         .join(if cfg!(windows) {
@@ -1534,14 +2098,16 @@ async fn backend_status(s: &AppState) -> Value {
             "bedrock_server"
         })
         .exists();
-    let install = serde_json::to_value(&*s.bds.state.borrow()).unwrap_or(Value::Null);
-    let endstone_installed = s.endstone.installed().await;
-    let endstone_binary_present = omnibedrock_server::endstone::endstone_binary(&s.config).exists();
-    let endstone_install = serde_json::to_value(&*s.endstone.state.borrow()).unwrap_or(Value::Null);
+    let install = serde_json::to_value(&*svc.bds.state.borrow()).unwrap_or(Value::Null);
+    let endstone_installed = svc.endstone.installed().await;
+    let endstone_binary_present =
+        omnibedrock_server::endstone::endstone_binary(&svc.config).exists();
+    let endstone_install =
+        serde_json::to_value(&*svc.endstone.state.borrow()).unwrap_or(Value::Null);
     json!({
         "backend": settings.backend.as_str(),
         "vanilla_version": settings.vanilla_version,
-        "running": s.server.snapshot().status == Status::Running,
+        "running": svc.server.snapshot().status == Status::Running,
         "installed": installed,
         "latest": latest,
         "binary_present": binary_present,
@@ -1553,20 +2119,20 @@ async fn backend_status(s: &AppState) -> Value {
         },
     })
 }
-async fn install_bds(s: &AppState, version: &str) -> Result<Value> {
-    if s.bds.state.borrow().phase != "idle" {
+async fn install_bds(svc: &Arc<Instance>, version: &str) -> Result<Value> {
+    if svc.bds.state.borrow().phase != "idle" {
         return Err(ApiError::conflict("A BDS install is already running"));
     }
     if version != "latest" {
-        let registry = s.bds.registry().await?;
+        let registry = svc.bds.registry().await?;
         if !bds::version_exists(&registry, version) {
             return Err(ApiError::bad(format!(
                 "Version '{version}' is not in the registry"
             )));
         }
     }
-    let receiver = s.bds.install(version).await?;
-    let console = s.server.console.clone();
+    let receiver = svc.bds.install(version).await?;
+    let console = svc.server.console.clone();
     tokio::spawn(async move {
         match receiver.await {
             Ok(Ok(message)) => {
@@ -1594,11 +2160,64 @@ async fn install_bds(s: &AppState, version: &str) -> Result<Value> {
         "Installing BDS {version}; progress appears in the console"
     )))
 }
+/// Make sure a vanilla BDS binary exists before starting on the vanilla
+/// backend; when nothing is installed, run the download inline so a plain
+/// Start just works instead of failing with a "go install it" error.
+async fn ensure_vanilla_installed(svc: &Arc<Instance>) -> Result<()> {
+    let binary = svc.config.bedrock_server_dir.join(if cfg!(windows) {
+        "bedrock_server.exe"
+    } else {
+        "bedrock_server"
+    });
+    if binary.exists() {
+        return Ok(());
+    }
+    if svc.bds.state.borrow().phase != "idle" {
+        return Err(ApiError::conflict(
+            "A BDS install is already running; start the server again once it finishes",
+        ));
+    }
+    let version = svc.server.settings.borrow().vanilla_version.clone();
+    let requested = if version.is_empty() {
+        "latest".to_owned()
+    } else {
+        version
+    };
+    svc.server
+        .console
+        .publish(
+            format!("[LOCAL] Vanilla BDS is not installed — installing {requested} first…"),
+            "panel",
+            false,
+        )
+        .await;
+    let receiver = svc
+        .bds
+        .install(&requested)
+        .await
+        .map_err(|e| ApiError::conflict(e.to_string()))?;
+    match receiver.await {
+        Ok(Ok(message)) => {
+            // The installer may have written its own default properties;
+            // re-pin the instance's registered port (both stacks).
+            omnibedrock_server::instances::enforce_instance_port(&svc.config, svc.record().port)
+                .await;
+            svc.server
+                .console
+                .publish(format!("[LOCAL] {message}"), "panel", false)
+                .await;
+            Ok(())
+        }
+        Ok(Err(e)) => Err(ApiError::conflict(format!("BDS install failed: {e}"))),
+        Err(_) => Err(ApiError::conflict("BDS installer stopped")),
+    }
+}
+
 /// Make sure an Endstone launch candidate exists before starting on the
 /// Endstone backend. When nothing is installed, run the toolchain bootstrap
 /// inline (uv + managed CPython + Endstone) so a plain Start just works.
-async fn ensure_endstone_toolchain(s: &AppState) -> Result<()> {
-    let config = s.config.clone();
+async fn ensure_endstone_toolchain(svc: &Arc<Instance>) -> Result<()> {
+    let config = svc.config.clone();
     let ready = tokio::task::spawn_blocking(move || {
         omnibedrock_server::endstone::resolve_launch(&config).is_some()
     })
@@ -1607,12 +2226,12 @@ async fn ensure_endstone_toolchain(s: &AppState) -> Result<()> {
     if ready {
         return Ok(());
     }
-    if s.endstone.state.borrow().phase != "idle" {
+    if svc.endstone.state.borrow().phase != "idle" {
         return Err(ApiError::conflict(
             "An Endstone toolchain install is already running; start the server again once it finishes",
         ));
     }
-    s.server
+    svc.server
         .console
         .publish(
             "[LOCAL] Endstone toolchain not found — installing uv + Python + Endstone first…"
@@ -1621,7 +2240,7 @@ async fn ensure_endstone_toolchain(s: &AppState) -> Result<()> {
             false,
         )
         .await;
-    let receiver = s
+    let receiver = svc
         .endstone
         .install(None)
         .await
@@ -1634,17 +2253,17 @@ async fn ensure_endstone_toolchain(s: &AppState) -> Result<()> {
         Err(_) => Err(ApiError::conflict("Endstone toolchain installer stopped")),
     }
 }
-async fn install_endstone(s: &AppState, version: Option<String>) -> Result<Value> {
+async fn install_endstone(svc: &Arc<Instance>, version: Option<String>) -> Result<Value> {
     if let Some(v) = &version {
         component(v)?;
     }
-    if s.endstone.state.borrow().phase != "idle" {
+    if svc.endstone.state.borrow().phase != "idle" {
         return Err(ApiError::conflict(
             "An Endstone toolchain install is already running",
         ));
     }
-    let receiver = s.endstone.install(version.clone()).await?;
-    let console = s.server.console.clone();
+    let receiver = svc.endstone.install(version.clone()).await?;
+    let console = svc.server.console.clone();
     let requested = version.unwrap_or_else(|| "latest".into());
     tokio::spawn(async move {
         match receiver.await {
@@ -1673,12 +2292,12 @@ async fn install_endstone(s: &AppState, version: Option<String>) -> Result<Value
         "Installing Endstone toolchain ({requested}); progress appears in the console"
     )))
 }
-async fn switch_backend(s: &AppState, b: &Value) -> Result<Value> {
+async fn switch_backend(svc: &Arc<Instance>, b: &Value) -> Result<Value> {
     let backend = Backend::parse(value_string(b, "backend")?)?;
-    let mut settings = s.server.settings.borrow().clone();
+    let mut settings = svc.server.settings.borrow().clone();
     if let Some(version) = b["version"].as_str() {
         component(version)?;
-        let registry = s.bds.registry().await?;
+        let registry = svc.bds.registry().await?;
         if version != "latest" && !bds::version_exists(&registry, version) {
             return Err(ApiError::bad(format!(
                 "Version '{version}' is not in the registry"
@@ -1686,41 +2305,54 @@ async fn switch_backend(s: &AppState, b: &Value) -> Result<Value> {
         }
         settings.vanilla_version = version.into();
     }
+    // Both runtimes install on demand, so a switch never dead-ends with a
+    // "go install it first" error (mirrors the plain-Start bootstrap).
     if backend == Backend::Vanilla {
-        let binary = s.config.bedrock_server_dir.join(if cfg!(windows) {
-            "bedrock_server.exe"
-        } else {
-            "bedrock_server"
-        });
-        if !binary.exists() {
-            return Err(ApiError::conflict(
-                "Vanilla BDS is not installed; install a version first",
-            ));
-        }
+        ensure_vanilla_installed(svc).await?;
     }
     if backend == Backend::Endstone {
-        ensure_endstone_toolchain(s).await?;
+        ensure_endstone_toolchain(svc).await?;
     }
-    let was_running = s.server.snapshot().status == Status::Running;
-    let lock = s.operations.clone().lock_owned().await;
-    if was_running && let Err(e) = s.server.action("stop").await {
+    let console = svc.server.console.clone();
+    console
+        .publish(
+            format!(
+                "[LOCAL] Switching '{}' to the {} backend — worlds, allowlist and \
+                 player permissions are kept (both runtimes share the server directory)",
+                svc.record().name,
+                backend.as_str()
+            ),
+            "panel",
+            false,
+        )
+        .await;
+    let was_running = svc.server.snapshot().status == Status::Running;
+    let lock = svc.operations.clone().lock_owned().await;
+    if was_running && let Err(e) = svc.server.action("stop").await {
         drop(lock);
         return Err(ApiError::conflict(format!(
             "Stop before switch failed: {e}"
         )));
     }
     settings.backend = backend;
-    let configured = s.server.configure(settings).await;
+    let configured = svc.server.configure(settings).await;
     let restarted = if was_running {
-        s.server.action("start").await
+        svc.server.action("start").await
     } else {
         Ok(String::new())
     };
     drop(lock);
     configured.map_err(|e| ApiError::conflict(e.to_string()))?;
     restarted.map_err(|e| ApiError::conflict(e.to_string()))?;
+    console
+        .publish(
+            format!("[LOCAL] Backend switched to {}", backend.as_str()),
+            "panel",
+            false,
+        )
+        .await;
     Ok(success(format!(
-        "Backend switched to {}; {}",
+        "Backend switched to {}; worlds and player permissions are kept; {}",
         backend.as_str(),
         if was_running {
             "server restarted on the new backend"
@@ -1839,6 +2471,7 @@ async fn broadcaster(
 /// Handles `.mcpack` (single), `.mcaddon` (bundle), and `.zip` uploads.
 async fn upload_addons(
     s: AppState,
+    svc: Arc<Instance>,
     u: User,
     q: HashMap<String, String>,
     body: axum::body::Body,
@@ -1856,7 +2489,7 @@ async fn upload_addons(
         "resource_packs" => Some("resource_packs"),
         other => return Err(ApiError::bad(format!("Invalid pack type '{other}'"))),
     };
-    let root = s.config.bedrock_server_dir.join("worlds");
+    let root = svc.config.bedrock_server_dir.join("worlds");
     if !tokio::fs::try_exists(safe_path(&root, FsPath::new(&world)).await?).await? {
         return Err(ApiError::missing("World not found"));
     }
@@ -1941,6 +2574,7 @@ async fn upload_addons(
 /// STORE_VIEW; installs are writes and need STORE_INSTALL.
 async fn store(
     s: &AppState,
+    svc: &Arc<Instance>,
     u: &User,
     m: &Method,
     p: &[&str],
@@ -2066,7 +2700,7 @@ async fn store(
                 .map_err(anyhow::Error::from)?
                 .into_response());
         }
-        ["store", "install"] if create => install_from_store(s, b).await?,
+        ["store", "install"] if create => install_from_store(s, svc, b).await?,
         _ => return Err(ApiError::missing("Endpoint not found")),
     };
     Ok(data_response(data))
@@ -2100,7 +2734,7 @@ fn store_error(e: anyhow::Error) -> ApiError {
 /// Download a Store file, extract it safely, install it, and tag every pack
 /// it produced with curseforge provenance metadata. Packs land in the chosen
 /// world; world archives (maps) become new worlds alongside the existing ones.
-async fn install_from_store(s: &AppState, b: &Value) -> Result<Value> {
+async fn install_from_store(s: &AppState, svc: &Arc<Instance>, b: &Value) -> Result<Value> {
     let cf = &s.curseforge;
     if !cf.configured() {
         return Err(ApiError::bad(
@@ -2123,7 +2757,7 @@ async fn install_from_store(s: &AppState, b: &Value) -> Result<Value> {
     let force_world = b["target"].as_str() == Some("world");
     let world = value_string(b, "world")?.to_owned();
     component(&world)?;
-    let root = s.config.bedrock_server_dir.join("worlds");
+    let root = svc.config.bedrock_server_dir.join("worlds");
     if !force_world && !tokio::fs::try_exists(safe_path(&root, FsPath::new(&world)).await?).await? {
         return Err(ApiError::missing("World not found"));
     }

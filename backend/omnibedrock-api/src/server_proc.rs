@@ -43,9 +43,10 @@ pub async fn spawn(
     shutdown: CancellationToken,
 ) -> anyhow::Result<(AppState, SocketAddr, tokio::task::JoinHandle<()>)> {
     let boot = std::time::Instant::now();
-    tokio::fs::create_dir_all(&config.logs_dir).await?;
+    config.ensure_dirs().await?;
     tracing::info!(
         portable = config.portable,
+        data_mode = %config.data_mode,
         config_source = %config.config_source,
         host = %config.host,
         port = config.port,
@@ -84,12 +85,12 @@ pub async fn spawn(
             tracing::warn!(%e, "broadcaster shutdown incomplete; relying on token cancellation");
         }
         stopping.shutdown.cancel();
-        // Hooks must complete/resume saves before shutting down Endstone.
-        stopping.backups.wait_idle().await;
-        let _lock = stopping.operations.lock().await;
-        if let Err(e) = stopping.server.shutdown().await {
-            tracing::error!(%e, "server shutdown failed");
+        // Hooks must complete/resume saves before shutting down instances.
+        for instance in stopping.instances.list().await {
+            instance.backups.wait_idle().await;
         }
+        let _lock = stopping.operations.lock().await;
+        stopping.instances.shutdown_all().await;
         tracing::info!(
             uptime_ms = boot.elapsed().as_millis() as u64,
             "shutdown complete"

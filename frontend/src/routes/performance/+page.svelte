@@ -1,14 +1,17 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { metrics } from '$stores/index';
-  import { getToken } from '$lib/api/client';
+  import { getToken, getInstance } from '$lib/api/client';
   import { wsManager } from '$lib/websocket';
-  import { Cpu, HardDrive, Activity } from '@lucide/svelte';
+  import { activeInstance, hostInfo } from '$stores/instances';
+  import { Cpu, HardDrive, Activity, ShieldCheck, ShieldAlert } from '@lucide/svelte';
 
   let history = $state<{ time: string; cpu: number; mem: number; tps: number }[]>([]);
 
   onMount(() => {
-    const wsToken = getToken() ? `?token=${getToken()}` : '';
+    const token = getToken();
+    const instance = getInstance() || 'default';
+    const wsToken = `?${token ? `token=${token}&` : ''}instance=${encodeURIComponent(instance)}`;
     return wsManager.connect(`/api/v1/performance/ws${wsToken}`, (data: any) => {
       if (data.type !== 'metrics') return;
       metrics.set(data.data);
@@ -29,10 +32,36 @@
 </script>
 
 <div class="space-y-4">
-  <div>
-    <h1 class="text-lg font-bold text-strong uppercase tracking-widest">Performance</h1>
-    <div class="pixel-divider mt-2 w-40"></div>
+  <div class="flex items-end justify-between gap-4">
+    <div>
+      <h1 class="text-lg font-bold text-strong uppercase tracking-widest">Performance</h1>
+      <div class="pixel-divider mt-2 w-40"></div>
+    </div>
+    {#if $activeInstance}
+      <p class="text-xs text-deep-400 uppercase tracking-wider">{$activeInstance.name} · {$activeInstance.deployment}</p>
+    {/if}
   </div>
+
+  {#if $activeInstance}
+    <div class="card flex flex-wrap items-center gap-x-6 gap-y-2 text-xs">
+      <span class="flex items-center gap-1.5 {$activeInstance.enforcement === 'advisory' ? 'text-amber-400' : 'text-teal-400'}">
+        {#if $activeInstance.enforcement === 'advisory'}<ShieldAlert size={14} />{:else}<ShieldCheck size={14} />{/if}
+        {#if $activeInstance.enforcement === 'container'}Limits enforced by the container runtime{:else if $activeInstance.enforcement === 'cgroup'}Limits enforced by systemd cgroups{:else}Advisory limits — not enforced (native process){/if}
+      </span>
+      <span class="text-deep-400">Memory limit: <span class="font-mono text-strong">{$activeInstance.resources.memory_mb ? `${$activeInstance.resources.memory_mb} MB` : 'unlimited'}</span></span>
+      <span class="text-deep-400">CPU limit: <span class="font-mono text-strong">{$activeInstance.resources.cpus ? `${$activeInstance.resources.cpus} cores` : 'unlimited'}</span></span>
+      <span class="text-deep-400">Usage source: <span class="font-mono">{$metrics?.usage_source ?? '…'}</span></span>
+    </div>
+  {/if}
+
+  {#if $hostInfo}
+    <div class="card text-xs flex flex-wrap gap-x-6 gap-y-1">
+      <span class="text-deep-400">Host memory: <span class="font-mono text-strong">{$hostInfo.memory_used_mb.toFixed(0)} / {$hostInfo.memory_total_mb.toFixed(0)} MB</span></span>
+      <span class="text-deep-400">Cores: <span class="font-mono text-strong">{$hostInfo.cpu_count}</span></span>
+      <span class="text-deep-400">Load (1m): <span class="font-mono text-strong">{$hostInfo.load_1.toFixed(2)}</span></span>
+      <span class="text-deep-400">Allocated: <span class="font-mono text-strong">{$hostInfo.allocated.memory_mb} MB · {$hostInfo.allocated.cpus.toFixed(1)} CPU across {$hostInfo.allocated.instances} instances</span></span>
+    </div>
+  {/if}
 
   <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
     <div class="card">

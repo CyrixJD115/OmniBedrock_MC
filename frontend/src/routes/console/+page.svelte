@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { onDestroy, tick } from 'svelte';
-  import { consoleLines, errorStats } from '$stores/index';
+  import { onDestroy, onMount, tick } from 'svelte';
+  import { consoleLines, errorStats, serverStatus, isServerRunning } from '$stores/index';
   import { api } from '$lib/api/client';
   import { addToast } from '$stores/toast';
   import { userPermissions } from '$stores/auth';
-  import { Send, Trash2, Filter, AlertTriangle, ChevronDown, ChevronRight, ArrowUp, ArrowDown, Binary, Download } from '@lucide/svelte';
+  import { activeInstance } from '$stores/instances';
+  import { Send, Trash2, Filter, AlertTriangle, ArrowUp, ArrowDown, Binary, Download, Play, Square, RotateCw } from '@lucide/svelte';
   import { parseAnsi, highlightMatches, matchesQuery } from '$lib/console';
   import type { ErrorStat } from '$types/index';
 
@@ -22,12 +23,14 @@
   let filterText = $state(loadSetting('omb_console_filter', ''));
   let useRegex = $state(loadSetting('omb_console_regex', false));
   let levelFilter = $state(loadSetting('omb_console_level', ''));
-  let showErrors = $state(loadSetting('omb_console_errors', false));
+  let tab = $state<'console' | 'errors'>(
+    loadSetting('omb_console_tab', 'console' as string) === 'errors' ? 'errors' : 'console'
+  );
 
   $effect(() => { saveSetting('omb_console_filter', filterText); });
   $effect(() => { saveSetting('omb_console_regex', useRegex); });
   $effect(() => { saveSetting('omb_console_level', levelFilter); });
-  $effect(() => { saveSetting('omb_console_errors', showErrors); });
+  $effect(() => { saveSetting('omb_console_tab', tab); });
   $effect(() => { saveSetting('omb_console_scroll', autoScroll); });
 
   let terminalEl: HTMLDivElement;
@@ -40,20 +43,28 @@
   let lines = $state<{ text: string; level: string; timestamp: number }[]>([]);
   let errors = $state<ErrorStat[]>([]);
 
-  const unsubLines = consoleLines.subscribe(v => {
-    lines = v;
-    if (autoScroll && terminalEl) {
-      requestAnimationFrame(() => {
-        terminalEl.scrollTop = terminalEl.scrollHeight;
-      });
-    }
-  });
+  consoleLines.subscribe(v => { lines = v; });
 
   const unsubErrors = errorStats.subscribe(v => {
     errors = v;
   });
 
-  onDestroy(() => { unsubLines(); unsubErrors(); });
+  onDestroy(() => { unsubErrors(); });
+
+  // Stick to the bottom whenever the visible lines change. Runs after the DOM
+  // update, so scrollHeight is final (no content-visibility estimates).
+  $effect(() => {
+    void filtered.length;
+    void tab;
+    if (tab !== 'console' || !autoScroll || !terminalEl) return;
+    terminalEl.scrollTop = terminalEl.scrollHeight;
+  });
+
+  onMount(async () => {
+    try {
+      serverStatus.set(await api.getServerStatus());
+    } catch { /* ignore */ }
+  });
 
   function downloadLog() {
     const text = lines.map(l => l.text).join('\n');
@@ -109,6 +120,27 @@
     }
   }
 
+  let acting = $state<string | null>(null);
+
+  async function act(action: string) {
+    acting = action;
+    try {
+      const res = await api.serverAction(action);
+      addToast(res.message, res.success ? 'success' : 'error');
+      if (res.success) {
+        setTimeout(async () => {
+          try {
+            const s = await api.getServerStatus();
+            serverStatus.set(s);
+          } catch { /* ignore */ }
+        }, 1500);
+      }
+    } catch (e: any) {
+      addToast(`Action failed: ${e.message}`, 'error');
+    }
+    acting = null;
+  }
+
   function onKeyDown(e: KeyboardEvent) {
     if (e.key === 'Enter') { send(); return; }
     if (e.key === 'ArrowUp') {
@@ -134,21 +166,17 @@
     return filterText.length > 0 || levelFilter.length > 0;
   }
 
-  let filtered = $derived(
-    lines.filter(l => {
-      if (levelFilter && l.level !== levelFilter) return false;
-      if (!filterText) return true;
-      return matchesQuery(l.text, filterText, useRegex);
-    })
-  );
-
-  let matchIndices = $derived.by(() => {
-    if (!filterText) return [];
-    return lines.reduce<number[]>((acc, l, i) => {
-      if (matchesQuery(l.text, filterText, useRegex)) acc.push(i);
-      return acc;
-    }, []);
+  let filtered = $derived.by(() => {
+    const out: { line: { text: string; level: string; timestamp: number }; idx: number }[] = [];
+    lines.forEach((l, idx) => {
+      if (levelFilter && l.level !== levelFilter) return;
+      if (!filterText) { out.push({ line: l, idx }); return; }
+      if (matchesQuery(l.text, filterText, useRegex)) out.push({ line: l, idx });
+    });
+    return out;
   });
+
+  let matchIndices = $derived(filtered.map(f => f.idx));
 
   let matchCount = $derived(matchIndices.length);
 
@@ -189,10 +217,6 @@
     outline: 2px solid rgb(var(--term-info) / 0.7);
     outline-offset: -2px;
   }
-  .terminal-line {
-    content-visibility: auto;
-    contain-intrinsic-size: 1.2em;
-  }
   .filter-btn {
     @apply flex items-center justify-center w-7 h-7 rounded text-deep-400 hover:text-strong hover:bg-deep-700/50 transition-colors text-[11px] font-mono;
   }
@@ -205,12 +229,28 @@
 </style>
 
 <div class="space-y-4">
-  <div class="flex items-center justify-between">
+  <div class="flex items-center justify-between gap-4">
     <div>
-      <h1 class="text-lg font-bold text-strong uppercase tracking-widest">Console</h1>
+      <h1 class="text-lg font-bold text-strong uppercase tracking-widest">Console{#if $activeInstance && $activeInstance.id !== 'default'} <span class="text-deep-400 text-sm">· {$activeInstance.name}</span>{/if}</h1>
       <div class="pixel-divider mt-2 w-32"></div>
     </div>
-    <div class="flex items-center gap-2">
+    <div class="flex items-center gap-2 flex-wrap justify-end">
+      {#if $userPermissions.includes('SERVER_MANAGE')}
+        <div class="flex gap-2 mr-2">
+          <button onclick={() => act('start')} disabled={$isServerRunning || acting !== null}
+                  class="btn-success flex items-center gap-2 text-xs">
+            <Play size={14} /> {acting === 'start' ? 'Starting...' : 'Start'}
+          </button>
+          <button onclick={() => act('restart')} disabled={!$isServerRunning || acting !== null}
+                  class="btn-secondary flex items-center gap-2 text-xs">
+            <RotateCw size={14} /> {acting === 'restart' ? 'Restarting...' : 'Restart'}
+          </button>
+          <button onclick={() => act('stop')} disabled={!$isServerRunning || acting !== null}
+                  class="btn-danger flex items-center gap-2 text-xs">
+            <Square size={14} /> {acting === 'stop' ? 'Stopping...' : 'Stop'}
+          </button>
+        </div>
+      {/if}
       <div class="relative">
         <Filter size={13} class="absolute left-3 top-1/2 -translate-y-1/2 text-deep-400" />
         <input type="text" bind:value={filterText} placeholder="Filter"
@@ -260,6 +300,25 @@
     </div>
   </div>
 
+  <!-- Sub-tabs: keep the live console uncluttered; error tracking gets its own tab. -->
+  <div class="flex gap-1" role="tablist" aria-label="Console views">
+    <button role="tab" aria-selected={tab === 'console'} onclick={() => tab = 'console'}
+            class={"px-4 py-2 text-xs font-bold uppercase tracking-wider border-2 border-b-0 transition-colors " + (tab === 'console'
+              ? 'bg-deep-800 text-strong border-deep-600/50'
+              : 'bg-deep-900/60 text-deep-400 border-transparent hover:text-strong')}>
+      Console
+    </button>
+    <button role="tab" aria-selected={tab === 'errors'} onclick={() => tab = 'errors'}
+            class={"px-4 py-2 text-xs font-bold uppercase tracking-wider border-2 border-b-0 transition-colors inline-flex items-center gap-1.5 " + (tab === 'errors'
+              ? 'bg-deep-800 text-strong border-deep-600/50'
+              : 'bg-deep-900/60 text-deep-400 border-transparent hover:text-strong')}>
+      <AlertTriangle size={12} class={errorCount > 0 ? 'text-red-400' : ''} />
+      Errors
+      {#if errorCount > 0}<span class="text-red-400 font-mono">({errorCount})</span>{/if}
+    </button>
+  </div>
+
+  {#if tab === 'console'}
   <!-- The console viewport keeps a dark surface in every theme/mode: ANSI
        colors and the in-game log aesthetic both assume a dark backdrop. -->
   <div class="terminal-surface border-2 border-deep-600/50 overflow-hidden">
@@ -274,16 +333,15 @@
     </div>
     <div bind:this={terminalEl}
          class="terminal-container h-[55vh] overflow-y-auto p-4 font-terminal text-base leading-relaxed">
-      {#each filtered as line, i (i)}
-        {@const lineIdx = lines.indexOf(line)}
-        <div data-line-idx={lineIdx}
-             class={"terminal-line leading-snug " + (
-               line.level === 'error' ? 'terminal-line-error' :
-               line.level === 'warn' ? 'terminal-line-warn' :
-               line.level === 'debug' ? 'terminal-line-debug' :
-               line.level === 'local' ? 'terminal-line-local' :
+      {#each filtered as f (f.idx)}
+        <div data-line-idx={f.idx}
+             class={"leading-snug " + (
+               f.line.level === 'error' ? 'terminal-line-error' :
+               f.line.level === 'warn' ? 'terminal-line-warn' :
+               f.line.level === 'debug' ? 'terminal-line-debug' :
+               f.line.level === 'local' ? 'terminal-line-local' :
                'terminal-line-info'
-             )}>{@html renderLine(line.text)}</div>
+             )}>{@html renderLine(f.line.text)}</div>
       {/each}
       {#if filtered.length === 0}
         <div class="terminal-line-plain opacity-60 font-mono">
@@ -292,45 +350,43 @@
       {/if}
     </div>
   </div>
-
-  {#if errors.length > 0}
-    <div class="border-2 border-deep-600/50 bg-deep-900/40">
-      <button onclick={() => showErrors = !showErrors}
-              class="w-full flex items-center gap-2 px-4 py-2 bg-deep-900/80 border-b border-deep-600/30 text-xs uppercase tracking-wider text-deep-300 hover:text-strong transition-colors">
-        {#if showErrors}<ChevronDown size={13} />{:else}<ChevronRight size={13} />{/if}
-        <AlertTriangle size={13} class="text-red-400" />
-        Error Tracking
-        <span class="ml-auto text-red-400 font-bold">{errorCount} total</span>
-      </button>
-      {#if showErrors}
-        <div class="overflow-x-auto">
-          <table class="w-full text-[11px] font-mono">
-            <thead>
-              <tr class="border-b border-deep-600/20 text-deep-400">
-                <th onclick={() => toggleSort('signature')} class="text-left px-3 py-1.5 cursor-pointer hover:text-strong transition-colors">
-                  Signature{sortArrow('signature')}
-                </th>
-                <th onclick={() => toggleSort('count')} class="text-right px-3 py-1.5 cursor-pointer hover:text-strong transition-colors w-16">
-                  Count{sortArrow('count')}
-                </th>
-                <th onclick={() => toggleSort('last_seen')} class="text-right px-3 py-1.5 cursor-pointer hover:text-strong transition-colors w-20">
-                  Last{sortArrow('last_seen')}
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each sortedErrors as err (err.signature)}
-                <tr class="border-b border-deep-600/10 hover:bg-red-950/20 transition-colors">
-                  <td class="px-3 py-1 text-red-300 truncate max-w-[400px]" title={err.signature}>{err.signature}</td>
-                  <td class="px-3 py-1 text-right text-red-400 font-bold">{err.count}</td>
-                  <td class="px-3 py-1 text-right text-deep-400">{formatTime(err.last_seen)}</td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
-      {/if}
+  {:else}
+  <div class="card">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="card-header !mb-0 flex items-center gap-2"><AlertTriangle size={13} class="text-red-400" /> Error Tracking</h2>
+      <span class="text-xs text-deep-400 font-mono">{errorCount} total</span>
     </div>
+    {#if sortedErrors.length === 0}
+      <p class="text-xs text-deep-400 py-6 text-center uppercase tracking-wider">No errors tracked yet</p>
+    {:else}
+      <div class="overflow-x-auto">
+        <table class="w-full text-[11px] font-mono">
+          <thead>
+            <tr class="border-b border-deep-600/20 text-deep-400">
+              <th onclick={() => toggleSort('signature')} class="text-left px-3 py-1.5 cursor-pointer hover:text-strong transition-colors">
+                Signature{sortArrow('signature')}
+              </th>
+              <th onclick={() => toggleSort('count')} class="text-right px-3 py-1.5 cursor-pointer hover:text-strong transition-colors w-16">
+                Count{sortArrow('count')}
+              </th>
+              <th onclick={() => toggleSort('last_seen')} class="text-right px-3 py-1.5 cursor-pointer hover:text-strong transition-colors w-20">
+                Last{sortArrow('last_seen')}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each sortedErrors as err (err.signature)}
+              <tr class="border-b border-deep-600/10 hover:bg-red-950/20 transition-colors">
+                <td class="px-3 py-1 text-red-300 truncate max-w-[400px]" title={err.signature}>{err.signature}</td>
+                <td class="px-3 py-1 text-right text-red-400 font-bold">{err.count}</td>
+                <td class="px-3 py-1 text-right text-deep-400">{formatTime(err.last_seen)}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {/if}
+  </div>
   {/if}
 
   {#if $userPermissions.includes('CONSOLE_SEND')}

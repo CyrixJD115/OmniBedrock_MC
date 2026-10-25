@@ -41,6 +41,7 @@ pub const PERMISSIONS: &[&str] = &[
     "USERS_CREATE",
     "USERS_EDIT",
     "USERS_DELETE",
+    "ROLES_MANAGE",
     "FILES_VIEW",
     "FILES_EDIT",
     "AUDIT_VIEW",
@@ -48,6 +49,40 @@ pub const PERMISSIONS: &[&str] = &[
     "SETTINGS_EDIT",
     "BROADCASTER_VIEW",
     "BROADCASTER_MANAGE",
+    "INSTANCES_CREATE",
+    "INSTANCES_VIEW_ALL",
+    "INSTANCES_SHARE",
+    "INSTANCES_DELETE",
+    "INSTANCES_LIMITS",
+];
+/// Permissions that only make sense on one instance; they are the set instance
+/// access roles may grant (global-only capabilities like USERS_* or
+/// INSTANCES_CREATE are never implied by instance access).
+pub const INSTANCE_PERMISSIONS: &[&str] = &[
+    "CONSOLE_VIEW",
+    "CONSOLE_SEND",
+    "SERVER_VIEW",
+    "SERVER_MANAGE",
+    "PLAYERS_VIEW",
+    "PLAYERS_KICK",
+    "PLAYERS_BAN",
+    "PLAYERS_OP",
+    "PROPERTIES_VIEW",
+    "PROPERTIES_EDIT",
+    "ADDONS_VIEW",
+    "ADDONS_MANAGE",
+    "STORE_VIEW",
+    "STORE_INSTALL",
+    "BACKUPS_VIEW",
+    "BACKUPS_CREATE",
+    "BACKUPS_RESTORE",
+    "BACKUPS_DELETE",
+    "FILES_VIEW",
+    "FILES_EDIT",
+    "BROADCASTER_VIEW",
+    "INSTANCES_SHARE",
+    "INSTANCES_DELETE",
+    "INSTANCES_LIMITS",
 ];
 #[derive(Clone, Serialize, Deserialize)]
 pub struct User {
@@ -55,17 +90,39 @@ pub struct User {
     pub token_version: u64,
     pub username: String,
     pub password_hash: String,
+    /// Display role (the first of `roles`); kept in sync by `set_roles`.
+    #[serde(default)]
     pub role: String,
+    /// All roles held by this user. Legacy single-role files (a `role:` field)
+    /// migrate into this list on load.
+    #[serde(default)]
+    pub roles: Vec<String>,
     #[serde(default)]
     pub display_name: String,
     #[serde(default)]
     pub created_at: String,
     #[serde(default)]
     pub last_login: String,
+    /// Aggregate ceilings for this user's instances; None = unlimited.
+    #[serde(default)]
+    pub quotas: omnibedrock_server::instances::UserQuotas,
 }
 impl User {
+    /// Canonical multi-role setter: keeps the legacy display field in sync.
+    pub fn set_roles(&mut self, roles: Vec<String>) {
+        self.roles = roles;
+        self.role = self.roles.first().cloned().unwrap_or_default();
+    }
     pub fn safe(&self) -> Value {
-        json!({"username":self.username,"role":self.role,"display_name":self.display_name,"created_at":self.created_at,"last_login":self.last_login})
+        json!({
+            "username":self.username,
+            "role":self.role,
+            "roles":self.roles,
+            "display_name":self.display_name,
+            "created_at":self.created_at,
+            "last_login":self.last_login,
+            "quotas":self.quotas
+        })
     }
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -73,12 +130,28 @@ pub struct Role {
     pub name: String,
     pub display_name: String,
     #[serde(default)]
+    pub description: String,
+    /// Accent color as hex digits without '#', e.g. "5865F2".
+    #[serde(default)]
+    pub color: String,
+    #[serde(default)]
     pub permissions: Vec<String>,
+    /// Hierarchy order (higher = more senior). 0 sorts last in listings.
+    #[serde(default)]
+    pub position: i64,
     #[serde(default)]
     pub is_default: bool,
     #[serde(default)]
+    pub builtin: bool,
+    /// Sentinel held by the bootstrap Owner role. Never settable through the
+    /// API — the platform requires at least one role carrying it and at least
+    /// one user holding such a role.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub grants_owner: bool,
+    #[serde(default)]
     pub created_at: String,
 }
+
 #[derive(Default, Clone)]
 struct Store {
     users: BTreeMap<String, User>,
@@ -110,6 +183,26 @@ struct Claims {
 }
 fn timestamp() -> String {
     chrono::Utc::now().to_rfc3339()
+}
+fn is_owner_in_store(store: &Store, user: &User) -> bool {
+    user.roles
+        .iter()
+        .any(|name| store.roles.get(name).is_some_and(|role| role.grants_owner))
+}
+/// Union of the permissions granted by a set of role names. Unknown roles
+/// contribute nothing (they may have been deleted after assignment).
+fn union_permissions(store: &Store, roles: &[String]) -> Vec<String> {
+    let mut perms: Vec<String> = Vec::new();
+    for name in roles {
+        if let Some(role) = store.roles.get(name) {
+            for p in &role.permissions {
+                if !perms.contains(p) {
+                    perms.push(p.clone());
+                }
+            }
+        }
+    }
+    perms
 }
 fn hash_password(password: &str) -> anyhow::Result<String> {
     Argon2::default()
@@ -143,57 +236,256 @@ async fn load_yaml<T: serde::de::DeserializeOwned + Default>(
         Err(e) => Err(e.into()),
     }
 }
+/// One stock role definition: name, display, color, description, position,
+/// permissions, default flag.
+struct StockRole {
+    name: &'static str,
+    display: &'static str,
+    color: &'static str,
+    description: &'static str,
+    position: i64,
+    permissions: Vec<&'static str>,
+    default: bool,
+}
+
+fn stock_roles() -> Vec<StockRole> {
+    vec![
+        StockRole {
+            name: "owner",
+            display: "Owner",
+            color: "F0B232",
+            description: "Full control of the panel, every instance, users, roles and quotas.",
+            position: 100,
+            permissions: PERMISSIONS.to_vec(),
+            default: false,
+        },
+        StockRole {
+            name: "admin",
+            display: "Admin",
+            color: "5865F2",
+            description: "Manages every instance and can delegate access, within owner-set quotas.",
+            position: 80,
+            permissions: PERMISSIONS.to_vec(),
+            default: false,
+        },
+        StockRole {
+            name: "moderator",
+            display: "Moderator",
+            color: "57F287",
+            description: "Day-to-day operations: console, players, backups and file views.",
+            position: 60,
+            permissions: vec![
+                "CONSOLE_VIEW",
+                "CONSOLE_SEND",
+                "SERVER_VIEW",
+                "PLAYERS_VIEW",
+                "PLAYERS_KICK",
+                "PROPERTIES_VIEW",
+                "ADDONS_VIEW",
+                "BACKUPS_VIEW",
+                "BACKUPS_CREATE",
+                "BACKUPS_RESTORE",
+                "BACKUPS_DELETE",
+                "FILES_VIEW",
+                "AUDIT_VIEW",
+                "SETTINGS_VIEW",
+                "BROADCASTER_VIEW",
+            ],
+            default: false,
+        },
+        StockRole {
+            name: "instance-manager",
+            display: "Instance Manager",
+            color: "EB459E",
+            description: "Runtime control of instances it is granted on — the classic 'manage' share.",
+            position: 50,
+            permissions: vec![
+                "CONSOLE_VIEW",
+                "CONSOLE_SEND",
+                "SERVER_VIEW",
+                "SERVER_MANAGE",
+                "PLAYERS_VIEW",
+                "PLAYERS_KICK",
+                "PLAYERS_BAN",
+                "PLAYERS_OP",
+                "PROPERTIES_VIEW",
+                "PROPERTIES_EDIT",
+                "ADDONS_VIEW",
+                "ADDONS_MANAGE",
+                "STORE_VIEW",
+                "STORE_INSTALL",
+                "BACKUPS_VIEW",
+                "BACKUPS_CREATE",
+                "BACKUPS_RESTORE",
+                "FILES_VIEW",
+                "FILES_EDIT",
+                "BROADCASTER_VIEW",
+            ],
+            default: false,
+        },
+        StockRole {
+            name: "user",
+            display: "User",
+            color: "3498DB",
+            description: "Creates and runs their own instances within their quotas.",
+            position: 40,
+            permissions: vec![
+                "CONSOLE_VIEW",
+                "CONSOLE_SEND",
+                "SERVER_VIEW",
+                "SERVER_MANAGE",
+                "INSTANCES_CREATE",
+                "PLAYERS_VIEW",
+                "PLAYERS_KICK",
+                "PROPERTIES_VIEW",
+                "PROPERTIES_EDIT",
+                "ADDONS_VIEW",
+                "ADDONS_MANAGE",
+                "STORE_VIEW",
+                "STORE_INSTALL",
+                "BACKUPS_VIEW",
+                "BACKUPS_CREATE",
+                "BACKUPS_RESTORE",
+                "FILES_VIEW",
+                "FILES_EDIT",
+            ],
+            default: false,
+        },
+        StockRole {
+            name: "viewer",
+            display: "Viewer",
+            color: "99AAB5",
+            description: "Read-only: console, status and players. Default role for new users.",
+            position: 20,
+            permissions: vec!["CONSOLE_VIEW", "SERVER_VIEW", "PLAYERS_VIEW", "AUDIT_VIEW"],
+            default: true,
+        },
+    ]
+}
+
+/// The permission lists stock roles shipped BEFORE the unified role system.
+/// Used to refresh stock roles on upgrade: if an existing role still has the
+/// exact old stock list, it is brought up to the new stock list; once an admin
+/// has customized a role, its permissions are never touched again.
+fn legacy_stock_permissions(name: &str) -> Option<Vec<&'static str>> {
+    Some(match name {
+        "owner" | "admin" => PERMISSIONS.to_vec(),
+        "moderator" => vec![
+            "CONSOLE_VIEW",
+            "CONSOLE_SEND",
+            "SERVER_VIEW",
+            "PLAYERS_VIEW",
+            "PLAYERS_KICK",
+            "PROPERTIES_VIEW",
+            "ADDONS_VIEW",
+            "BACKUPS_VIEW",
+            "BACKUPS_CREATE",
+            "BACKUPS_RESTORE",
+            "BACKUPS_DELETE",
+            "FILES_VIEW",
+            "AUDIT_VIEW",
+            "SETTINGS_VIEW",
+            "BROADCASTER_VIEW",
+        ],
+        "user" => vec![
+            "CONSOLE_VIEW",
+            "CONSOLE_SEND",
+            "SERVER_VIEW",
+            "SERVER_MANAGE",
+            "INSTANCES_CREATE",
+            "PLAYERS_VIEW",
+            "PLAYERS_KICK",
+            "PROPERTIES_VIEW",
+            "PROPERTIES_EDIT",
+            "ADDONS_VIEW",
+            "ADDONS_MANAGE",
+            "STORE_VIEW",
+            "STORE_INSTALL",
+            "BACKUPS_VIEW",
+            "BACKUPS_CREATE",
+            "BACKUPS_RESTORE",
+            "FILES_VIEW",
+            "FILES_EDIT",
+        ],
+        "viewer" => vec!["CONSOLE_VIEW", "SERVER_VIEW", "PLAYERS_VIEW", "AUDIT_VIEW"],
+        _ => return None,
+    })
+}
+
+/// Seed/refresh the built-in roles. Insertion-only for customized roles:
+/// existing entries are untouched unless their permissions still match the
+/// exact pre-unification stock list, in which case they gain the new stock
+/// permissions (ROLES_MANAGE, INSTANCES_*) and presentation defaults.
+fn seed_roles(store: &mut BTreeMap<String, Role>) {
+    for stock in stock_roles() {
+        match store.entry(stock.name.to_string()) {
+            std::collections::btree_map::Entry::Vacant(e) => {
+                e.insert(Role {
+                    name: stock.name.into(),
+                    display_name: stock.display.into(),
+                    description: stock.description.into(),
+                    color: stock.color.into(),
+                    permissions: stock.permissions.iter().map(|s| s.to_string()).collect(),
+                    position: stock.position,
+                    is_default: stock.default,
+                    builtin: true,
+                    grants_owner: stock.name == "owner",
+                    created_at: timestamp(),
+                });
+            }
+            std::collections::btree_map::Entry::Occupied(mut e) => {
+                let role = e.get_mut();
+                if role.name == "owner" {
+                    // The owner sentinel always stays on the owner role.
+                    role.grants_owner = true;
+                }
+                let legacy = legacy_stock_permissions(stock.name);
+                if let Some(legacy) = legacy
+                    && role
+                        .permissions
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>()
+                        == legacy
+                {
+                    role.permissions = stock.permissions.iter().map(|s| s.to_string()).collect();
+                }
+                if role.color.is_empty() {
+                    role.color = stock.color.into();
+                }
+                if role.description.is_empty() {
+                    role.description = stock.description.into();
+                }
+                if role.position == 0 {
+                    role.position = stock.position;
+                }
+                role.builtin = true;
+            }
+        }
+    }
+}
+
 impl Auth {
     pub async fn new(config: Arc<Config>) -> anyhow::Result<Self> {
         let mut store = Store {
             users: load_yaml(&config.data_dir.join("users.yaml")).await?,
             roles: load_yaml(&config.data_dir.join("roles.yaml")).await?,
         };
-        if store.roles.is_empty() {
-            for (name, display, permissions, default) in [
-                ("owner", "Owner", PERMISSIONS.to_vec(), false),
-                ("admin", "Admin", PERMISSIONS.to_vec(), false),
-                (
-                    "moderator",
-                    "Moderator",
-                    vec![
-                        "CONSOLE_VIEW",
-                        "CONSOLE_SEND",
-                        "SERVER_VIEW",
-                        "PLAYERS_VIEW",
-                        "PLAYERS_KICK",
-                        "PROPERTIES_VIEW",
-                        "ADDONS_VIEW",
-                        "BACKUPS_VIEW",
-                        "BACKUPS_CREATE",
-                        "BACKUPS_RESTORE",
-                        "BACKUPS_DELETE",
-                        "FILES_VIEW",
-                        "AUDIT_VIEW",
-                        "SETTINGS_VIEW",
-                        "BROADCASTER_VIEW",
-                    ],
-                    false,
-                ),
-                (
-                    "viewer",
-                    "Viewer",
-                    vec!["CONSOLE_VIEW", "SERVER_VIEW", "PLAYERS_VIEW", "AUDIT_VIEW"],
-                    true,
-                ),
-            ] {
-                store.roles.insert(
-                    name.into(),
-                    Role {
-                        name: name.into(),
-                        display_name: display.into(),
-                        permissions: permissions.into_iter().map(String::from).collect(),
-                        is_default: default,
-                        created_at: timestamp(),
-                    },
-                );
+        // Legacy single-role accounts migrate to the multi-role list.
+        for user in store.users.values_mut() {
+            if user.roles.is_empty() && !user.role.is_empty() {
+                user.roles = vec![user.role.clone()];
             }
+            if user.roles.is_empty() {
+                user.roles = vec!["viewer".into()];
+            }
+            user.set_roles(user.roles.clone());
         }
+        // Built-in roles are seeded idempotently: installs upgraded from older
+        // versions gain roles added later (like `user` or `instance-manager`)
+        // without touching customizations; only still-stock permission lists
+        // are refreshed with new capabilities.
+        seed_roles(&mut store.roles);
         // Warm the timing-attack dummy hash while the stores load.
         let dummy = tokio::task::spawn_blocking(|| hash_password("dummy-login-password"));
         let mut default_credentials = false;
@@ -211,18 +503,21 @@ impl Auth {
                 move || hash_password(&password)
             })
             .await??;
-            store.users.insert(
-                "Admin".into(),
-                User {
+            store.users.insert("Admin".into(), {
+                let mut user = User {
                     username: "Admin".into(),
                     token_version: rand::random(),
                     password_hash: hash,
-                    role: "owner".into(),
+                    role: String::new(),
+                    roles: Vec::new(),
                     display_name: "Administrator".into(),
                     created_at: timestamp(),
                     last_login: String::new(),
-                },
-            );
+                    quotas: Default::default(),
+                };
+                user.set_roles(vec!["owner".into()]);
+                user
+            });
             default_credentials = std::env::var("ADMIN_PASSWORD")
                 .ok()
                 .filter(|s| !s.is_empty())
@@ -304,16 +599,56 @@ impl Auth {
         )
         .await
     }
+    /// True when any of the user's roles carries the owner sentinel. This —
+    /// not a role *name* — is what owner checks test, so the Owner role can be
+    /// renamed without breaking the platform.
+    pub async fn is_owner(&self, user: &User) -> bool {
+        let store = self.store.lock().await;
+        is_owner_in_store(&store, user)
+    }
+    /// Effective global permissions: the union of every role the user holds.
+    /// Owner-sentinel holders implicitly hold everything. Permissions are
+    /// purely additive — no role combination can revoke, and security-critical
+    /// rules (quotas, owner-only operations) are enforced outside this list.
     pub async fn permissions(&self, user: &User) -> Vec<String> {
-        if user.role == "owner" {
+        let store = self.store.lock().await;
+        if is_owner_in_store(&store, user) {
             return PERMISSIONS.iter().map(|s| s.to_string()).collect();
         }
-        self.store
-            .lock()
-            .await
-            .roles
-            .get(&user.role)
-            .map_or_else(Vec::new, |r| r.permissions.clone())
+        union_permissions(&store, &user.roles)
+    }
+    /// Permissions a user holds on ONE instance. Ownership of the record or
+    /// the owner sentinel grants everything. Otherwise instance capability is
+    /// deliberately independent of global role permissions: global perms
+    /// govern the panel and the legacy default instance, while shared
+    /// instances are governed by the roles the access entry assigns. Holders
+    /// of the global INSTANCES_VIEW_ALL capability (panel admins) also project
+    /// their global permissions onto every instance.
+    pub async fn instance_permissions(
+        &self,
+        user: &User,
+        record: &omnibedrock_server::instances::InstanceRecord,
+    ) -> Vec<String> {
+        if record.owner == user.username {
+            return PERMISSIONS.iter().map(|s| s.to_string()).collect();
+        }
+        let store = self.store.lock().await;
+        if is_owner_in_store(&store, user) {
+            return PERMISSIONS.iter().map(|s| s.to_string()).collect();
+        }
+        let mut perms = Vec::new();
+        let global = union_permissions(&store, &user.roles);
+        if global.iter().any(|p| p == "INSTANCES_VIEW_ALL") {
+            perms.extend(global);
+        }
+        if let Some(entry) = record.access.iter().find(|a| a.user == user.username) {
+            for p in union_permissions(&store, entry.roles()) {
+                if !perms.contains(&p) {
+                    perms.push(p);
+                }
+            }
+        }
+        perms
     }
     pub async fn require(&self, user: &User, permission: &str) -> Result<()> {
         if !self.permissions(user).await.iter().any(|p| p == permission) {
@@ -322,6 +657,47 @@ impl Auth {
             )));
         }
         Ok(())
+    }
+    /// Instance-scoped permission gate. The migrated default instance keeps
+    /// the legacy model (global role permissions only); other instances accept
+    /// the union of global and access-entry role permissions.
+    pub async fn require_instance(
+        &self,
+        user: &User,
+        permission: &str,
+        record: &omnibedrock_server::instances::InstanceRecord,
+    ) -> Result<()> {
+        if record.id == omnibedrock_server::instances::DEFAULT_INSTANCE {
+            return self.require(user, permission).await;
+        }
+        if !self
+            .instance_permissions(user, record)
+            .await
+            .iter()
+            .any(|p| p == permission)
+        {
+            return Err(ApiError::forbidden(format!(
+                "Missing permission: {permission}"
+            )));
+        }
+        Ok(())
+    }
+    /// Whether the user may see a non-default instance at all: they own it,
+    /// they hold the panel owner sentinel, they have an access entry on it, or
+    /// they hold the global INSTANCES_VIEW_ALL capability.
+    pub async fn can_access_instance(
+        &self,
+        user: &User,
+        record: &omnibedrock_server::instances::InstanceRecord,
+    ) -> bool {
+        record.owner == user.username
+            || record.access.iter().any(|a| a.user == user.username)
+            || self.is_owner(user).await
+            || self
+                .permissions(user)
+                .await
+                .iter()
+                .any(|p| p == "INSTANCES_VIEW_ALL")
     }
     pub async fn me(&self, user: &User) -> Value {
         let mut v = user.safe();
@@ -365,7 +741,7 @@ impl Auth {
             .ok_or_else(|| {
                 ApiError::new(StatusCode::UNAUTHORIZED, "Account changed; log in again")
             })?;
-        user.role = current.role.clone();
+        user.set_roles(current.roles.clone());
         if let Some(hash) = upgrade {
             user.password_hash = hash?;
         }
@@ -417,7 +793,7 @@ impl Auth {
             return store
                 .users
                 .values()
-                .find(|u| u.role == "owner")
+                .find(|u| is_owner_in_store(&store, u))
                 .or_else(|| store.users.values().next())
                 .cloned()
                 .ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "No accounts exist"));
@@ -500,6 +876,28 @@ impl Auth {
             "default_credentials": self.default_credentials.load(std::sync::atomic::Ordering::Relaxed),
         })
     }
+    /// quotas for one user, if the account exists.
+    pub async fn user_quotas(
+        &self,
+        username: &str,
+    ) -> Option<omnibedrock_server::instances::UserQuotas> {
+        self.store
+            .lock()
+            .await
+            .users
+            .get(username)
+            .map(|u| u.quotas.clone())
+    }
+    /// The bootstrap owner for the default instance's record.
+    pub async fn first_owner_username(&self) -> String {
+        let store = self.store.lock().await;
+        store
+            .users
+            .values()
+            .find(|u| is_owner_in_store(&store, u))
+            .map(|u| u.username.clone())
+            .unwrap_or_else(|| "Admin".into())
+    }
     pub async fn users(&self) -> Value {
         json!(
             self.store
@@ -512,7 +910,30 @@ impl Auth {
         )
     }
     pub async fn roles(&self) -> Value {
-        json!(self.store.lock().await.roles.values().collect::<Vec<_>>())
+        let store = self.store.lock().await;
+        let mut list: Vec<Value> = store
+            .roles
+            .values()
+            .map(|r| {
+                let mut v = json!(r);
+                v["user_count"] = json!(
+                    store
+                        .users
+                        .values()
+                        .filter(|u| u.roles.iter().any(|name| name == &r.name))
+                        .count()
+                );
+                v
+            })
+            .collect();
+        list.sort_by(|a, b| {
+            b["position"]
+                .as_i64()
+                .unwrap_or(0)
+                .cmp(&a["position"].as_i64().unwrap_or(0))
+                .then_with(|| a["name"].as_str().cmp(&b["name"].as_str()))
+        });
+        json!(list)
     }
     pub async fn role(&self, name: &str) -> Result<Value> {
         self.store
@@ -531,6 +952,14 @@ impl Auth {
         create: bool,
     ) -> Result<Value> {
         omnibedrock_core::files::component(name)?;
+        // Legacy single-role bodies ({"role": "x"}) normalize to a one-role list.
+        let body = body.map(|mut b| {
+            if b.get("roles").is_none() && b["role"].is_string() {
+                let role = b["role"].as_str().unwrap_or_default().to_string();
+                b["roles"] = json!([role]);
+            }
+            b
+        });
         let hash = if let Some(password) = body.as_ref().and_then(|b| b["password"].as_str()) {
             if password.len() < 6 || password.len() > 1024 {
                 return Err(ApiError::bad("Password must have 6..1024 characters"));
@@ -552,46 +981,103 @@ impl Auth {
         };
         let mut store = self.store.lock().await;
         let mut next = store.clone();
+        let actor_is_owner = is_owner_in_store(&next, actor);
         if let Some(body) = body {
             if create && next.users.contains_key(name) {
                 return Err(ApiError::conflict("Username already exists"));
             }
             let mut user = if create {
-                User {
+                let mut u = User {
                     username: name.into(),
                     token_version: rand::random(),
                     password_hash: hash
                         .clone()
                         .ok_or_else(|| ApiError::bad("Password required"))?,
-                    role: next
-                        .roles
-                        .values()
-                        .find(|r| r.is_default)
-                        .map_or("viewer".into(), |r| r.name.clone()),
+                    role: String::new(),
+                    roles: Vec::new(),
                     display_name: name.into(),
                     created_at: timestamp(),
                     last_login: String::new(),
-                }
+                    quotas: Default::default(),
+                };
+                u.set_roles(vec![
+                    next.roles
+                        .values()
+                        .find(|r| r.is_default)
+                        .map_or("viewer".into(), |r| r.name.clone()),
+                ]);
+                u
             } else {
                 next.users
                     .get(name)
                     .cloned()
                     .ok_or_else(|| ApiError::missing("User not found"))?
             };
-            if let Some(role) = body["role"].as_str() {
-                if !next.roles.contains_key(role) {
-                    return Err(ApiError::bad("Unknown role"));
+            let target_is_owner = is_owner_in_store(&next, &user);
+            if let Some(roles_value) = body.get("roles") {
+                let mut roles: Vec<String> = match roles_value {
+                    Value::Array(arr) => arr
+                        .iter()
+                        .map(|v| {
+                            v.as_str()
+                                .map(String::from)
+                                .ok_or_else(|| ApiError::bad("Invalid role list"))
+                        })
+                        .collect::<Result<_>>()?,
+                    // Legacy single-role body: {"role": "moderator"}
+                    Value::String(s) => vec![s.clone()],
+                    _ => return Err(ApiError::bad("Invalid role list")),
+                };
+                if roles.is_empty() {
+                    return Err(ApiError::bad("At least one role is required"));
                 }
-                if actor.role != "owner" && (role == "owner" || user.role == "owner") {
-                    return Err(ApiError::forbidden("Only owners may change owner accounts"));
+                roles.sort();
+                roles.dedup();
+                for r in &roles {
+                    if !next.roles.contains_key(r) {
+                        return Err(ApiError::bad(format!("Unknown role: {r}")));
+                    }
                 }
-                user.role = role.into();
+                let grants_owner = roles
+                    .iter()
+                    .any(|r| next.roles.get(r).is_some_and(|role| role.grants_owner));
+                if !actor_is_owner && (target_is_owner || grants_owner) {
+                    return Err(ApiError::forbidden(
+                        "Only owners may change owner accounts or assign the Owner role",
+                    ));
+                }
+                if !actor_is_owner {
+                    // Delegation guard: an admin can only hand out permissions
+                    // they hold themselves, so no chain of edits escalates.
+                    let granted = union_permissions(&next, &roles);
+                    let held = union_permissions(&next, &actor.roles);
+                    if let Some(missing) = granted.iter().find(|p| !held.contains(p)) {
+                        return Err(ApiError::forbidden(format!(
+                            "You cannot grant the role '{role}' — it includes {perm}, which you do not hold",
+                            role = roles.join(", "),
+                            perm = missing
+                        )));
+                    }
+                }
+                user.set_roles(roles);
             }
-            if actor.role != "owner" && user.role == "owner" {
+            if !actor_is_owner && (target_is_owner || is_owner_in_store(&next, &user)) {
                 return Err(ApiError::forbidden("Only owners may change owner accounts"));
             }
             if let Some(name) = body["display_name"].as_str() {
                 user.display_name = name.into();
+            }
+            if body.get("quotas").is_some_and(|v| !v.is_null()) {
+                if !actor_is_owner {
+                    return Err(ApiError::forbidden("Only owners may change quotas"));
+                }
+                let quotas: omnibedrock_server::instances::UserQuotas =
+                    serde_json::from_value(body["quotas"].clone())
+                        .map_err(|e| ApiError::bad(format!("Invalid quotas: {e}")))?;
+                quotas
+                    .validate()
+                    .map_err(|e| ApiError::bad(e.to_string()))?;
+                user.quotas = quotas;
             }
             if let Some(hash) = hash {
                 user.token_version = rand::random();
@@ -603,7 +1089,7 @@ impl Auth {
                 }
             }
             next.users.insert(name.into(), user.clone());
-            if !next.users.values().any(|u| u.role == "owner") {
+            if !next.users.values().any(|u| is_owner_in_store(&next, u)) {
                 return Err(ApiError::bad("At least one owner is required"));
             }
             self.save_users(&next).await?;
@@ -617,10 +1103,10 @@ impl Auth {
                 .users
                 .remove(name)
                 .ok_or_else(|| ApiError::missing("User not found"))?;
-            if actor.role != "owner" && user.role == "owner" {
+            if !actor_is_owner && is_owner_in_store(&next, &user) {
                 return Err(ApiError::forbidden("Only owners may delete owner accounts"));
             }
-            if !next.users.values().any(|u| u.role == "owner") {
+            if !next.users.values().any(|u| is_owner_in_store(&next, u)) {
                 return Err(ApiError::bad("At least one owner is required"));
             }
             self.save_users(&next).await?;
@@ -628,25 +1114,44 @@ impl Auth {
             Ok(json!({"success":true,"message":format!("Deleted user {name}")}))
         }
     }
+    /// Create, edit or delete a role. Returns the stored role plus, when the
+    /// role's key was renamed, the old key so callers can rewrite references
+    /// (instance access entries live in a different store).
     pub async fn mutate_role(
         &self,
+        actor: &User,
         name: &str,
         body: Option<Value>,
         create: bool,
-    ) -> Result<Value> {
+    ) -> Result<(Value, Option<String>)> {
         omnibedrock_core::files::component(name)?;
         let mut store = self.store.lock().await;
         let mut next = store.clone();
+        let actor_is_owner = is_owner_in_store(&next, actor);
+        let mut renamed_from: Option<String> = None;
         if let Some(body) = body {
+            // Duplicate: seed the new role from an existing one before edits.
+            let source = if create {
+                body["duplicate_of"]
+                    .as_str()
+                    .and_then(|src| next.roles.get(src).cloned())
+            } else {
+                None
+            };
             if create && next.roles.contains_key(name) {
                 return Err(ApiError::conflict("Role already exists"));
             }
             let mut role = if create {
                 Role {
                     name: name.into(),
-                    display_name: name.into(),
-                    permissions: vec![],
+                    display_name: body["display_name"].as_str().unwrap_or(name).into(),
+                    description: String::new(),
+                    color: String::new(),
+                    permissions: Vec::new(),
+                    position: next.roles.values().map(|r| r.position).min().unwrap_or(0) - 1,
                     is_default: false,
+                    builtin: false,
+                    grants_owner: false,
                     created_at: timestamp(),
                 }
             } else {
@@ -655,8 +1160,14 @@ impl Auth {
                     .cloned()
                     .ok_or_else(|| ApiError::missing("Role not found"))?
             };
+            if let Some(src) = source {
+                role.permissions = src.permissions.clone();
+                role.description = src.description.clone();
+                role.color = src.color.clone();
+                role.position = src.position;
+            }
             if let Some(perms) = body["permissions"].as_array() {
-                role.permissions = perms
+                let requested: Vec<String> = perms
                     .iter()
                     .map(|v| {
                         v.as_str()
@@ -664,16 +1175,41 @@ impl Auth {
                             .ok_or_else(|| ApiError::bad("Invalid permission"))
                     })
                     .collect::<Result<_>>()?;
-                if role
-                    .permissions
-                    .iter()
-                    .any(|p| !PERMISSIONS.contains(&p.as_str()))
-                {
+                if requested.iter().any(|p| !PERMISSIONS.contains(&p.as_str())) {
                     return Err(ApiError::bad("Unknown permission"));
                 }
+                // Delegation guard: without the owner sentinel you cannot
+                // author a role granting permissions you do not hold yourself.
+                if !actor_is_owner {
+                    let held = union_permissions(&next, &actor.roles);
+                    if let Some(missing) = requested.iter().find(|p| !held.contains(p)) {
+                        return Err(ApiError::forbidden(format!(
+                            "You cannot grant {perm} — you do not hold it yourself",
+                            perm = missing
+                        )));
+                    }
+                }
+                role.permissions = requested;
             }
             if let Some(display) = body["display_name"].as_str() {
                 role.display_name = display.into();
+            }
+            if let Some(desc) = body["description"].as_str() {
+                role.description = desc.into();
+            }
+            if let Some(color) = body["color"].as_str() {
+                let color = color.trim().trim_start_matches('#').to_ascii_uppercase();
+                if !color.is_empty()
+                    && (color.len() != 6 || !color.chars().all(|c| c.is_ascii_hexdigit()))
+                {
+                    return Err(ApiError::bad(
+                        "Color must be a 6-digit hex value like 5865F2",
+                    ));
+                }
+                role.color = color;
+            }
+            if let Some(position) = body["position"].as_i64() {
+                role.position = position;
             }
             if let Some(default) = body["is_default"].as_bool() {
                 role.is_default = default;
@@ -683,15 +1219,59 @@ impl Auth {
                     r.is_default = false;
                 }
             }
-            next.roles.insert(name.into(), role.clone());
+            // Rename (custom roles only; built-ins keep their stable keys).
+            if let Some(new_name) = body["name"].as_str()
+                && new_name != name
+            {
+                if role.builtin {
+                    return Err(ApiError::bad(
+                        "Built-in roles keep their key; change the display name instead",
+                    ));
+                }
+                omnibedrock_core::files::component(new_name)?;
+                if next.roles.contains_key(new_name) {
+                    return Err(ApiError::conflict("Role already exists"));
+                }
+                for user in next.users.values_mut() {
+                    for r in user.roles.iter_mut() {
+                        if r == name {
+                            *r = new_name.into();
+                        }
+                    }
+                    user.set_roles(user.roles.clone());
+                }
+                role.name = new_name.into();
+                renamed_from = Some(name.to_string());
+            }
+            // The owner sentinel is never API-settable and never removable.
+            role.grants_owner = next.roles.get(name).is_some_and(|r| r.grants_owner) && !create;
+            next.roles.insert(role.name.clone(), role.clone());
+            if renamed_from.is_some() {
+                // Renames keep the old key from shadowing the new one.
+                next.roles.remove(name);
+            }
             self.save_roles(&next).await?;
             *store = next;
-            Ok(json!(role))
+            Ok((json!(role), renamed_from))
         } else {
-            if name == "owner" {
-                return Err(ApiError::bad("Cannot delete owner role"));
+            let role = next
+                .roles
+                .get(name)
+                .cloned()
+                .ok_or_else(|| ApiError::missing("Role not found"))?;
+            if role.grants_owner {
+                return Err(ApiError::bad("The Owner role cannot be deleted"));
             }
-            if next.users.values().any(|u| u.role == name) {
+            if role.builtin {
+                return Err(ApiError::bad(
+                    "Built-in roles cannot be deleted; edit them instead",
+                ));
+            }
+            if next
+                .users
+                .values()
+                .any(|u| u.roles.iter().any(|r| r == name))
+            {
                 return Err(ApiError::conflict("Role is assigned to users"));
             }
             next.roles
@@ -699,7 +1279,10 @@ impl Auth {
                 .ok_or_else(|| ApiError::missing("Role not found"))?;
             self.save_roles(&next).await?;
             *store = next;
-            Ok(json!({"success":true,"message":format!("Role {name} deleted")}))
+            Ok((
+                json!({"success":true,"message":format!("Role {name} deleted")}),
+                None,
+            ))
         }
     }
 }

@@ -73,26 +73,38 @@ The Endstone image targets `linux/amd64`. Named volumes are initialized for UID 
 
 ## Configuration
 
-Precedence (lowest to highest): **defaults → portable layout → config file → environment / `.env` → CLI flags**. Relative paths resolve from the working directory. See [`deploy/config.example.toml`](deploy/config.example.toml) for a fully commented sample.
+The panel never depends on its source tree or working directory. All runtime data lives under one **data root**, resolved in this order (highest wins):
+
+1. `--portable` (or `portable = true` in the config file) → `<executable dir>/data/`
+2. `--global-data-dir <path>` (or `global_data_dir` in the config file, or `OMNI_GLOBAL_DATA_DIR`) → that directory
+3. default → the platform app-data directory: `~/.local/share/omnibedrock/` on Linux (`XDG_DATA_HOME` honored), `%LOCALAPPDATA%\OmniBedrock\` on Windows, `~/Library/Application Support/omnibedrock/` on macOS
+
+Supplying `--portable` and `--global-data-dir` together (or setting both file keys in one config file) is rejected with an explicit error; a CLI flag always beats the same-named config-file setting. Required directories are created automatically at startup, and nothing is ever written relative to wherever the binary was launched from.
+
+Every remaining setting follows: **defaults → config file → environment / `.env` → CLI flags**. Relative paths in config-file settings resolve from the working directory (`global_data_dir` is the exception: it resolves against the config file's own directory). See [`deploy/config.example.toml`](deploy/config.example.toml) for a fully commented sample.
 
 ### Config files
 
 - `--config <file>` — explicit path; `.toml` (preferred) or legacy `.yaml`/`.yml`. The file must exist.
 - Otherwise auto-discovered: `<executable dir>/config.toml` first, then `~/.config/omnibedrock/config.toml` on Linux (XDG_CONFIG_HOME honored). Windows/macOS use the executable-side file only.
+- Config discovery never consults the data directory, so data-root settings cannot create circular resolution.
 - Only one file is ever read — discovered files are never merged.
 - Unknown keys are rejected (typo protection). Secrets (`SECRET_KEY`, `CURSEFORGE_API_KEY`, `ADMIN_PASSWORD`) are never read from config files — keep them in the environment or `.env`.
 
-### Portable mode
+### Data root layout
 
-`omnibedrock --portable` keeps everything the panel manages under `<executable dir>/portable/`:
+Whatever resolves the root, the layout under it is the same:
 
 ```
-portable/
-├── config.toml   # optional; the ONLY config file read in portable mode
-├── data/         # accounts, settings, toolchains, managed cache
-├── server/       # game server + worlds
-├── logs/         # panel + audit logs
-└── backups/
+<root>/
+├── config.toml    # only in portable mode; the ONLY config file read there
+├── server/        # default instance: game server + worlds
+├── instances/     # additional instances (<id>/server, settings, stdin.fifo)
+├── logs/          # panel + audit logs, per-instance console journals
+├── backups/       # world backups (per-instance subdirectories)
+├── cache/         # download caches, generated docker build contexts
+├── broadcaster/   # MCXboxBroadcast home
+└── tools/         # uv/Python/Endstone toolchains
 ```
 
 Explicit `--data-dir`/`--bedrock-server-dir`/`--logs-dir`/`--backups-dir` (or their env vars) still override individual locations, and external drives/paths can be mixed in deliberately. Limitations: the directory must be writable, and network mounts need to allow the executable's file locking. System-wide and portable state are never mixed — portable mode ignores the other config locations.
@@ -101,11 +113,11 @@ Explicit `--data-dir`/`--bedrock-server-dir`/`--logs-dir`/`--backups-dir` (or th
 
 | Path | Default | Controls |
 | --- | --- | --- |
-| `BEDROCK_SERVER_DIR` / `--bedrock-server-dir` | `bedrock_server` | Game server root (binary, `worlds/`, properties) |
-| `DATA_DIR` / `--data-dir` | `backend/data` | Accounts, roles, panel settings, signing key, uv/Python/Endstone toolchains |
-| `LOGS_DIR` / `--logs-dir` | `backend/logs` | Audit log, tracing, console replay spool |
-| `BACKUPS_DIR` / `--backups-dir` | `backend/backups` | World backups |
-| `CACHE_DIR` / `--cache-dir` | `<DATA_DIR>/cache` | Download caches (CurseForge images); follows DATA_DIR unless set |
+| `BEDROCK_SERVER_DIR` / `--bedrock-server-dir` | `<root>/server` | Game server root (binary, `worlds/`, properties) |
+| `DATA_DIR` / `--data-dir` | `<root>` | Accounts, roles, panel settings, signing key, uv/Python/Endstone toolchains |
+| `LOGS_DIR` / `--logs-dir` | `<root>/logs` | Audit log, tracing, console replay spool |
+| `BACKUPS_DIR` / `--backups-dir` | `<root>/backups` | World backups |
+| `CACHE_DIR` / `--cache-dir` | `<root>/cache` | Download caches (CurseForge images); follows DATA_DIR unless set |
 
 Paths containing spaces are fully supported; the Endstone toolchain relocates to `~/.local/state/omnibedrock/` automatically because the Endstone launcher's `LD_PRELOAD`/`LD_LIBRARY_PATH` cannot contain spaces (see startup log for the resolved location). Temporary files use the OS temp dir (`TMPDIR`).
 
@@ -130,9 +142,16 @@ Paths containing spaces are fully supported; the Endstone toolchain relocates to
 | `WS_HEARTBEAT_INTERVAL` | `30` | Heartbeat and permission revalidation interval |
 | `DEBUG`, `RUST_LOG` | `false`, info | Tracing filter; HTTP query tokens are excluded |
 
-The startup log reports the resolved configuration: portable flag, config source, every effective path, and the detected Endstone/BDS toolchain versions — facts read from the on-disk markers, not assumptions. Example:
+The startup log reports the resolved configuration: data mode (default / global-data-dir / portable), config source, every effective path, and the detected Endstone/BDS toolchain versions — facts read from the on-disk markers, not assumptions. Example:
 
 ```bash
+# Platform default: ~/.local/share/omnibedrock (created on first start)
+omnibedrock
+
+# Custom data root (CLI, env, or config file)
+omnibedrock --global-data-dir /srv/omnibedrock
+OMNI_GLOBAL_DATA_DIR=/srv/omnibedrock omnibedrock
+
 # System install with a config file next to the binary
 omnibedrock --config /etc/omnibedrock/config.toml
 

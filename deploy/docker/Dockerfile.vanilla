@@ -1,0 +1,22 @@
+# Runtime image for vanilla Bedrock Dedicated Server instances.
+#
+# The panel installs the official BDS zip into the instance directory and
+# mounts it at /data; this image only provides the runtime libraries the
+# official binary links against. Build once:
+#
+#   docker build -f deploy/docker/Dockerfile.vanilla -t omnibedrock-vanilla:latest .
+#
+# Then create instances with deployment = docker.
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libcurl4 \
+        libzip4 \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /data
+# BDS writes logs and reads config relative to its working directory.
+CMD ["./bedrock_server"]

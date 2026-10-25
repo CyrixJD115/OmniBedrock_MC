@@ -2,93 +2,161 @@
   import { onMount } from 'svelte';
   import { api } from '$lib/api/client';
   import { addToast } from '$stores/toast';
-  import { currentUser, userPermissions } from '$stores/auth';
-  import { Shield, ShieldOff, Plus, Save, X, Check } from '@lucide/svelte';
+  import { userPermissions } from '$stores/auth';
+  import {
+    PERM_GROUPS, hexColor, COLOR_PRESETS, isInstancePermission, allKnownPermissions,
+  } from '$lib/permissions';
+  import type { RoleInfo } from '$types/index';
+  import {
+    Plus, Pencil, Copy, Trash2, ChevronUp, ChevronDown, Save, Star, Users2, Check, RefreshCw, Shield
+  } from '@lucide/svelte';
 
-  let roles = $state<{ name: string; display_name: string; permissions: string[]; is_default: boolean; created_at: string }[]>([]);
+  let roles = $state<RoleInfo[]>([]);
   let loading = $state(true);
-  let editing = $state<{ name: string; display_name: string; permissions: Set<string>; is_default: boolean } | null>(null);
-  let creating = $state(false);
-  let newRole = $state({ name: '', display_name: '', permissions: new Set<string>(), is_default: false });
-  let deleting = $state<string | null>(null);
+  let editing = $state<null | {
+    name: string;               // '' while creating
+    display_name: string;
+    description: string;
+    color: string;
+    permissions: Set<string>;
+    position: number;
+    is_default: boolean;
+    duplicate_of: string;
+  }>(null);
+  let deleting = $state<RoleInfo | null>(null);
+  let busy = $state(false);
 
-  const PERM_GROUPS: { label: string; perms: string[] }[] = [
-    { label: 'Console', perms: ['CONSOLE_VIEW', 'CONSOLE_SEND'] },
-    { label: 'Server', perms: ['SERVER_VIEW', 'SERVER_MANAGE'] },
-    { label: 'Players', perms: ['PLAYERS_VIEW', 'PLAYERS_KICK', 'PLAYERS_BAN', 'PLAYERS_OP'] },
-    { label: 'Properties', perms: ['PROPERTIES_VIEW', 'PROPERTIES_EDIT'] },
-    { label: 'Addons', perms: ['ADDONS_VIEW', 'ADDONS_MANAGE'] },
-    { label: 'Backups', perms: ['BACKUPS_VIEW', 'BACKUPS_CREATE', 'BACKUPS_RESTORE', 'BACKUPS_DELETE'] },
-    { label: 'Users', perms: ['USERS_VIEW', 'USERS_CREATE', 'USERS_EDIT', 'USERS_DELETE'] },
-    { label: 'Files', perms: ['FILES_VIEW', 'FILES_EDIT'] },
-    { label: 'Audit', perms: ['AUDIT_VIEW'] },
-    { label: 'Settings', perms: ['SETTINGS_VIEW', 'SETTINGS_EDIT'] },
-  ];
-
-  const permLabel: Record<string, string> = {
-    CONSOLE_VIEW: 'View console', CONSOLE_SEND: 'Send commands',
-    SERVER_VIEW: 'View server', SERVER_MANAGE: 'Manage server',
-    PLAYERS_VIEW: 'View players', PLAYERS_KICK: 'Kick players', PLAYERS_BAN: 'Ban players', PLAYERS_OP: 'OP players',
-    PROPERTIES_VIEW: 'View properties', PROPERTIES_EDIT: 'Edit properties',
-    ADDONS_VIEW: 'View addons', ADDONS_MANAGE: 'Manage addons',
-    BACKUPS_VIEW: 'View backups', BACKUPS_CREATE: 'Create backups', BACKUPS_RESTORE: 'Restore backups', BACKUPS_DELETE: 'Delete backups',
-    USERS_VIEW: 'View users', USERS_CREATE: 'Create users', USERS_EDIT: 'Edit users', USERS_DELETE: 'Delete users',
-    FILES_VIEW: 'View files', FILES_EDIT: 'Edit files',
-    AUDIT_VIEW: 'View audit log',
-    SETTINGS_VIEW: 'View settings', SETTINGS_EDIT: 'Edit settings',
-  };
+  const canManage = $derived($userPermissions.includes('ROLES_MANAGE'));
+  const totalPerms = allKnownPermissions().length;
+  const instancePermCount = $derived(
+    editing ? [...editing.permissions].filter(isInstancePermission).length : 0
+  );
+  const sorted = $derived(
+    [...roles].sort((a, b) => b.position - a.position || a.name.localeCompare(b.name))
+  );
 
   onMount(loadRoles);
 
   async function loadRoles() {
     loading = true;
-    try { roles = (await api.listRoles()) as any; }
+    try { roles = (await api.listRoles()) as never; }
     catch (e: any) { addToast(`Failed: ${e.message}`, 'error'); }
     loading = false;
   }
 
-  function canManage() { return $userPermissions.includes('USERS_CREATE'); }
-
   function openCreate() {
-    newRole = { name: '', display_name: '', permissions: new Set<string>(), is_default: false };
-    creating = true;
+    const lowest = sorted.length ? sorted[sorted.length - 1].position : 0;
+    editing = {
+      name: '', display_name: '', description: '', color: '5865F2',
+      permissions: new Set(), position: lowest - 1, is_default: false,
+      duplicate_of: '',
+    };
   }
 
-  function openEdit(r: typeof roles[0]) {
-    editing = { name: r.name, display_name: r.display_name, permissions: new Set(r.permissions), is_default: r.is_default };
+  function openEdit(r: RoleInfo) {
+    editing = {
+      name: r.name,
+      display_name: r.display_name,
+      description: r.description ?? '',
+      color: r.color || '99AAB5',
+      permissions: new Set(r.permissions),
+      position: r.position,
+      is_default: r.is_default,
+      duplicate_of: '',
+    };
   }
 
-  function togglePerm(set: Set<string>, perm: string) {
-    if (set.has(perm)) set.delete(perm); else set.add(perm);
+  function openDuplicate(r: RoleInfo) {
+    editing = {
+      name: '', display_name: `${r.display_name} copy`,
+      description: r.description ?? '', color: r.color || '99AAB5',
+      permissions: new Set(r.permissions), position: r.position,
+      is_default: false, duplicate_of: r.name,
+    };
   }
 
-  async function createRole() {
-    if (!newRole.name) { addToast('Name is required', 'error'); return; }
-    try {
-      await api.createRole({ name: newRole.name, display_name: newRole.display_name, permissions: [...newRole.permissions], is_default: newRole.is_default });
-      addToast(`Created role ${newRole.name}`, 'success');
-      creating = false;
-      await loadRoles();
-    } catch (e: any) { addToast(`Failed: ${e.message}`, 'error'); }
-  }
-
-  async function saveRole() {
+  function toggle(perm: string) {
     if (!editing) return;
+    const next = new Set(editing.permissions);
+    if (next.has(perm)) next.delete(perm); else next.add(perm);
+    editing.permissions = next;
+  }
+
+  function setGroup(perms: string[], on: boolean) {
+    if (!editing) return;
+    const next = new Set(editing.permissions);
+    for (const p of perms) (on ? next.add(p) : next.delete(p));
+    editing.permissions = next;
+  }
+
+  async function uniqueCopyName(source: string): Promise<string> {
+    const taken = new Set(roles.map((r) => r.name));
+    let candidate = `${source}-copy`;
+    for (let i = 2; taken.has(candidate); i++) candidate = `${source}-copy-${i}`;
+    return candidate;
+  }
+
+  async function save() {
+    if (!editing || busy) return;
+    if (!editing.name && !editing.duplicate_of) {
+      addToast('Give the role a key name (a-z, 0-9, dashes)', 'error');
+      return;
+    }
+    busy = true;
+    const body: Record<string, unknown> = {
+      display_name: editing.display_name || editing.name,
+      description: editing.description,
+      color: editing.color,
+      permissions: [...editing.permissions],
+      is_default: editing.is_default,
+    };
     try {
-      await api.updateRole(editing.name, { display_name: editing.display_name, permissions: [...editing.permissions], is_default: editing.is_default });
-      addToast(`Updated ${editing.name}`, 'success');
+      if (editing.name) {
+        await api.updateRole(editing.name, body);
+      } else {
+        const name = editing.duplicate_of
+          ? await uniqueCopyName(editing.duplicate_of)
+          : editing.name.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
+        if (!name) throw new Error('Key name required');
+        await api.createRole({
+          name,
+          display_name: editing.display_name || name,
+          description: editing.description,
+          color: editing.color,
+          permissions: [...editing.permissions],
+          is_default: editing.is_default,
+          duplicate_of: editing.duplicate_of || undefined,
+        });
+      }
+      addToast('Role saved', 'success');
       editing = null;
       await loadRoles();
-    } catch (e: any) { addToast(`Failed: ${e.message}`, 'error'); }
+    } catch (e: any) { addToast(`Save failed: ${e.message}`, 'error'); }
+    busy = false;
   }
 
-  async function deleteRole(name: string) {
+  async function move(r: RoleInfo, dir: -1 | 1) {
+    const idx = sorted.findIndex((x) => x.name === r.name);
+    const swap = idx + dir;
+    if (swap < 0 || swap >= sorted.length) return;
+    const a = sorted[idx], b = sorted[swap];
     try {
-      await api.deleteRole(name);
-      addToast(`Deleted ${name}`, 'success');
+      await api.updateRole(a.name, { position: b.position });
+      await api.updateRole(b.name, { position: a.position });
+      await loadRoles();
+    } catch (e: any) { addToast(`Reorder failed: ${e.message}`, 'error'); }
+  }
+
+  async function remove() {
+    if (!deleting || busy) return;
+    busy = true;
+    try {
+      await api.deleteRole(deleting.name);
+      addToast(`Deleted ${deleting.display_name}`, 'success');
       deleting = null;
       await loadRoles();
-    } catch (e: any) { addToast(`Failed: ${e.message}`, 'error'); }
+    } catch (e: any) { addToast(`Delete failed: ${e.message}`, 'error'); }
+    busy = false;
   }
 </script>
 
@@ -99,8 +167,8 @@
       <div class="pixel-divider mt-2 w-24"></div>
     </div>
     <div class="flex gap-2">
-      <button onclick={loadRoles} class="btn-secondary text-xs">Refresh</button>
-      {#if canManage()}
+      <button onclick={loadRoles} class="btn-secondary text-xs" title="Refresh"><RefreshCw size={12} /></button>
+      {#if canManage}
         <button onclick={openCreate} class="btn-primary text-xs flex items-center gap-1.5">
           <Plus size={12} /> New Role
         </button>
@@ -108,140 +176,179 @@
     </div>
   </div>
 
-  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-    {#each roles as r}
-      <div class="card relative">
-        <div class="flex items-start justify-between mb-4">
-          <div>
-            <h3 class="text-sm font-bold text-strong uppercase tracking-wider">{r.display_name || r.name}</h3>
-            <p class="text-[11px] text-deep-400 uppercase tracking-wider mt-1">{r.name}{r.is_default ? ' — Default' : ''}</p>
+  <p class="text-[10px] text-deep-400 uppercase tracking-wider">
+    One role catalog for everything: panel permissions are global; shares on the Instances page
+    grant these same roles on one instance. Permissions combine across roles — a user holds the
+    union of every role they have.
+  </p>
+
+  {#if loading}
+    <div class="card py-6 text-center text-xs text-deep-400 uppercase tracking-wider">Loading roles…</div>
+  {:else}
+    <div class="space-y-1.5">
+      {#each sorted as r (r.name)}
+        <div class="card !p-3 flex items-center gap-3">
+          <span class="w-3.5 h-3.5 shrink-0 border border-black/30 shadow-block" style="background:{hexColor(r.color)}"></span>
+          <div class="min-w-0 flex-1">
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="text-sm font-bold uppercase tracking-wider" style="color:{hexColor(r.color)}">{r.display_name}</span>
+              <span class="text-[10px] text-deep-400 font-mono">@{r.name}</span>
+              {#if r.grants_owner}<span class="badge-warn !py-0 !px-1.5 !text-[9px]">owner</span>{/if}
+              {#if r.builtin}<span class="badge-info !py-0 !px-1.5 !text-[9px]">built-in</span>{/if}
+              {#if r.is_default}<span class="badge-running !py-0 !px-1.5 !text-[9px]"><Star size={9} class="inline -mt-0.5" /> default</span>{/if}
+            </div>
+            {#if r.description}
+              <p class="text-[11px] text-deep-400 mt-0.5 truncate">{r.description}</p>
+            {/if}
           </div>
-          {#if canManage() && r.name !== 'owner'}
-            <div class="flex gap-1 shrink-0">
-              <button onclick={() => openEdit(r)} class="btn-ghost p-1.5 text-bedrock-400 hover:text-bedrock-300" title="Edit"><Save size={14} /></button>
-              <button onclick={() => deleting = r.name} class="btn-ghost p-1.5 text-red-400 hover:text-red-300" title="Delete"><ShieldOff size={14} /></button>
+          <div class="hidden sm:flex items-center gap-1.5 text-[10px] text-deep-400 uppercase tracking-wider shrink-0">
+            <Users2 size={11} /> {r.user_count ?? 0}
+            <span class="text-deep-500">·</span>
+            {r.permissions.length}/{totalPerms} perms
+          </div>
+          {#if canManage}
+            <div class="flex items-center gap-0.5 shrink-0">
+              <button onclick={() => move(r, 1)} disabled={sorted.indexOf(r) === 0} class="btn-ghost !p-1.5" title="Move up"><ChevronUp size={13} /></button>
+              <button onclick={() => move(r, -1)} disabled={sorted.indexOf(r) === sorted.length - 1} class="btn-ghost !p-1.5" title="Move down"><ChevronDown size={13} /></button>
+              <button onclick={() => openEdit(r)} class="btn-ghost !p-1.5 text-bedrock-400" title="Edit"><Pencil size={12} /></button>
+              <button onclick={() => openDuplicate(r)} class="btn-ghost !p-1.5" title="Duplicate"><Copy size={12} /></button>
+              {#if !r.builtin}
+                <button onclick={() => deleting = r} class="btn-ghost !p-1.5 text-red-400" title="Delete"><Trash2 size={12} /></button>
+              {/if}
             </div>
           {/if}
         </div>
-        <div class="space-y-2.5">
-          {#each PERM_GROUPS as group}
-            {#if group.perms.some(p => r.permissions.includes(p))}
-              <div>
-                <p class="text-[10px] text-deep-400 uppercase tracking-wider mb-1.5">{group.label}</p>
-                <div class="flex flex-wrap gap-1.5">
-                  {#each group.perms as perm}
-                    {#if r.permissions.includes(perm)}
-                      <span class="text-[11px] px-2.5 py-1 bg-bedrock-500/15 text-bedrock-300 rounded font-medium">{permLabel[perm] || perm}</span>
-                    {/if}
+      {/each}
+    </div>
+  {/if}
+</div>
+
+{#if editing}
+  <div class="fixed inset-0 flex items-center justify-center z-50 modal-backdrop" role="dialog" aria-modal="true" tabindex="-1"
+       onclick={(e) => { if (e.target === e.currentTarget) editing = null; }}
+       onkeydown={(e) => { if (e.key === 'Escape') editing = null; }}>
+    <div class="card max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+      <h2 class="text-sm font-bold text-strong uppercase tracking-wider mb-1">
+        {editing.name ? `Edit @${editing.name}` : editing.duplicate_of ? `Duplicate @${editing.duplicate_of}` : 'New Role'}
+      </h2>
+      <p class="text-[10px] text-deep-400 mb-4">
+        {instancePermCount} of {editing.permissions.size} selected permissions apply per-instance
+        when this role is used in an instance share.
+      </p>
+      <div class="space-y-3">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {#if !editing.name}
+            <label class="block">
+              <span class="text-[10px] uppercase tracking-wider text-deep-400">Key name</span>
+              <input bind:value={editing.name} placeholder="my-role" class="input w-full text-xs mt-1 font-mono"
+                     oninput={(e) => { const t = e.currentTarget; t.value = t.value.toLowerCase().replace(/[^a-z0-9-]+/g, '-'); }} />
+            </label>
+          {:else}
+            <label class="block">
+              <span class="text-[10px] uppercase tracking-wider text-deep-400">Key</span>
+              <input value={editing.name} disabled class="input w-full text-xs mt-1 font-mono opacity-60" />
+            </label>
+          {/if}
+          <label class="block">
+            <span class="text-[10px] uppercase tracking-wider text-deep-400">Display name</span>
+            <input bind:value={editing.display_name} placeholder="My Role" class="input w-full text-xs mt-1" />
+          </label>
+        </div>
+        <label class="block">
+          <span class="text-[10px] uppercase tracking-wider text-deep-400">Description</span>
+          <input bind:value={editing.description} placeholder="What is this role for?" class="input w-full text-xs mt-1" />
+        </label>
+        <div>
+          <span class="text-[10px] uppercase tracking-wider text-deep-400">Color</span>
+          <div class="flex items-center gap-1.5 mt-1 flex-wrap">
+            {#each COLOR_PRESETS as c (c)}
+              <button onclick={() => editing!.color = c} aria-label="Color {c}"
+                      class="w-6 h-6 border-2 {editing.color === c ? 'border-strong' : 'border-black/30'}"
+                      style="background:#{c}"></button>
+            {/each}
+            <input value={editing.color} maxlength="6" class="input w-24 text-xs font-mono py-1"
+                   oninput={(e) => { editing!.color = e.currentTarget.value.toUpperCase().replace(/[^0-9A-F]/g, ''); }} />
+            <span class="w-5 h-5 border border-black/30" style="background:{hexColor(editing.color)}"></span>
+          </div>
+        </div>
+        <div class="flex items-center justify-between border border-deep-600/40 bg-deep-900/40 px-3 py-2">
+          <span class="text-xs text-deep-300">Default role for new users</span>
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" class="accent-bedrock-500 w-4 h-4" checked={editing.is_default}
+                   onchange={(e) => editing!.is_default = e.currentTarget.checked} />
+            <span class="text-xs">{editing.is_default ? 'Default' : 'Not default'}</span>
+          </label>
+        </div>
+        <div>
+          <div class="flex items-center justify-between mb-1.5">
+            <span class="text-[10px] uppercase tracking-wider text-deep-400">Permissions</span>
+            <span class="text-[10px] font-mono text-deep-300">{editing.permissions.size}/{totalPerms} · {instancePermCount} per-instance</span>
+          </div>
+          <div class="space-y-2">
+            {#each PERM_GROUPS as group (group.label)}
+              <div class="border border-deep-600/40 bg-deep-900/40">
+                <div class="flex items-center justify-between px-3 py-1.5 border-b border-deep-600/30">
+                  <div>
+                    <span class="text-xs font-bold uppercase tracking-wider text-strong">{group.label}</span>
+                    <span class="text-[10px] text-deep-400 ml-2">{group.hint}</span>
+                  </div>
+                  <button onclick={() => {
+                      const perms = group.perms.map((p) => p.perm);
+                      const allOn = perms.every((p) => editing!.permissions.has(p));
+                      setGroup(perms, !allOn);
+                    }}
+                    class="text-[10px] uppercase tracking-wider text-bedrock-300 hover:text-bedrock-200">
+                    toggle all
+                  </button>
+                </div>
+                <div class="p-2 grid grid-cols-1 sm:grid-cols-2 gap-1">
+                  {#each group.perms as pm (pm.perm)}
+                    <button onclick={() => toggle(pm.perm)} role="checkbox" aria-checked={editing.permissions.has(pm.perm)}
+                            class={"flex items-start gap-2 text-left px-2 py-1.5 transition-colors " + (editing.permissions.has(pm.perm)
+                              ? 'bg-bedrock-500/10 border border-bedrock-500/40'
+                              : 'border border-transparent hover:bg-deep-700/40')}>
+                      <span class="mt-0.5 w-3.5 h-3.5 shrink-0 border flex items-center justify-center {editing.permissions.has(pm.perm) ? 'bg-bedrock-500 border-bedrock-400' : 'border-deep-500'}">
+                        {#if editing.permissions.has(pm.perm)}<Check size={11} class="text-white" />{/if}
+                      </span>
+                      <span class="min-w-0">
+                        <span class="text-xs text-strong block leading-tight">{pm.label}</span>
+                        <span class="text-[10px] text-deep-400 block leading-tight">{pm.hint}</span>
+                      </span>
+                    </button>
                   {/each}
                 </div>
               </div>
-            {/if}
-          {/each}
+            {/each}
+          </div>
+          <p class="text-[10px] text-deep-400 mt-2">
+            Permissions are additive: members hold the union of all their roles. Security rules
+            (quotas, owner-only actions) sit outside this list and cannot be bypassed by combinations.
+          </p>
+        </div>
+        <div class="flex justify-end gap-2 pt-1">
+          <button onclick={() => editing = null} class="btn-secondary text-xs">Cancel</button>
+          <button onclick={save} disabled={busy} class="btn-primary text-xs flex items-center gap-1.5">
+            <Save size={12} /> {busy ? 'Saving…' : 'Save Role'}
+          </button>
         </div>
       </div>
-    {:else}
-      <div class="col-span-full text-center py-8 text-deep-400">{loading ? 'Loading...' : 'No roles defined'}</div>
-    {/each}
-  </div>
-</div>
-
-<!-- Create Modal -->
-{#if creating}
-  <div class="fixed inset-0 flex items-center justify-center z-50" style="background: rgb(var(--color-overlay) / 0.85); backdrop-filter: blur(4px);" role="dialog" aria-modal="true" tabindex="-1"
-       onclick={(e) => { if (e.target === e.currentTarget) creating = false; }}
-       onkeydown={(e) => { if (e.key === 'Escape') creating = false; }}>
-    <div class="card max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto">
-      <div class="flex items-center justify-between mb-4">
-        <h2 class="text-sm font-bold text-strong uppercase tracking-wider">Create Role</h2>
-        <button onclick={() => creating = false} class="btn-ghost p-1 text-deep-400"><X size={14} /></button>
-      </div>
-      <div class="space-y-3 mb-4">
-        <input bind:value={newRole.name} placeholder="Role name" class="input w-full text-xs" />
-        <input bind:value={newRole.display_name} placeholder="Display name (optional)" class="input w-full text-xs" />
-        <label class="flex items-center gap-2 text-xs text-deep-300">
-          <input type="checkbox" bind:checked={newRole.is_default} class="accent-bedrock-500" />
-          Default role for new users
-        </label>
-      </div>
-      <h3 class="text-xs font-bold text-strong uppercase tracking-wider mb-2">Permissions</h3>
-      <div class="space-y-4">
-        {#each PERM_GROUPS as group}
-          <div>
-            <p class="text-[11px] text-deep-400 font-semibold uppercase tracking-wider mb-2">{group.label}</p>
-            <div class="flex flex-wrap gap-2">
-              {#each group.perms as perm}
-                {@const active = newRole.permissions.has(perm)}
-                <button onclick={() => togglePerm(newRole.permissions, perm)}
-                        class="text-xs px-3 py-1.5 rounded border transition-all duration-150 {active ? 'bg-bedrock-500/40 border-bedrock-400 text-strong shadow-sm shadow-bedrock-500/20 ring-1 ring-bedrock-500/40' : 'bg-deep-800/80 border-deep-600 text-deep-400 hover:border-deep-400 hover:text-deep-200'}">
-                  {#if active}<Check size={10} class="inline mr-1 -mt-0.5" />{/if}{permLabel[perm] || perm}
-                </button>
-              {/each}
-            </div>
-          </div>
-        {/each}
-      </div>
-      <div class="flex justify-end gap-2 pt-4">
-        <button onclick={() => creating = false} class="btn-secondary text-xs">Cancel</button>
-        <button onclick={createRole} class="btn-primary text-xs">Create</button>
-      </div>
     </div>
   </div>
 {/if}
 
-<!-- Edit Modal -->
-{#if editing}
-  <div class="fixed inset-0 flex items-center justify-center z-50" style="background: rgb(var(--color-overlay) / 0.85); backdrop-filter: blur(4px);" role="dialog" aria-modal="true" tabindex="-1"
-       onclick={(e) => { if (e.target === e.currentTarget) editing = null; }}
-       onkeydown={(e) => { if (e.key === 'Escape') editing = null; }}>
-    <div class="card max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto">
-      <div class="flex items-center justify-between mb-4">
-        <h2 class="text-sm font-bold text-strong uppercase tracking-wider">Edit {editing.name}</h2>
-        <button onclick={() => editing = null} class="btn-ghost p-1 text-deep-400"><X size={14} /></button>
-      </div>
-      <div class="space-y-3 mb-4">
-        <input bind:value={editing.display_name} placeholder="Display name" class="input w-full text-xs" />
-        <label class="flex items-center gap-2 text-xs text-deep-300">
-          <input type="checkbox" bind:checked={editing.is_default} class="accent-bedrock-500" />
-          Default role for new users
-        </label>
-      </div>
-      <h3 class="text-xs font-bold text-strong uppercase tracking-wider mb-2">Permissions</h3>
-      <div class="space-y-4">
-        {#each PERM_GROUPS as group}
-          <div>
-            <p class="text-[11px] text-deep-400 font-semibold uppercase tracking-wider mb-2">{group.label}</p>
-            <div class="flex flex-wrap gap-2">
-              {#each group.perms as perm}
-                {@const active = editing!.permissions.has(perm)}
-                <button onclick={() => togglePerm(editing!.permissions, perm)}
-                        class="text-xs px-3 py-1.5 rounded border transition-all duration-150 {active ? 'bg-bedrock-500/40 border-bedrock-400 text-strong shadow-sm shadow-bedrock-500/20 ring-1 ring-bedrock-500/40' : 'bg-deep-800/80 border-deep-600 text-deep-400 hover:border-deep-400 hover:text-deep-200'}">
-                  {#if active}<Check size={10} class="inline mr-1 -mt-0.5" />{/if}{permLabel[perm] || perm}
-                </button>
-              {/each}
-            </div>
-          </div>
-        {/each}
-      </div>
-      <div class="flex justify-end gap-2 pt-4">
-        <button onclick={() => editing = null} class="btn-secondary text-xs">Cancel</button>
-        <button onclick={saveRole} class="btn-primary text-xs">Save</button>
-      </div>
-    </div>
-  </div>
-{/if}
-
-<!-- Delete Confirmation -->
 {#if deleting}
-  <div class="fixed inset-0 flex items-center justify-center z-50" style="background: rgb(var(--color-overlay) / 0.85); backdrop-filter: blur(4px);" role="dialog" aria-modal="true" tabindex="-1"
+  <div class="fixed inset-0 flex items-center justify-center z-50 modal-backdrop" role="dialog" aria-modal="true" tabindex="-1"
        onclick={(e) => { if (e.target === e.currentTarget) deleting = null; }}
        onkeydown={(e) => { if (e.key === 'Escape') deleting = null; }}>
     <div class="card max-w-sm w-full mx-4">
-      <h2 class="text-sm font-bold text-strong uppercase tracking-wider mb-2">Delete Role</h2>
-      <p class="text-xs text-deep-300 mb-4">Are you sure you want to delete <strong>{deleting}</strong>?</p>
+      <h2 class="text-sm font-bold text-strong uppercase tracking-wider mb-2 flex items-center gap-2"><Shield size={14} /> Delete Role</h2>
+      <p class="text-xs text-deep-300 mb-4">
+        Delete <strong>@{deleting.name}</strong>? Users holding it keep every other role; instance
+        shares lose this role's permissions.
+      </p>
       <div class="flex justify-end gap-2">
         <button onclick={() => deleting = null} class="btn-secondary text-xs">Cancel</button>
-        <button onclick={() => deleteRole(deleting!)} class="btn-danger text-xs">Delete</button>
+        <button onclick={remove} disabled={busy} class="btn-danger text-xs">{busy ? 'Deleting…' : 'Delete'}</button>
       </div>
     </div>
   </div>

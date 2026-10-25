@@ -122,6 +122,8 @@ fn merge(base: &mut Value, patch: &Value) {
 #[derive(Clone)]
 pub struct Backups {
     config: Arc<Config>,
+    /// Where backup settings persist; per-instance backups keep their own file.
+    settings_path: PathBuf,
     server: ServerManager,
     settings: watch::Sender<Value>,
     settings_lock: Arc<Mutex<()>>,
@@ -142,9 +144,19 @@ impl Backups {
         server: ServerManager,
         shutdown: CancellationToken,
     ) -> anyhow::Result<Self> {
+        let settings_path = config.data_dir.join("backup_settings.yaml");
+        Self::with_settings_path(config, server, shutdown, settings_path).await
+    }
+    /// Instance-scoped constructor with an explicit settings file location.
+    pub async fn with_settings_path(
+        config: Arc<Config>,
+        server: ServerManager,
+        shutdown: CancellationToken,
+        settings_path: PathBuf,
+    ) -> anyhow::Result<Self> {
         tokio::fs::create_dir_all(config.backups_dir.join("worlds")).await?;
         let mut settings = defaults();
-        match tokio::fs::read_to_string(config.data_dir.join("backup_settings.yaml")).await {
+        match tokio::fs::read_to_string(&settings_path).await {
             Ok(s) => {
                 let raw: Value = serde_yaml::from_str(&s)?;
                 for key in ["manual", "auto", "pre_post"] {
@@ -157,6 +169,7 @@ impl Backups {
         validate_settings(&settings)?;
         let result = Self {
             config,
+            settings_path,
             server,
             settings: watch::channel(settings).0,
             settings_lock: Arc::new(Mutex::new(())),
@@ -166,7 +179,7 @@ impl Backups {
             shutdown,
         };
         atomic_write(
-            &result.config.data_dir.join("backup_settings.yaml"),
+            &result.settings_path,
             serde_yaml::to_string(&result.settings())?.as_bytes(),
         )
         .await?;
@@ -197,7 +210,7 @@ impl Backups {
         }
         validate_settings(&new)?;
         atomic_write(
-            &self.config.data_dir.join("backup_settings.yaml"),
+            &self.settings_path,
             serde_yaml::to_string(&new)
                 .map_err(anyhow::Error::from)?
                 .as_bytes(),

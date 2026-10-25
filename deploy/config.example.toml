@@ -4,13 +4,24 @@
 #   1. the file given via --config
 #   2. <executable dir>/config.toml
 #   3. ~/.config/omnibedrock/config.toml   (Linux; XDG_CONFIG_HOME honored)
-# In --portable mode only <executable dir>/portable/config.toml is read.
+# In --portable mode only <executable dir>/data/config.toml is read.
 #
-# Precedence (lowest to highest):
-#   defaults → portable layout → this file → environment → CLI flags
+# Data root resolution (highest wins):
+#   --portable / portable = true          → <executable dir>/data/
+#   --global-data-dir / global_data_dir   → the given directory
+#   default                               → ~/.local/share/omnibedrock (Linux),
+#                                           %LOCALAPPDATA%\OmniBedrock (Windows)
+# Setting both keys in one file is an error; CLI flags beat file settings.
+#
+# Precedence for everything else (lowest to highest):
+#   defaults → this file → environment → CLI flags
 #
 # Secrets (SECRET_KEY, CURSEFORGE_API_KEY, ADMIN_PASSWORD) are NOT read from
 # this file — put them in the environment or a .env file next to the binary.
+
+# ── data root ──────────────────────────────────────────────────────────────
+# portable = true                        # everything under <exe dir>/data/
+# global_data_dir = "/srv/omnibedrock"   # custom root (relative → this file's dir)
 
 # ── network ────────────────────────────────────────────────────────────────
 # host = "0.0.0.0"
@@ -18,19 +29,24 @@
 # api_prefix = "/api/v1"
 # cors_origins = ["http://localhost:17755", "http://localhost:5173"]
 
-# ── storage paths (relative paths resolve against the working directory) ───
-# bedrock_server_dir = "bedrock_server"   # game server + its worlds/
-# data_dir           = "backend/data"     # accounts, toolchains, caches, settings
-# logs_dir           = "backend/logs"     # panel + audit logs
-# backups_dir        = "backend/backups"  # world backups
-# cache_dir          = "backend/data/cache" # defaults to <data_dir>/cache
+# ── storage paths (defaults derive from the data root; relative paths
+#    resolve against the working directory) ──────────────────────────────────
+# bedrock_server_dir = "<root>/server"     # game server + its worlds/
+# data_dir           = "<root>"            # accounts, toolchains, caches, settings
+# logs_dir           = "<root>/logs"       # panel + audit logs
+# backups_dir        = "<root>/backups"    # world backups
+# cache_dir          = "<root>/cache"      # defaults to <data_dir>/cache
 
 # ── server backends ────────────────────────────────────────────────────────
 # endstone_bin     = "/path/to/endstone"    # overrides the panel-managed toolchain
 # endstone_python  = "/path/to/python"      # legacy fallback; must import endstone
-# broadcaster_dir  = "backend/broadcaster"
+# broadcaster_dir  = "<root>/broadcaster"
 # broadcaster_jar  = "/path/to/MCXboxBroadcastStandalone.jar"
 # java_bin         = "/usr/bin/java"
+
+# ── docker runtime images (auto-built when missing, unless custom) ─────────
+# docker_image_vanilla  = "omnibedrock-vanilla:latest"
+# docker_image_endstone = "omnibedrock-endstone:latest"
 
 # ── tuning ─────────────────────────────────────────────────────────────────
 # debug = false

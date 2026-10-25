@@ -13,6 +13,7 @@
   import { goto } from '$app/navigation';
   import { initShortcuts, registerShortcut } from '$lib/shortcuts';
   import { initTheme } from '$lib/theme';
+  import { instances, activeInstanceId, loadInstances, loadHost, refreshInstances } from '$stores/instances';
   import type { ConsoleLine } from '$types/index';
 
   let { children }: { children: import('svelte').Snippet } = $props();
@@ -33,22 +34,41 @@
     if (!token) connectedToken = '';
   });
 
+  // Reconnect instance-scoped streams whenever the active instance changes.
+  $effect(() => {
+    const id = $activeInstanceId;
+    if (mounted && $currentUser && !isLoginPage && connectedInstances !== '') {
+      if (id !== connectedInstances) {
+        connectedInstances = id;
+        void reconnectInstanceStreams();
+      }
+    }
+  });
+  let connectedInstances = '';
+
   const unsubs: Array<() => void> = [];
+  // Theme listeners live for the whole page, not the login session: logout()
+  // drains `unsubs`, and theme switching must survive a logout → login.
+  let themeUnsub: (() => void) | null = null;
 
   onDestroy(() => {
     for (const unsub of unsubs) unsub();
     unsubs.length = 0;
+    themeUnsub?.();
+    themeUnsub = null;
     wsManager.disconnectAll();
   });
 
   // Keeps <html data-theme/data-mode> in sync with the persisted preference
   // (app.html already applied the saved values before first paint).
-  unsubs.push(initTheme());
+  themeUnsub = initTheme();
 
   function logout() {
     localStorage.removeItem('omb_token');
     localStorage.removeItem('omb_user');
     setToken('');
+    instances.set([]);
+    connectedInstances = '';
     consoleBuffer.length = 0;
     consoleLines.set([]);
     errorStats.set([]);
@@ -130,14 +150,31 @@
 
   async function boot() {
     try {
+      await loadInstances();
+    } catch { /* backend might not be up yet */ }
+    connectedInstances = $activeInstanceId;
+    await reconnectInstanceStreams();
+    void loadHost();
+    // Keep instance statuses fresh for the switcher without a page reload.
+    const poll = setInterval(() => void refreshInstances(), 8000);
+    unsubs.push(() => clearInterval(poll));
+  }
+
+  /** Point every live stream at the active instance. */
+  async function reconnectInstanceStreams() {
+    for (const unsub of unsubs.splice(0)) unsub();
+    wsManager.disconnectAll();
+    consoleBuffer.length = 0;
+    consoleLines.set([]);
+    try {
       const status = await api.getServerStatus();
       serverStatus.set(status);
-    } catch { /* server might not be up yet */ }
-
+    } catch { /* instance might not be reachable yet */ }
     const token = getToken();
-    const wsToken = token ? `?token=${token}` : '';
-    if ($userPermissions.includes('CONSOLE_VIEW')) unsubs.push(wsManager.connect(`/api/v1/console/ws${wsToken}`, onConsoleMessage));
-    if ($userPermissions.includes('SERVER_VIEW')) unsubs.push(wsManager.connect(`/api/v1/performance/ws${wsToken}`, onMetricsMessage));
+    const instance = $activeInstanceId || 'default';
+    const query = `${token ? `token=${token}&` : ''}instance=${encodeURIComponent(instance)}`;
+    if ($userPermissions.includes('CONSOLE_VIEW')) unsubs.push(wsManager.connect(`/api/v1/console/ws?${query}`, onConsoleMessage));
+    if ($userPermissions.includes('SERVER_VIEW')) unsubs.push(wsManager.connect(`/api/v1/performance/ws?${query}`, onMetricsMessage));
   }
 
   const consoleBuffer: ConsoleLine[] = [];
