@@ -268,7 +268,7 @@
         <RefreshCw size={12} /> Refresh
       </button>
       {#if $userPermissions.includes('INSTANCES_CREATE')}
-        <button onclick={() => { form = { name: '', backend: 'vanilla', deployment: 'native', memory: '', cpus: '', port: '', vanillaVersion: 'latest', endstoneVersion: '', installAfter: true }; void loadVersions(); showCreate = true; }}
+        <button onclick={() => { form = { name: '', backend: 'vanilla', deployment: 'native', memory: '', cpus: '', port: '', vanillaVersion: 'latest', endstoneVersion: '', installAfter: true, autostart: false }; void loadVersions(); showCreate = true; }}
                 class="btn-primary text-xs flex items-center gap-1.5">
           <Plus size={12} /> New Instance
         </button>
