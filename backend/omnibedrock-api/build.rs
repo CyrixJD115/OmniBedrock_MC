@@ -61,6 +61,16 @@ fn main() {
                 ),
             }
         }
+        // vite.config.ts is developer-local (gitignored, like the CI
+        // workflow's own copy step). Without it vite falls back to root mode
+        // and fails hunting for an index.html that a SvelteKit project never
+        // has — so seed it from the tracked example first.
+        let vite_config = frontend.join("vite.config.ts");
+        let vite_example = frontend.join("vite.config.example.ts");
+        if !vite_config.exists() && vite_example.exists() {
+            println!("cargo:warning=vite.config.ts missing; copying vite.config.example.ts");
+            let _ = std::fs::copy(&vite_example, &vite_config);
+        }
         let built = Command::new("npm")
             .args(["run", "build"])
             .current_dir(&frontend)
