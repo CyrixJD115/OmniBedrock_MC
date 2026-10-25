@@ -31,7 +31,16 @@ session:
     # The maximum number of players
     max-players: 20
 
-    # The IP address of the server
+    # IMPORTANT: this must be an address JOINING CLIENTS can reach, because
+    # after the NetherNet handshake the broadcaster tells their game to
+    # transfer to exactly this ip:port over RakNet. A wrong value is the
+    # classic "Transferred bedrock client ... but the player never spawns"
+    # failure:
+    #   - Friends joining over the internet: your PUBLIC/WAN IP, with the
+    #     port forwarded as UDP on the router to this machine.
+    #   - Friends on the same LAN: the machine's LAN IP (e.g. 192.168.x.x).
+    #   - Friends on a VPN (Tailscale/Zerotier/...): the host's VPN IP.
+    # Localhost or an IP your friends can't route to will break every join.
     ip: 192.168.1.115
 
     # The port of the server

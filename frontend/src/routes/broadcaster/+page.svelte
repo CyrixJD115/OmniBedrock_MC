@@ -182,6 +182,35 @@
   let poll: ReturnType<typeof setInterval>;
   const unsubs: Array<() => void> = [];
 
+  function loadSetting<T>(key: string, def: T): T {
+    if (typeof localStorage === 'undefined') return def;
+    try { return JSON.parse(localStorage.getItem(key) || 'null') ?? def; }
+    catch { return def; }
+  }
+  function saveSetting(key: string, value: unknown) {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(key, JSON.stringify(value));
+  }
+
+  // Console autoscroll: only pin to the bottom when the reader is already
+  // there (or the toggle is on and they haven't scrolled away), so a replay
+  // or a stray log line never drags the viewport around.
+  let autoScroll = $state(loadSetting('omb_bc_console_scroll', true));
+  let stick = $state(true);
+  $effect(() => { saveSetting('omb_bc_console_scroll', autoScroll); });
+
+  function onTerminalScroll() {
+    if (!terminalEl) return;
+    stick = terminalEl.scrollHeight - terminalEl.scrollTop - terminalEl.clientHeight < 32;
+  }
+
+  // Runs after the DOM update, so scrollHeight is final and a replayed batch
+  // settles with one scroll instead of one per line.
+  $effect(() => {
+    void lines.length;
+    if (!autoScroll || !stick || !terminalEl) return;
+    terminalEl.scrollTop = terminalEl.scrollHeight;
+  });
+
   const canManage = $derived($userPermissions.includes('BROADCASTER_MANAGE'));
 
   function parseConfigToModel() {
@@ -230,7 +259,6 @@
     });
     if (lines.length > 500) lines.splice(0, lines.length - 500);
     lines = lines;
-    if (terminalEl) requestAnimationFrame(() => { terminalEl.scrollTop = terminalEl.scrollHeight; });
   }
 
   async function refresh() {
@@ -244,6 +272,7 @@
   async function loadAll() {
     for (const unsub of unsubs.splice(0)) unsub();
     lines = [];
+    stick = true;
     const token = getToken();
     const instance = $activeInstance?.id || 'default';
     const query = `${token ? `token=${encodeURIComponent(token)}&` : ''}instance=${encodeURIComponent(instance)}`;
@@ -513,9 +542,15 @@
   <div class="card">
     <div class="flex items-center justify-between">
       <h2 class="card-header flex items-center gap-2"><FileCode size={13} /> Console</h2>
-      <button onclick={refresh} class="btn-ghost p-1.5" title="Refresh"><RefreshCw size={12} /></button>
+      <div class="flex items-center gap-3">
+        <label class="flex items-center gap-1.5 text-xs text-deep-400 uppercase tracking-wider cursor-pointer select-none">
+          <input type="checkbox" bind:checked={autoScroll} class="accent-bedrock-500" />
+          Scroll
+        </label>
+        <button onclick={refresh} class="btn-ghost p-1.5" title="Refresh"><RefreshCw size={12} /></button>
+      </div>
     </div>
-    <div bind:this={terminalEl}
+    <div bind:this={terminalEl} onscroll={onTerminalScroll}
          class="terminal-container h-64 overflow-y-auto p-4 font-terminal text-base leading-relaxed terminal-surface border-2 border-deep-600/50">
       {#each lines as line, i (i)}
         <div class={"terminal-line leading-snug " + (
@@ -626,6 +661,9 @@
                 <span class="text-[10px] text-deep-400 uppercase tracking-wider">Server IP</span>
                 <input type="text" bind:value={cfg.session['session-info'].ip} onchange={markVisualDirty}
                        class="input w-full text-xs font-mono" />
+                <span class="text-[10px] text-deep-400 block leading-snug">
+                  must be reachable by joining clients — see the note under this editor
+                </span>
               </label>
               <label class="space-y-1 block">
                 <span class="text-[10px] text-deep-400 uppercase tracking-wider">Port</span>
@@ -730,9 +768,17 @@
                   class="input w-full h-80 font-mono text-xs leading-relaxed whitespace-pre overflow-auto"
                   disabled={!canManage}></textarea>
       {/if}
-      <p class="text-[10px] text-deep-400 mt-2">
-        Full MCXboxBroadcast config. Set <span class="font-mono text-deep-400">session.session-info.ip/port</span> to your
-        Bedrock server, then restart. A restart of the panel process itself is not needed.
+      <p class="text-[10px] text-deep-400 mt-2 leading-relaxed">
+        <span class="text-yellow-400 uppercase tracking-wider">Join address:</span>
+        <span class="font-mono text-deep-400">session.session-info.ip</span> is the address clients are told to connect to
+        after the NetherNet handshake, so it must be reachable by whoever joins — not just by this machine.
+        <span class="text-strong">Friends over the internet</span> need your public/WAN IP (and the port forwarded as UDP
+        on the router); a <span class="text-strong">LAN IP</span> only works for players on the same network; a
+        <span class="text-strong">VPN IP</span> (e.g. Tailscale) works for VPN members. A private IP that friends can't
+        route to fails every join: the log shows "Transferred bedrock client …" but the player never reaches the server.
+      </p>
+      <p class="text-[10px] text-deep-400 mt-1">
+        Full MCXboxBroadcast config. Save, then restart the broadcaster to apply — the panel itself needs no restart.
       </p>
     </div>
 
