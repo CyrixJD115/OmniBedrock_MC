@@ -3,6 +3,7 @@
   import { api } from '$lib/api/client';
   import { addToast } from '$stores/toast';
   import { userPermissions } from '$stores/auth';
+  import { activeInstance } from '$stores/instances';
   import { savedWorld, saveWorld } from '$lib/worldSync';
   import type { Addon } from '$types/index';
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
@@ -336,39 +337,94 @@
   }
 
   // ─── data ─────────────────────────────────────────────────────────────────
-  onMount(async () => {
+  onMount(() => {
     hiddenUuids = loadHidden();
+  });
+
+  // Bumps on every (re)load so a slow response for a previously selected
+  // instance can never overwrite the freshly loaded one.
+  let epoch = 0;
+
+  /** Keep the tab bar consistent with the world scope (matches onWorldChange). */
+  function normalizeTabsForWorld() {
+    if (selWorld === ALL_WORLDS) {
+      if (activeTab === 'active' || activeTab === 'available') {
+        lastWorldTab = activeTab;
+        activeTab = 'details';
+      }
+    } else if (activeTab === 'details') {
+      activeTab = lastWorldTab;
+    }
+  }
+
+  async function loadWorldsAndAddons() {
+    const mine = ++epoch;
+    loading = true;
+    // Per-instance UI state: a stale preview or selection must not carry into
+    // another instance (e.g. activating a foreign pack into its order).
+    previewAddon = null;
+    availSelected = new Set();
+    detailsSelected = new Set();
     try {
-      worlds = await api.listWorlds();
-      const saved = savedWorld();
-      selWorld = saved && worlds.includes(saved) ? saved : (worlds.length > 0 ? worlds[0] : ALL_WORLDS);
+      const list = await api.listWorlds();
+      if (mine !== epoch) return;
+      worlds = list;
+      // Keep the current world when this instance has it; otherwise restore
+      // the globally saved world, or fall back to the instance's first world.
+      if (!selWorld || selWorld === ALL_WORLDS || !worlds.includes(selWorld)) {
+        const saved = savedWorld();
+        selWorld = saved && worlds.includes(saved) ? saved : (worlds.length > 0 ? worlds[0] : ALL_WORLDS);
+      }
+      normalizeTabsForWorld();
       saveWorld(selWorld === ALL_WORLDS ? '' : selWorld);
       await loadAddons();
     } catch (e: any) {
+      if (mine !== epoch) return;
       addToast(`Failed to load: ${e.message}`, 'error');
     }
-    loading = false;
+    if (mine === epoch) loading = false;
+  }
+
+  // Addons are instance-scoped: reload worlds, packs, and orders whenever the
+  // active instance changes. The first run also covers the initial load once
+  // the layout boot has resolved the instance list.
+  $effect(() => {
+    void $activeInstance?.id;
+    // In-flight debounced order edits belong to the previous instance; the
+    // scoped client already points at the new one, so drop them instead of
+    // flushing them into the wrong instance.
+    clearTimeout(saveTimer);
+    saveTimer = undefined;
+    pendingSave = null;
+    void loadWorldsAndAddons();
   });
 
   async function loadAddons(refresh = false) {
+    const mine = epoch;
     try {
       const a = await api.listAddons(refresh);
+      if (mine !== epoch) return;
       allBp = a.behavior_packs as Addon[];
       allRp = a.resource_packs as Addon[];
       await loadOrders();
     } catch (e: any) {
+      if (mine !== epoch) return;
       addToast(`Failed to load addons: ${e.message}`, 'error');
     }
   }
 
   async function loadOrders() {
     if (!selWorld || selWorld === ALL_WORLDS) { orderBP = []; orderRP = []; return; }
+    const mine = epoch;
     try {
       const bpOrder = await api.getPackOrder(selWorld, 'behavior_packs');
+      if (mine !== epoch) return;
       orderBP = (bpOrder as any[]).map((o: any) => o.pack_id).filter(Boolean);
       const rpOrder = await api.getPackOrder(selWorld, 'resource_packs');
+      if (mine !== epoch) return;
       orderRP = (rpOrder as any[]).map((o: any) => o.pack_id).filter(Boolean);
     } catch {
+      if (mine !== epoch) return;
       orderBP = [];
       orderRP = [];
     }
@@ -381,15 +437,14 @@
     availSelected = new Set();
     detailsSelected = new Set();
     saveWorld(selWorld === ALL_WORLDS ? '' : selWorld);
-    if (selWorld === ALL_WORLDS) {
-      lastWorldTab = activeTab === 'available' ? 'available' : 'active';
-      activeTab = 'details';
+    const worldScoped = selWorld !== ALL_WORLDS;
+    normalizeTabsForWorld();
+    if (!worldScoped) {
       orderBP = [];
       orderRP = [];
       orderDirty = false;
       return;
     }
-    if (activeTab === 'details') activeTab = lastWorldTab;
     await loadOrders();
   }
 
@@ -1126,6 +1181,7 @@
       ] as tab (tab.id)}
         <button onclick={() => (activeTab = tab.id)}
           disabled={tab.worldOnly && selWorld === ALL_WORLDS}
+          title={tab.worldOnly && selWorld === ALL_WORLDS ? 'Pick a world to use this tab' : tab.label}
           class="text-xs px-4 py-2 uppercase tracking-wider font-semibold transition rounded-t
                  {activeTab === tab.id
                    ? 'bg-deep-800/60 text-strong border-b-2 border-bedrock-500'

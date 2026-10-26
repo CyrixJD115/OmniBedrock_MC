@@ -3,6 +3,17 @@ import type { ServerStatus, ServerActionResponse, Backup, AddonList, Addon, Play
 const API_BASE = '/api/v1';
 let authToken = '';
 let activeInstance = '';
+// Pages can mount and fetch before the layout finishes booting the instance
+// list, so seed the scope from the persisted selection (same key as
+// stores/instances.ts activeInstanceId) — otherwise the very first requests
+// carry no X-Instance header and the backend silently scopes them to default.
+if (typeof localStorage !== 'undefined') {
+  try {
+    const raw = localStorage.getItem('omnibedrock.active-instance');
+    const id = raw ? (JSON.parse(raw) as unknown) : null;
+    if (typeof id === 'string' && id) activeInstance = id;
+  } catch { /* keep unscoped */ }
+}
 
 export function setToken(token: string) {
   authToken = token;
