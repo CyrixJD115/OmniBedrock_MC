@@ -471,6 +471,196 @@ pub fn install_world(
     }
 }
 
+/// A pack folder found inside an imported world.
+struct WorldPack {
+    version: Vec<u64>,
+    /// `dependencies[].uuid` entries from the manifest.
+    dependencies: Vec<String>,
+}
+
+/// Map every installed pack uuid in a world to its manifest-declared version
+/// and dependencies. Bounded so a pathological world cannot stall a scan.
+fn installed_world_packs(world_dir: &Path) -> HashMap<String, WorldPack> {
+    let mut packs = HashMap::new();
+    for pack_type in ["behavior_packs", "resource_packs"] {
+        let Ok(entries) = std::fs::read_dir(world_dir.join(pack_type)) else {
+            continue;
+        };
+        for entry in entries.flatten().take(512) {
+            if !entry.file_type().is_ok_and(|t| t.is_dir()) {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(entry.path().join("manifest.json")) else {
+                continue;
+            };
+            let Ok(manifest) = serde_json::from_str::<Value>(&text) else {
+                continue;
+            };
+            let header = &manifest["header"];
+            let Some(uuid) = header["uuid"].as_str() else {
+                continue;
+            };
+            let dependencies = manifest["dependencies"]
+                .as_array()
+                .map(|deps| {
+                    deps.iter()
+                        .filter_map(|d| d["uuid"].as_str().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default();
+            packs.insert(
+                uuid.to_string(),
+                WorldPack {
+                    version: header["version"]
+                        .as_array()
+                        .map(|v| v.iter().filter_map(Value::as_u64).collect())
+                        .unwrap_or_default(),
+                    dependencies,
+                },
+            );
+        }
+    }
+    packs
+}
+
+/// Referenced pack uuids in discovery order: pack-order files first, then the
+/// dependencies every installed manifest declares.
+fn referenced_uuids(world_dir: &Path, packs: &HashMap<String, WorldPack>) -> Vec<String> {
+    let mut referenced: Vec<String> = Vec::new();
+    let push = |uuid: &str, referenced: &mut Vec<String>| {
+        if !referenced.iter().any(|u| u == uuid) {
+            referenced.push(uuid.to_string());
+        }
+    };
+    for order_file in ["world_behavior_packs.json", "world_resource_packs.json"] {
+        let Ok(text) = std::fs::read_to_string(world_dir.join(order_file)) else {
+            continue;
+        };
+        let Ok(entries) = serde_json::from_str::<Vec<Value>>(&text) else {
+            continue;
+        };
+        for entry in entries.iter().take(4096) {
+            if let Some(uuid) = entry["pack_id"].as_str() {
+                push(uuid, &mut referenced);
+            }
+        }
+    }
+    for info in packs.values() {
+        for dep in &info.dependencies {
+            push(dep, &mut referenced);
+        }
+    }
+    referenced
+}
+
+/// What syncing an imported world's pack orders found.
+#[derive(Debug, Default)]
+pub struct PackSyncReport {
+    /// Order-file entries rewritten to the installed manifest's version.
+    pub synced: usize,
+    /// UUIDs referenced by the order files or manifest dependencies that have
+    /// no pack folder on disk, in discovery order.
+    pub missing: Vec<String>,
+}
+
+/// Sync `world_behavior_packs.json` / `world_resource_packs.json` to the
+/// versions the world's installed packs actually declare, and report
+/// referenced-but-missing uuids. BDS resolves packs by (uuid, exact version),
+/// so a template pinning stale versions would otherwise silently drop part of
+/// its stack at boot ("was not found and was ignored"). Unparseable or absent
+/// order files are left untouched.
+pub fn sync_world_packs(world_dir: &Path) -> PackSyncReport {
+    let packs = installed_world_packs(world_dir);
+    let mut report = PackSyncReport::default();
+    for order_file in ["world_behavior_packs.json", "world_resource_packs.json"] {
+        let path = world_dir.join(order_file);
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(mut entries) = serde_json::from_str::<Vec<Value>>(&text) else {
+            continue;
+        };
+        let mut changed = false;
+        for entry in entries.iter_mut() {
+            let Some(uuid) = entry["pack_id"].as_str() else {
+                continue;
+            };
+            let Some(info) = packs.get(uuid) else {
+                continue;
+            };
+            let current = serde_json::to_value(&info.version).unwrap_or(Value::Null);
+            if entry.get("version") != Some(&current) {
+                entry["version"] = current;
+                changed = true;
+                report.synced += 1;
+            }
+        }
+        if changed && let Ok(text) = serde_json::to_string_pretty(&entries) {
+            let _ = std::fs::write(&path, text);
+        }
+    }
+    let referenced = referenced_uuids(world_dir, &packs);
+    report.missing = referenced
+        .into_iter()
+        .filter(|uuid| !packs.contains_key(uuid))
+        .collect();
+    report
+}
+
+/// Missing pack uuids across every world of an instance, as
+/// `"<world>: missing pack <uuid>"` strings. Read-only: backs the live
+/// per-instance warning field without rewriting anything.
+pub fn missing_dependencies(worlds_root: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let Ok(worlds) = std::fs::read_dir(worlds_root) else {
+        return out;
+    };
+    for world in worlds.flatten().take(64) {
+        if !world.file_type().is_ok_and(|t| t.is_dir())
+            || world.file_name().to_string_lossy().starts_with('.')
+        {
+            continue;
+        }
+        let packs = installed_world_packs(&world.path());
+        for uuid in referenced_uuids(&world.path(), &packs) {
+            if !packs.contains_key(&uuid) {
+                out.push(format!(
+                    "{}: missing pack {}",
+                    world.file_name().to_string_lossy(),
+                    uuid
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// Sync every world under `worlds_root` (healing imports that predate the
+/// sync) and return one `"world: missing pack <uuid>"` entry per still-absent
+/// reference, so the caller can emit a single console line.
+pub fn sync_all_worlds(worlds_root: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let Ok(worlds) = std::fs::read_dir(worlds_root) else {
+        return out;
+    };
+    for world in worlds.flatten().take(64) {
+        if !world.file_type().is_ok_and(|t| t.is_dir())
+            || world.file_name().to_string_lossy().starts_with('.')
+        {
+            continue;
+        }
+        let report = sync_world_packs(&world.path());
+        for uuid in report.missing {
+            out.push(format!(
+                "{}: missing pack {}",
+                world.file_name().to_string_lossy(),
+                uuid
+            ));
+        }
+    }
+    out
+}
+
 /// Total size, newest modification time, and icon presence for a pack folder.
 /// Walks are bounded so a huge pack cannot stall the listing.
 pub fn pack_stats(dir: &Path) -> (u64, u64, bool) {
@@ -626,6 +816,79 @@ mod tests {
                 .to_string()
                 .contains("no manifest.json")
         );
+    }
+
+    #[test]
+    fn sync_world_packs_rewrites_stale_versions_and_reports_missing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let world = dir.path().join("w");
+        let bp = world.join("behavior_packs");
+        std::fs::create_dir_all(bp.join("Alpha")).unwrap();
+        std::fs::create_dir_all(bp.join("Beta")).unwrap();
+        std::fs::create_dir_all(world.join("resource_packs/Gamma")).unwrap();
+        // Alpha declares version [1,1,6] and depends on a pack missing on disk.
+        std::fs::write(
+            bp.join("Alpha/manifest.json"),
+            r#"{"header":{"uuid":"aaaaaaaa-0000-0000-0000-000000000001","version":[1,1,6]},
+                "dependencies":[{"uuid":"aaaaaaaa-0000-0000-0000-0000000000ff","version":[1,0,0]}]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            bp.join("Beta/manifest.json"),
+            r#"{"header":{"uuid":"aaaaaaaa-0000-0000-0000-000000000002","version":[2,2,2]}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            world.join("resource_packs/Gamma/manifest.json"),
+            r#"{"header":{"uuid":"aaaaaaaa-0000-0000-0000-000000000003","version":[1,0,0]}}"#,
+        )
+        .unwrap();
+        // Marketplace-template style: every order entry pinned to [1,0,0]
+        // while the real manifests differ; the missing pack has no folder.
+        std::fs::write(
+            world.join("world_behavior_packs.json"),
+            r#"[{"pack_id":"aaaaaaaa-0000-0000-0000-000000000001","version":[1,0,0]},
+                {"pack_id":"aaaaaaaa-0000-0000-0000-000000000002","version":[1,0,0]},
+                {"pack_id":"aaaaaaaa-0000-0000-0000-0000000000ff","version":[1,0,0]}]"#,
+        )
+        .unwrap();
+        std::fs::write(
+            world.join("world_resource_packs.json"),
+            r#"[{"pack_id":"aaaaaaaa-0000-0000-0000-000000000003","version":[1,0,0]}]"#,
+        )
+        .unwrap();
+
+        let report = sync_world_packs(&world);
+        assert_eq!(report.synced, 2, "Alpha and Beta order entries rewritten");
+        assert_eq!(report.missing, vec!["aaaaaaaa-0000-0000-0000-0000000000ff"]);
+        let orders: Value = serde_json::from_str(
+            &std::fs::read_to_string(world.join("world_behavior_packs.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(orders[0]["version"], serde_json::json!([1, 1, 6]));
+        assert_eq!(orders[1]["version"], serde_json::json!([2, 2, 2]));
+        // The missing pack's entry is reported, not silently dropped.
+        assert_eq!(orders[2]["pack_id"], "aaaaaaaa-0000-0000-0000-0000000000ff");
+        // Idempotent: a second pass finds nothing left to fix.
+        let again = sync_world_packs(&world);
+        assert_eq!(again.synced, 0);
+        assert_eq!(again.missing, vec!["aaaaaaaa-0000-0000-0000-0000000000ff"]);
+        // The instance-wide, read-only view reports the same gap.
+        assert_eq!(
+            missing_dependencies(dir.path()),
+            vec!["w: missing pack aaaaaaaa-0000-0000-0000-0000000000ff"]
+        );
+    }
+
+    #[test]
+    fn sync_world_packs_tolerates_missing_order_files() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let world = dir.path().join("plain");
+        std::fs::create_dir_all(&world).unwrap();
+        let report = sync_world_packs(&world);
+        assert_eq!(report.synced, 0);
+        assert!(report.missing.is_empty());
+        assert!(missing_dependencies(dir.path()).is_empty());
     }
 
     #[test]

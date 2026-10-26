@@ -1174,6 +1174,24 @@ async fn launch(
         }
     }
     crate::instances::warn_transport_mismatch(config, console).await;
+    // Heal pack-order versions for worlds imported before the sync existed
+    // and surface still-missing pack uuids as one console line instead of
+    // letting BDS log per-pack "was not found" noise.
+    {
+        let worlds = config.bedrock_server_dir.join("worlds");
+        let sync = tokio::task::spawn_blocking(move || crate::addons::sync_all_worlds(&worlds))
+            .await
+            .unwrap_or_default();
+        if !sync.is_empty() {
+            console
+                .publish(
+                    format!("World pack sync: {}", sync.join("; ")),
+                    "panel",
+                    false,
+                )
+                .await;
+        }
+    }
     let base_argv = match settings.backend {
         Backend::Endstone => base_argv_endstone(config)?,
         Backend::Vanilla => base_argv_vanilla(config)?,

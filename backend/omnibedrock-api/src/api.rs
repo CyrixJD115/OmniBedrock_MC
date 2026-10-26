@@ -1111,6 +1111,18 @@ async fn dispatch_authenticated(
             let instance = s.resolve_instance(Some(id), u).await?;
             let mut item = instance.summary();
             item["usage"] = usage_json(&s.instance_metrics(&instance.record().id));
+            // Live scan: pack uuids referenced by world order files or pack
+            // dependencies with nothing on disk, so the UI can warn before a
+            // boot logs per-pack "was not found" noise.
+            let warnings = tokio::task::spawn_blocking({
+                let worlds = instance.config.bedrock_server_dir.join("worlds");
+                move || omnibedrock_server::addons::missing_dependencies(&worlds)
+            })
+            .await
+            .unwrap_or_default();
+            if !warnings.is_empty() {
+                item["pack_warnings"] = json!(warnings);
+            }
             item
         }
         ["instances", id] if write => {
@@ -2524,11 +2536,9 @@ async fn upload_addons(
 ) -> Result<Response> {
     use futures_util::StreamExt;
     use tokio::io::AsyncWriteExt;
-    let world = q
-        .get("world")
-        .cloned()
-        .ok_or_else(|| ApiError::bad("World required"))?;
-    component(&world)?;
+    // The target world is only required for pack archives; world archives
+    // (maps) become new worlds and ignore it.
+    let world = q.get("world").cloned();
     let forced = match q.get("type").map(String::as_str).unwrap_or("auto") {
         "auto" => None,
         "behavior_packs" => Some("behavior_packs"),
@@ -2536,8 +2546,11 @@ async fn upload_addons(
         other => return Err(ApiError::bad(format!("Invalid pack type '{other}'"))),
     };
     let root = svc.config.bedrock_server_dir.join("worlds");
-    if !tokio::fs::try_exists(safe_path(&root, FsPath::new(&world)).await?).await? {
-        return Err(ApiError::missing("World not found"));
+    if let Some(world) = &world {
+        component(world)?;
+        if !tokio::fs::try_exists(safe_path(&root, FsPath::new(world)).await?).await? {
+            return Err(ApiError::missing("World not found"));
+        }
     }
     let temp = std::env::temp_dir().join(format!("omnibedrock-addon-{}.zip", uuid::Uuid::new_v4()));
     const CAP: u64 = 512 * 1024 * 1024;
@@ -2570,24 +2583,67 @@ async fn upload_addons(
     file.flush().await?;
     drop(file);
     let _lock = s.edits.lock().await;
-    let install_root = root.clone();
-    let archive = temp.clone();
-    let upload_world = world.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        omnibedrock_server::addons::install_archive(&archive, &install_root, &upload_world, forced)
-    })
-    .await
-    .map_err(anyhow::Error::from)?;
+    // Classify before installing: world archives import as new worlds, pack
+    // archives install into the target world.
+    let detect_target = temp.clone();
+    let detected = tokio::task::spawn_blocking(move || addons::detect_archive(&detect_target))
+        .await
+        .map_err(anyhow::Error::from)?;
+    let kind = match detected {
+        Ok(kind) => kind,
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&temp).await;
+            return Err(ApiError::conflict(e.to_string()));
+        }
+    };
+    let result: anyhow::Result<Vec<InstalledPack>> = match kind {
+        ArchiveKind::World => {
+            let install_root = root.clone();
+            let archive = temp.clone();
+            tokio::task::spawn_blocking(move || {
+                addons::install_world(&archive, &install_root, None).map(|pack| vec![pack])
+            })
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|inner| inner)
+        }
+        ArchiveKind::Addon => {
+            let Some(world) = world.clone() else {
+                let _ = tokio::fs::remove_file(&temp).await;
+                return Err(ApiError::bad("World required"));
+            };
+            let install_root = root.clone();
+            let archive = temp.clone();
+            let upload_world = world;
+            tokio::task::spawn_blocking(move || {
+                addons::install_archive(&archive, &install_root, &upload_world, forced)
+            })
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|inner| inner)
+        }
+        ArchiveKind::Unknown => {
+            let _ = tokio::fs::remove_file(&temp).await;
+            // Same status the install path historically returned for zips
+            // without a manifest, so existing clients keep their contract.
+            return Err(ApiError::conflict(
+                "archive holds neither a pack manifest nor a level.dat world",
+            ));
+        }
+    };
     let _ = tokio::fs::remove_file(&temp).await;
     match result {
         Ok(installed) => {
-            // Tag every freshly uploaded pack as a manual install so the
-            // organizer can always tell Store content from local uploads.
+            // Tag every freshly uploaded pack or world as a manual install so
+            // the organizer can always tell Store content from local uploads.
             for pack in &installed {
-                if pack.pack_type == "world" {
-                    continue;
-                }
-                let dir = root.join(&world).join(pack.pack_type).join(&pack.name);
+                let dir = if pack.pack_type == "world" {
+                    root.join(&pack.name)
+                } else {
+                    root.join(world.as_deref().unwrap_or_default())
+                        .join(pack.pack_type)
+                        .join(&pack.name)
+                };
                 let metadata = json!({
                     "source": "manual",
                     "installed_at": chrono::Utc::now().to_rfc3339(),
@@ -2598,14 +2654,42 @@ async fn upload_addons(
                     tracing::warn!(error = %e, pack = %pack.name, "failed to tag manual upload");
                 }
             }
+            // A world import: sync its pack orders to the versions the
+            // bundled manifests actually declare and warn about packs the
+            // world references but that are not on disk.
+            if let Some(world_pack) = installed.iter().find(|p| p.pack_type == "world") {
+                let world_dir = root.join(&world_pack.name);
+                let report = tokio::task::spawn_blocking(move || {
+                    omnibedrock_server::addons::sync_world_packs(&world_dir)
+                })
+                .await
+                .unwrap_or_default();
+                if !report.missing.is_empty() {
+                    svc.server
+                        .console
+                        .publish(
+                            format!(
+                                "Imported world '{}': {} pack-order version(s) synced to installed manifests; missing pack uuids: {}",
+                                world_pack.name,
+                                report.synced,
+                                report.missing.join(", ")
+                            ),
+                            "panel",
+                            false,
+                        )
+                        .await;
+                }
+            }
             let names = installed
                 .iter()
                 .map(|p| format!("{} ({})", p.name, p.pack_type))
                 .collect::<Vec<_>>()
                 .join(", ");
-            s.audit(&u, "addons.upload", &format!("{world}: {names}"), "addons")
-                .await
-                .ok();
+            let scope = match &world {
+                Some(world) => format!("{world}: {names}"),
+                None => names.clone(),
+            };
+            s.audit(&u, "addons.upload", &scope, "addons").await.ok();
             Ok(data_response(json!({
                 "success": true,
                 "installed": installed,
@@ -2856,6 +2940,30 @@ async fn install_from_store(s: &AppState, svc: &Arc<Instance>, b: &Value) -> Res
         Ok(value) => value,
         Err(e) => return Err(ApiError::conflict(e.to_string())),
     };
+    // A world import: sync its pack orders to the versions the bundled
+    // manifests actually declare and warn about packs the world references
+    // but that are not on disk.
+    if is_world && let Some(world_pack) = installed.first() {
+        let world_dir = root.join(&world_pack.name);
+        let report = tokio::task::spawn_blocking(move || addons::sync_world_packs(&world_dir))
+            .await
+            .unwrap_or_default();
+        if !report.missing.is_empty() {
+            svc.server
+                .console
+                .publish(
+                    format!(
+                        "Imported world '{}': {} pack-order version(s) synced to installed manifests; missing pack uuids: {}",
+                        world_pack.name,
+                        report.synced,
+                        report.missing.join(", ")
+                    ),
+                    "panel",
+                    false,
+                )
+                .await;
+        }
+    }
     // Provenance sidecar for every installed pack or the new world.
     let metadata = json!({
         "source": "curseforge",
