@@ -3,12 +3,18 @@
   import { addToast } from '$stores/toast';
   import { userPermissions } from '$stores/auth';
   import { activeInstance } from '$stores/instances';
-  import { Eye, RotateCw, Save } from '@lucide/svelte';
+  import { Eye, Plus, RotateCw, Save, Search } from '@lucide/svelte';
 
-  let properties = $state<{ key: string; value: string; comment: string; inline_comment: string }[]>([]);
+  type Entry = { key: string; value: string; comment: string; inline_comment: string };
+
+  let properties = $state<Entry[]>([]);
   let rawText = $state('');
   let showRaw = $state(false);
   let loading = $state(true);
+  let query = $state('');
+  let newKey = $state('');
+  let newValue = $state('');
+  let canEdit = $derived($userPermissions.includes('PROPERTIES_EDIT'));
   // Bumps on every (re)load so a slow response for a previously selected
   // instance can never overwrite the freshly loaded one.
   let epoch = 0;
@@ -26,17 +32,47 @@
     if (mine === epoch) loading = false;
   }
 
-  // Properties are instance-scoped: reload whenever the active instance changes.
+  // Properties are instance-scoped: reload whenever the active instance
+  // changes. Keyed on the instance id — the layout's periodic list refresh
+  // re-emits activeInstance with a fresh object even when the selection is
+  // unchanged, and reloading on every emission would flicker the page.
+  let loadedInstanceId: string | null = null;
   $effect(() => {
-    void $activeInstance?.id;
+    const id = $activeInstance?.id ?? 'default';
+    if (id === loadedInstanceId) return;
+    loadedInstanceId = id;
     void load();
   });
 
   async function updateValue(key: string, value: string) {
+    const before = properties.find(p => p.key === key);
+    if (!before || before.value === value) return;
     try {
       await api.updateProperty(key, value);
+      // Sync every row carrying this key (hand-edited files can hold dupes);
+      // no reload needed — the backend write is the file's new truth.
+      for (const p of properties) if (p.key === key) p.value = value;
       addToast(`Updated ${key}`, 'success');
-    } catch (e: any) { addToast(`Update failed: ${e.message}`, 'error'); }
+    } catch (e: any) {
+      addToast(`Update failed: ${e.message}`, 'error');
+      void load();
+    }
+  }
+
+  async function addProperty() {
+    const key = newKey.trim();
+    if (!key) return;
+    try {
+      await api.updateProperty(key, newValue);
+      if (!properties.some(p => p.key === key)) {
+        properties.push({ key, value: newValue, comment: '', inline_comment: '' });
+      } else {
+        for (const p of properties) if (p.key === key) p.value = newValue;
+      }
+      newKey = '';
+      newValue = '';
+      addToast(`Saved ${key}`, 'success');
+    } catch (e: any) { addToast(`Save failed: ${e.message}`, 'error'); }
   }
 
   async function loadRaw() {
@@ -55,14 +91,68 @@
     } catch (e: any) { addToast(`Save failed: ${e.message}`, 'error'); }
   }
 
-  const knownProps = ['server-name', 'gamemode', 'difficulty', 'allow-cheats', 'max-players',
+  // Widget schema. Known keys get predefined inputs; every other entry stays
+  // fully editable as free text, and any entry holding true/false offers a
+  // toggle — so every parsed line is configurable, whatever it is.
+  const CHOICES: Record<string, string[]> = {
+    gamemode: ['survival', 'creative', 'adventure'],
+    difficulty: ['peaceful', 'easy', 'normal', 'hard'],
+    'default-player-permission-level': ['visitor', 'member', 'operator'],
+    'chat-restriction': ['None', 'Dropped', 'Disabled'],
+  };
+  const BOOL_KEYS = new Set([
+    'allow-cheats', 'online-mode', 'white-list', 'texturepack-required',
+    'content-log-file-enabled', 'server-authoritative-movement',
+    'enable-lan-visibility', 'disable-player-interaction',
+  ]);
+  const NUMBERS: Record<string, [number, number | null]> = {
+    'max-players': [1, 1000],
+    'server-port': [1, 65535],
+    'server-portv6': [1, 65535],
+    'view-distance': [2, 96],
+    'tick-distance': [4, 12],
+    'player-idle-timeout': [0, null],
+    'compression-threshold': [0, 65535],
+  };
+  // Common keys float to the top when unfiltered; everything else keeps
+  // file order beneath them.
+  const COMMON = ['server-name', 'motd', 'gamemode', 'difficulty', 'allow-cheats', 'max-players',
     'online-mode', 'white-list', 'server-port', 'server-portv6', 'view-distance', 'tick-distance',
     'level-name', 'level-seed', 'default-player-permission-level', 'texturepack-required',
     'player-idle-timeout', 'content-log-file-enabled', 'compression-threshold',
     'server-authoritative-movement', 'enable-lan-visibility', 'chat-restriction',
     'disable-player-interaction'];
 
-  let known = $derived(properties.filter(p => p.key && knownProps.includes(p.key)));
+  type Widget =
+    | { kind: 'enum'; options: string[] }
+    | { kind: 'number'; min: number; max: number | null }
+    | { kind: 'text' };
+
+  function widgetFor(entry: Entry): Widget {
+    if (BOOL_KEYS.has(entry.key)) return { kind: 'enum', options: ['true', 'false'] };
+    if (CHOICES[entry.key]) return { kind: 'enum', options: CHOICES[entry.key] };
+    if (NUMBERS[entry.key]) {
+      const [min, max] = NUMBERS[entry.key];
+      return { kind: 'number', min, max };
+    }
+    if (entry.value === 'true' || entry.value === 'false') {
+      return { kind: 'enum', options: ['true', 'false'] };
+    }
+    return { kind: 'text' };
+  }
+
+  let entries = $derived(properties.filter(p => p.key));
+  let visible = $derived.by(() => {
+    const q = query.trim().toLowerCase();
+    const rows = q
+      ? entries.filter(p => p.key.toLowerCase().includes(q) || p.value.toLowerCase().includes(q))
+      : [...entries];
+    const rank = (key: string) => {
+      const i = COMMON.indexOf(key);
+      return i === -1 ? COMMON.length : i;
+    };
+    return rows.sort((a, b) => rank(a.key) - rank(b.key));
+  });
 </script>
 
 <div class="space-y-4">
@@ -89,63 +179,96 @@
       <h2 class="card-header">Raw Editor</h2>
       <textarea bind:value={rawText} class="input w-full h-96 font-mono text-sm" spellcheck="false"></textarea>
       <div class="flex gap-2 mt-3">
-        {#if $userPermissions.includes('PROPERTIES_EDIT')}
+        {#if canEdit}
           <button onclick={saveRaw} class="btn-primary flex items-center gap-2 text-xs"><Save size={14} /> Save</button>
         {/if}
         <button onclick={() => showRaw = false} class="btn-secondary text-xs">Cancel</button>
       </div>
     </div>
   {:else}
-    <div class="card">
-      <h2 class="card-header">Quick Edit</h2>
-      <div class="space-y-2">
-        {#each known as entry}
-          <div class="flex items-center gap-3 p-2.5 border border-deep-600/20 bg-deep-900/50">
-            <span class="text-xs font-mono text-bedrock-400 w-44 shrink-0 uppercase tracking-wider">{entry.key}</span>
-            {#if ['gamemode', 'difficulty', 'default-player-permission-level'].includes(entry.key)}
-              <select value={entry.value} onchange={(e) => updateValue(entry.key, (e.target as HTMLSelectElement).value)} class="input flex-1 text-xs py-1.5">
-                {#if entry.key === 'gamemode'}
-                  <option value="survival">Survival</option><option value="creative">Creative</option><option value="adventure">Adventure</option>
-                {:else if entry.key === 'difficulty'}
-                  <option value="peaceful">Peaceful</option><option value="easy">Easy</option><option value="normal">Normal</option><option value="hard">Hard</option>
-                {:else}
-                  <option value="visitor">Visitor</option><option value="member">Member</option><option value="operator">Operator</option>
-                {/if}
-              </select>
-            {:else if ['allow-cheats', 'online-mode', 'white-list', 'texturepack-required'].includes(entry.key)}
-              <select value={entry.value} onchange={(e) => updateValue(entry.key, (e.target as HTMLSelectElement).value)} class="input flex-1 text-xs py-1.5">
-                <option value="true">true</option><option value="false">false</option>
-              </select>
-            {:else if ['server-port', 'max-players', 'view-distance', 'tick-distance'].includes(entry.key)}
-              <input type="number" value={entry.value} onchange={(e) => updateValue(entry.key, (e.target as HTMLInputElement).value)} class="input flex-1 text-xs py-1.5" />
-            {:else}
-              <input type="text" value={entry.value} onchange={(e) => updateValue(entry.key, (e.target as HTMLInputElement).value)} class="input flex-1 text-xs py-1.5" />
-            {/if}
-          </div>
-        {/each}
+    {#if canEdit}
+      <div class="card">
+        <h2 class="card-header">Add Property</h2>
+        <form class="flex flex-wrap items-center gap-2"
+              onsubmit={(e) => { e.preventDefault(); void addProperty(); }}>
+          <input type="text" placeholder="key (e.g. education-feature)" bind:value={newKey}
+                 class="input flex-1 min-w-44 text-xs py-1.5 font-mono" />
+          <input type="text" placeholder="value" bind:value={newValue}
+                 class="input flex-1 min-w-32 text-xs py-1.5" />
+          <button type="submit" class="btn-primary flex items-center gap-2 text-xs"
+                  disabled={!newKey.trim()}>
+            <Plus size={14} /> Add
+          </button>
+        </form>
+        <p class="mt-2 text-xs text-deep-400">
+          New keys are appended to server.properties; existing keys are updated in place.
+        </p>
       </div>
-    </div>
+    {/if}
 
     <div class="card">
-      <h2 class="card-header">All Entries</h2>
-      <div class="overflow-x-auto">
+      <div class="flex items-center justify-between flex-wrap gap-2">
+        <h2 class="card-header">Properties</h2>
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-deep-400">{visible.length} of {entries.length}</span>
+          <div class="relative">
+            <Search size={12} class="absolute left-2 top-1/2 -translate-y-1/2 text-deep-400" />
+            <input type="text" placeholder="Filter key or value…" bind:value={query}
+                   class="input pl-7 w-56 text-xs py-1.5" />
+          </div>
+        </div>
+      </div>
+      <div class="overflow-x-auto mt-2">
         <table class="w-full text-xs">
           <thead><tr class="text-deep-400 border-b border-deep-600/30 uppercase tracking-wider">
-            <th class="text-left py-2 px-3 font-medium">Key</th>
+            <th class="text-left py-2 px-3 font-medium w-72">Key</th>
             <th class="text-left py-2 px-3 font-medium">Value</th>
             <th class="text-left py-2 px-3 font-medium">Comment</th>
           </tr></thead>
           <tbody>
-            {#each properties.filter(p => p.key) as entry}
+            {#each visible as entry}
+              {@const widget = widgetFor(entry)}
               <tr class="border-b border-deep-700/20 hover:bg-deep-800/30">
-                <td class="py-1.5 px-3 font-mono text-bedrock-400">{entry.key}</td>
-                <td class="py-1.5 px-3">{entry.value}</td>
+                <td class="py-1.5 px-3 font-mono text-bedrock-400 whitespace-nowrap">{entry.key}</td>
+                <td class="py-1.5 px-3 w-1/2">
+                  {#if !canEdit}
+                    <span>{entry.value}</span>
+                  {:else if widget.kind === 'enum'}
+                    <select value={entry.value}
+                            onchange={(e) => updateValue(entry.key, (e.target as HTMLSelectElement).value)}
+                            class="input w-full text-xs py-1">
+                      {#if !widget.options.includes(entry.value)}
+                        <option value={entry.value}>{entry.value} (current)</option>
+                      {/if}
+                      {#each widget.options as o}
+                        <option value={o}>{o}</option>
+                      {/each}
+                    </select>
+                  {:else if widget.kind === 'number'}
+                    <input type="number" value={entry.value}
+                           min={widget.min} max={widget.max ?? undefined}
+                           onchange={(e) => updateValue(entry.key, (e.target as HTMLInputElement).value)}
+                           class="input w-full text-xs py-1" />
+                  {:else}
+                    <input type="text" value={entry.value}
+                           onchange={(e) => updateValue(entry.key, (e.target as HTMLInputElement).value)}
+                           class="input w-full text-xs py-1" />
+                  {/if}
+                </td>
                 <td class="py-1.5 px-3 text-deep-400">{entry.inline_comment}</td>
               </tr>
+            {:else}
+              <tr><td colspan="3" class="py-3 px-3 text-deep-400 text-center">
+                {query.trim() ? 'No entries match the filter.' : 'No properties found.'}
+              </td></tr>
             {/each}
           </tbody>
         </table>
       </div>
+      <p class="mt-2 text-xs text-deep-400">
+        Every entry saves to the instance's server.properties on change. Full-line comments and
+        blank lines are preserved — edit them via Raw.
+      </p>
     </div>
   {/if}
 </div>

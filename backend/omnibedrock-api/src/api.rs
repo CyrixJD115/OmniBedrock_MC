@@ -947,9 +947,11 @@ async fn dispatch_authenticated(
         ["properties", "raw"] if write => {
             s.require_for(u, "PROPERTIES_EDIT", svc).await?;
             let _lock = s.edits.lock().await;
+            // Writes must land in the SAME file the reads come from: the
+            // X-Instance-scoped server dir, not the panel-level default.
             atomic_write(
                 &safe_path(
-                    &s.config.bedrock_server_dir,
+                    &svc.config.bedrock_server_dir,
                     FsPath::new("server.properties"),
                 )
                 .await?,
@@ -973,7 +975,15 @@ async fn dispatch_authenticated(
                 }
             }
             if !found {
-                return Err(ApiError::missing(format!("Property '{key}' not found")));
+                // A key missing from the file is appended, not rejected, so
+                // every property stays configurable even before the server
+                // has ever written it.
+                entries.push(json!({
+                    "key": key,
+                    "value": value,
+                    "comment": "",
+                    "inline_comment": ""
+                }));
             }
             let text = entries
                 .iter()
@@ -1001,7 +1011,7 @@ async fn dispatch_authenticated(
                 + "\n";
             atomic_write(
                 &safe_path(
-                    &s.config.bedrock_server_dir,
+                    &svc.config.bedrock_server_dir,
                     FsPath::new("server.properties"),
                 )
                 .await?,

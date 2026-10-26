@@ -679,6 +679,91 @@ async fn api_file_properties_world_addons_and_audit() {
     s.shutdown.cancel();
     s.server.shutdown().await.unwrap();
 }
+/// Property edits must land in the X-Instance-scoped server dir — the same
+/// file GET reads — and unknown keys must be appended rather than rejected.
+#[tokio::test]
+async fn properties_writes_are_instance_scoped() {
+    let (_dir, s, app, token) = state().await;
+    let t = Some(token.as_str());
+    tokio::fs::write(
+        s.config.bedrock_server_dir.join("server.properties"),
+        "motd=global-file\n",
+    )
+    .await
+    .unwrap();
+    let (code, created) = call(
+        &app,
+        "POST",
+        "/api/v1/instances",
+        t,
+        json!({"name":"Props Server","backend":"vanilla"}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{created}");
+    let id = created["id"].as_str().unwrap().to_owned();
+
+    // The scoped read sees the instance's seeded file, not the global one.
+    let (_, text) =
+        call_text_instance(&app, "GET", "/api/v1/properties/raw", &token, Some(&id)).await;
+    assert!(text.contains("transport=raknet"), "{text}");
+    assert!(!text.contains("motd=global-file"), "{text}");
+
+    // A key the seeded file lacks is appended into the instance file.
+    let (code, v) = call_instance(
+        &app,
+        "PUT",
+        "/api/v1/properties/motd",
+        t,
+        Some(&id),
+        json!({"value":"scoped-edit"}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{v}");
+    let (_, text) =
+        call_text_instance(&app, "GET", "/api/v1/properties/raw", &token, Some(&id)).await;
+    assert!(text.contains("motd=scoped-edit"), "{text}");
+    assert_eq!(
+        tokio::fs::read_to_string(s.config.bedrock_server_dir.join("server.properties"))
+            .await
+            .unwrap(),
+        "motd=global-file\n"
+    );
+
+    // The raw editor writes to the instance dir too.
+    let (code, v) = call_instance(
+        &app,
+        "PUT",
+        "/api/v1/properties/raw",
+        t,
+        Some(&id),
+        json!({"text":"motd=raw-edit\nwhite-list=true\n"}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{v}");
+    let (_, text) =
+        call_text_instance(&app, "GET", "/api/v1/properties/raw", &token, Some(&id)).await;
+    assert_eq!(text, "motd=raw-edit\nwhite-list=true\n");
+    assert_eq!(
+        tokio::fs::read_to_string(s.config.bedrock_server_dir.join("server.properties"))
+            .await
+            .unwrap(),
+        "motd=global-file\n"
+    );
+
+    // A crafted key (comment/separator injection) is rejected.
+    let (code, _) = call_instance(
+        &app,
+        "PUT",
+        "/api/v1/properties/bad%20key",
+        t,
+        Some(&id),
+        json!({"value":"x"}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::BAD_REQUEST);
+    s.shutdown.cancel();
+    s.server.shutdown().await.unwrap();
+}
 #[tokio::test]
 async fn backup_roundtrip_trash_restore_and_dry_run() {
     let (dir, s, app, token) = state().await;

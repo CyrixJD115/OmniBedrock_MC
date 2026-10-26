@@ -91,6 +91,17 @@ pub fn properties(text: &str) -> Vec<Value> {
         .collect()
 }
 pub fn validate_property(key: &str, value: &str) -> Result<()> {
+    // Keys are appender-safe: only plain identifier characters, so a crafted
+    // name can never smuggle a comment, separator, or extra line into the file.
+    if key.is_empty()
+        || !key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
+        return Err(ApiError::bad(
+            "Property key may only contain letters, digits, '-', '_' and '.'",
+        ));
+    }
     if value.contains(['\r', '\n', '\0']) {
         return Err(ApiError::bad("Property value must be a single line"));
     }
