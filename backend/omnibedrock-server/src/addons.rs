@@ -17,6 +17,9 @@ use zip::ZipArchive;
 
 /// Parse a Bedrock `.lang` file: `key=value` lines, `#` comment lines, and
 /// blank lines. Later duplicate keys win, matching the game's behavior.
+/// Marketplace packs end values with a whitespace-then-`#` comment marker
+/// (`…Pack\t#`); a `#` preceded by whitespace starts a trailing comment and
+/// is stripped, while a glued `#` stays part of the value.
 pub fn parse_lang(content: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
     for line in content.lines() {
@@ -25,6 +28,12 @@ pub fn parse_lang(content: &str) -> HashMap<String, String> {
             continue;
         }
         if let Some((key, value)) = line.split_once('=') {
+            let value = match value.find('#') {
+                Some(idx) if idx > 0 && value[..idx].ends_with(char::is_whitespace) => {
+                    &value[..idx]
+                }
+                _ => value,
+            };
             map.insert(key.trim().to_string(), value.trim().to_string());
         }
     }
@@ -739,6 +748,8 @@ mod tests {
 
     const BP_MANIFEST: &str = r#"{"format_version":2,"header":{"name":"Cool Behavior","uuid":"11111111-1111-1111-1111-111111111111","version":[1,2,3]},"modules":[{"type":"data","uuid":"22222222-2222-2222-2222-222222222222","version":[1,2,3]}]}"#;
     const RP_MANIFEST: &str = r#"{"format_version":2,"header":{"name":"Cool Resource","uuid":"33333333-3333-3333-3333-333333333333","version":[0,1,0]},"modules":[{"type":"resources","uuid":"44444444-4444-4444-4444-444444444444","version":[0,1,0]}]}"#;
+    // Marketplace-style pack: lang-key name, subpacks, capabilities, metadata.
+    const MARKETPLACE_RP_MANIFEST: &str = r#"{"format_version":2,"header":{"description":"pack.description","name":"pack.name","uuid":"985f7757-dbea-4f92-94dc-3ce02d14d83b","version":[1,0,86],"min_engine_version":[1,21,120]},"modules":[{"type":"resources","uuid":"2be875b6-3001-408a-a65c-3435d32b6f6c","version":[1,0,86]}],"subpacks":[{"folder_name":"a","name":"128x","memory_tier":12},{"folder_name":"d","name":"16x","memory_tier":2}],"capabilities":["pbr"],"metadata":{"authors":["Spark Universe"]}}"#;
     const ICON: &[u8] = b"\x89PNG\r\n\x1a\nfakeicon";
 
     #[test]
@@ -762,6 +773,67 @@ mod tests {
         assert!(pack.join("manifest.json").exists());
         assert!(pack.join("scripts/main.js").exists());
         assert!(pack_stats(&pack).2);
+    }
+
+    #[tokio::test]
+    async fn marketplace_manifest_with_subpacks_installs() {
+        // Root-manifest resource pack with lang-key name, subpack folders,
+        // capabilities and metadata must install with everything intact.
+        let dir = tempfile::TempDir::new().unwrap();
+        let archive = dir.path().join("marketplace.mcpack");
+        write_zip(
+            &archive,
+            &[
+                ("manifest.json", MARKETPLACE_RP_MANIFEST.as_bytes()),
+                ("pack_icon.png", ICON),
+                (
+                    "texts/en_US.lang",
+                    b"pack.name=RealismCraft 2.6\t#\npack.description=Tiered textures\t#\n",
+                ),
+                ("subpacks/a/textures/a.png", b"a"),
+                ("subpacks/d/textures/d.png", b"d"),
+            ],
+        );
+        let installed = install_archive(&archive, dir.path(), "w", None).unwrap();
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].pack_type, "resource_packs");
+        // Lang-key name falls back to the archive folder ("pack"), and the
+        // panel resolves the real name later from texts/en_US.lang.
+        let pack = dir
+            .path()
+            .join("w/resource_packs")
+            .read_dir()
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        assert_eq!(installed[0].uuid, "985f7757-dbea-4f92-94dc-3ce02d14d83b");
+        assert_eq!(installed[0].version, vec![1, 0, 86]);
+        assert!(pack.join("subpacks/a/textures/a.png").exists());
+        assert!(pack.join("subpacks/d/textures/d.png").exists());
+        // The localization table resolves both keys; marketplace-style
+        // trailing `\t#` comments are stripped from the values.
+        let texts = read_texts(&pack).await;
+        assert_eq!(
+            resolve_lang(&texts, Some("pack.name")).as_deref(),
+            Some("RealismCraft 2.6")
+        );
+        assert_eq!(
+            resolve_lang(&texts, Some("pack.description")).as_deref(),
+            Some("Tiered textures")
+        );
+    }
+
+    #[test]
+    fn lang_values_strip_comment_markers_but_keep_glued_hashes() {
+        let langs =
+            parse_lang("a=clean\t#\nb=two words # tail\nc=C# glued\nd=no hash\n# comment\n");
+        assert_eq!(langs["a"], "clean");
+        assert_eq!(langs["b"], "two words");
+        // `#` glued to text stays part of the value.
+        assert_eq!(langs["c"], "C# glued");
+        assert_eq!(langs["d"], "no hash");
     }
 
     #[test]

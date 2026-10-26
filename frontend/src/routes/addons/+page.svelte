@@ -68,6 +68,7 @@
     m0: 0, m1: 0, m2: 0,
     uuid: '',
     authors: '',
+    subpacks: [] as { name: string; folder: string; tier: string }[],
   });
 
   function draftFromText(text: string): boolean {
@@ -83,11 +84,25 @@
         m0: mv[0] ?? 1, m1: mv[1] ?? 0, m2: mv[2] ?? 0,
         uuid: typeof h.uuid === 'string' ? h.uuid : '',
         authors: Array.isArray(m?.metadata?.authors) ? m.metadata.authors.join(', ') : '',
+        subpacks: Array.isArray(m?.subpacks)
+          ? m.subpacks.map((s: any) => ({
+              name: typeof s?.name === 'string' ? s.name : '',
+              folder: typeof s?.folder_name === 'string' ? s.folder_name : '',
+              tier: Number.isFinite(s?.memory_tier) ? String(s.memory_tier) : '',
+            }))
+          : [],
       };
       return true;
     } catch {
       return false;
     }
+  }
+
+  function addSubpack() {
+    manifestDraft.subpacks.push({ name: '', folder: '', tier: '' });
+  }
+  function removeSubpack(i: number) {
+    manifestDraft.subpacks.splice(i, 1);
   }
 
   function draftToText(): boolean {
@@ -107,6 +122,22 @@
       } else if (m.metadata) {
         delete m.metadata.authors;
       }
+      // Rows without a folder_name are dropped; memory_tier is only written
+      // when it parses as an integer (the game treats it as optional). Number
+      // inputs hand Svelte real numbers, so coerce defensively.
+      const subpacks = manifestDraft.subpacks
+        .map((s) => {
+          const sub: any = {};
+          if (String(s.name ?? '').trim()) sub.name = String(s.name).trim();
+          if (String(s.folder ?? '').trim()) sub.folder_name = String(s.folder).trim();
+          const tierText = String(s.tier ?? '').trim();
+          const tier = Number(tierText);
+          if (tierText !== '' && Number.isInteger(tier)) sub.memory_tier = tier;
+          return sub;
+        })
+        .filter((s) => s.folder_name);
+      if (subpacks.length > 0) m.subpacks = subpacks;
+      else delete m.subpacks;
       manifestEditText = JSON.stringify(m, null, 2);
       manifestEditValid = true;
       return true;
@@ -1017,19 +1048,32 @@
     const row = (label: string, value: string, valClass = 'text-deep-200') =>
       `<div class="flex justify-between gap-2 py-1"><span class="text-deep-400 shrink-0">${label}</span><span class="${valClass} text-right break-all">${esc(value)}</span></div>`;
     let html = `<div class="space-y-0.5 text-xs">`;
-    html += row('Name', h.name ?? '', 'text-strong font-medium');
+    // The API resolves lang keys like `pack.name` against texts/*.lang; show
+    // the resolved text with the raw key in parentheses when they differ.
+    const nameKey = typeof h.name === 'string' ? h.name : '';
+    const displayName = a.name || nameKey;
+    html += row('Name', nameKey && nameKey !== displayName ? `${displayName} (${nameKey})` : displayName, 'text-strong font-medium');
     html += row('UUID', h.uuid ?? '', 'text-green-400 font-mono');
     html += row('Version', (h.version ?? []).join('.'), 'text-blue-400 font-mono');
     html += row('Format', m.format_version ?? '');
     if (h.min_engine_version) html += row('Min Engine', h.min_engine_version.join('.'));
-    if (h.description) {
-      html += `<div class="bg-deep-800/60 rounded p-2 mt-2 text-deep-300 italic text-[11px]">${esc(h.description)}</div>`;
+    const descText = a.description ?? (typeof h.description === 'string' ? h.description : '');
+    if (descText) {
+      html += `<div class="bg-deep-800/60 rounded p-2 mt-2 text-deep-300 italic text-[11px]">${esc(descText)}</div>`;
     }
     if (m.modules?.length) {
       html += `<div class="mt-3"><span class="text-deep-400 block mb-1 uppercase tracking-wider text-[10px]">Modules (${m.modules.length})</span>`;
       html += m.modules.map((mod: any) =>
         `<div class="flex justify-between text-deep-300 py-0.5 gap-2"><span class="min-w-0 truncate">${esc(mod.type ?? '')}${mod.description ? ' — <span class="text-deep-400">' + esc(mod.description) + '</span>' : ''}</span><span class="font-mono text-[10px] text-deep-400 shrink-0">${esc((mod.version ?? []).join('.'))}</span></div>`
       ).join('') + `</div>`;
+    }
+    if (m.subpacks?.length) {
+      html += `<div class="mt-3"><span class="text-deep-400 block mb-1 uppercase tracking-wider text-[10px]">Subpacks (${m.subpacks.length})</span>`;
+      html += m.subpacks.map((sub: any) => {
+        const tier = Number.isFinite(sub.memory_tier) ? ` · tier ${sub.memory_tier}` : '';
+        const folder = sub.folder_name ? `<span class="font-mono text-[10px] text-deep-400 shrink-0">${esc(sub.folder_name)}/</span>` : '';
+        return `<div class="flex justify-between text-deep-300 py-0.5 gap-2"><span class="min-w-0 truncate">${esc(sub.name ?? '')}${tier ? `<span class="text-deep-400">${esc(tier)}</span>` : ''}</span>${folder}</div>`;
+      }).join('') + `</div>`;
     }
     if (m.dependencies?.length) {
       html += `<div class="mt-3"><span class="text-deep-400 block mb-1 uppercase tracking-wider text-[10px]">Dependencies (${m.dependencies.length})</span>`;
@@ -1742,6 +1786,31 @@
             <span class="text-deep-400 text-[10px] uppercase tracking-wider">Authors <span class="text-deep-400">(comma-separated)</span></span>
             <input bind:value={manifestDraft.authors} class="input w-full text-xs" placeholder="Jane Doe, DevCo" />
           </label>
+          <div class="space-y-1">
+            <div class="flex items-center justify-between">
+              <span class="text-deep-400 text-[10px] uppercase tracking-wider">Subpacks</span>
+              <button onclick={addSubpack}
+                      class="btn-ghost text-[10px] px-2 py-0.5 rounded border border-deep-600/30 flex items-center gap-1">
+                + Add
+              </button>
+            </div>
+            {#if manifestDraft.subpacks.length === 0}
+              <p class="text-[10px] text-deep-400">None — resolution tiers like 128x/64x live here.</p>
+            {/if}
+            {#each manifestDraft.subpacks as sub, i}
+              <div class="flex gap-1.5 items-center">
+                <input bind:value={sub.name} class="input flex-1 text-xs" placeholder="Name (128x)"
+                       aria-label="Subpack {i + 1} name" />
+                <input bind:value={sub.folder} class="input w-24 text-xs font-mono" placeholder="folder"
+                       aria-label="Subpack {i + 1} folder name" />
+                <input bind:value={sub.tier} type="number" min="0" class="input w-16 text-xs text-center" placeholder="tier"
+                       aria-label="Subpack {i + 1} memory tier" />
+                <button onclick={() => removeSubpack(i)}
+                        class="btn-ghost text-xs px-1.5 py-1 rounded border border-red-500/30 text-red-400 shrink-0"
+                        aria-label="Remove subpack {i + 1}">✕</button>
+              </div>
+            {/each}
+          </div>
           <p class="text-[10px] text-deep-400">Visual edits rewrite the JSON document; other fields (modules, dependencies, capabilities) are preserved as-is.</p>
         </div>
       {:else}
