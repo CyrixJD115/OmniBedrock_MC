@@ -1728,8 +1728,45 @@ async fn addon_upload_icon_delete_round_trip() {
     assert_eq!(icon_response.status(), StatusCode::OK);
     assert_eq!(icon_response.headers()["content-type"], "image/png");
 
-    // Delete removes the directory and strips the UUID from the world order file.
+    // Saving the order pins the installed manifest's version — BDS resolves
+    // packs by (uuid, exact version), so a stale or placeholder [1,0,0]
+    // entry must be corrected, while packs absent from disk keep whatever
+    // the file already declared.
     let world_dir = dir.path().join("bedrock/worlds/demo");
+    tokio::fs::write(
+        world_dir.join("world_behavior_packs.json"),
+        r#"[{"pack_id":"aaaaaaaa-1111-1111-1111-111111111111","version":[1,0,0]},{"pack_id":"cccccccc-9999-9999-9999-999999999999","version":[3,1,4]}]"#,
+    )
+    .await
+    .unwrap();
+    let (status, body) = call(
+        &app,
+        "PUT",
+        "/api/v1/addons/order/demo/behavior_packs",
+        Some(&token),
+        json!({"uuids": [
+            "aaaaaaaa-1111-1111-1111-111111111111",
+            "cccccccc-9999-9999-9999-999999999999"
+        ]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let order: Value = serde_json::from_str(
+        &tokio::fs::read_to_string(world_dir.join("world_behavior_packs.json"))
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let entries = order.as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(
+        entries[0]["pack_id"],
+        "aaaaaaaa-1111-1111-1111-111111111111"
+    );
+    assert_eq!(entries[0]["version"], json!([2, 0, 0]));
+    assert_eq!(entries[1]["version"], json!([3, 1, 4]));
+
+    // Delete removes the directory and strips the UUID from the world order file.
     tokio::fs::write(
         world_dir.join("world_behavior_packs.json"),
         r#"[{"pack_id":"aaaaaaaa-1111-1111-1111-111111111111","version":[2,0,0]},{"pack_id":"keepme"}]"#,

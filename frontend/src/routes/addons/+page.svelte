@@ -418,9 +418,15 @@
 
   // Addons are instance-scoped: reload worlds, packs, and orders whenever the
   // active instance changes. The first run also covers the initial load once
-  // the layout boot has resolved the instance list.
+  // the layout boot has resolved the instance list. Keyed on the instance id:
+  // the layout's periodic list refresh re-emits activeInstance with a fresh
+  // object even when the selection is unchanged, and re-running the whole
+  // load on every emission would visibly reload the page and bounce the tabs.
+  let loadedInstanceId: string | null = null;
   $effect(() => {
-    void $activeInstance?.id;
+    const id = $activeInstance?.id ?? 'default';
+    if (id === loadedInstanceId) return;
+    loadedInstanceId = id;
     // In-flight debounced order edits belong to the previous instance; the
     // scoped client already points at the new one, so drop them instead of
     // flushing them into the wrong instance.

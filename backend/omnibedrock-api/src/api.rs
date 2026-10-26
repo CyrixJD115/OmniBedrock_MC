@@ -1874,6 +1874,11 @@ async fn addons(
                 let uuids = b["uuids"]
                     .as_array()
                     .ok_or_else(|| ApiError::bad("uuids must be an array"))?;
+                let world_dir = safe_path(&root, &PathBuf::from(world)).await?;
+                let installed =
+                    tokio::task::spawn_blocking(move || addons::manifest_versions(&world_dir))
+                        .await
+                        .unwrap_or_default();
                 let mut order = Vec::new();
                 let previous = tokio::fs::read_to_string(&path)
                     .await
@@ -1883,13 +1888,20 @@ async fn addons(
                 for uid in uuids {
                     let uid = uid.as_str().ok_or_else(|| ApiError::bad("Invalid UUID"))?;
                     uuid::Uuid::parse_str(uid).map_err(|_| ApiError::bad("Invalid UUID"))?;
-                    order.push(
-                        previous
-                            .iter()
-                            .find(|v| v["pack_id"] == uid)
-                            .cloned()
-                            .unwrap_or(json!({"pack_id":uid,"version":[1,0,0]})),
-                    );
+                    // BDS resolves packs by (uuid, exact version), so entries
+                    // must carry the installed manifest's version — a fresh
+                    // or stale entry would be silently dropped at boot.
+                    let mut entry = previous
+                        .iter()
+                        .find(|v| v["pack_id"] == uid)
+                        .cloned()
+                        .unwrap_or(json!({"pack_id": uid}));
+                    if let Some(version) = installed.get(uid) {
+                        entry["version"] = json!(version);
+                    } else if entry.get("version").is_none() {
+                        entry["version"] = json!([1, 0, 0]);
+                    }
+                    order.push(entry);
                 }
                 atomic_write(
                     &path,

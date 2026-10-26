@@ -532,8 +532,14 @@ fn installed_world_packs(world_dir: &Path) -> HashMap<String, WorldPack> {
     packs
 }
 
-/// Referenced pack uuids in discovery order: pack-order files first, then the
-/// dependencies every installed manifest declares.
+/// Installed pack uuid → declared header version. Order files must pin this
+/// exact version or BDS drops the pack ("was not found and was ignored").
+pub fn manifest_versions(world_dir: &Path) -> HashMap<String, Vec<u64>> {
+    installed_world_packs(world_dir)
+        .into_iter()
+        .map(|(uuid, pack)| (uuid, pack.version))
+        .collect()
+}
 fn referenced_uuids(world_dir: &Path, packs: &HashMap<String, WorldPack>) -> Vec<String> {
     let mut referenced: Vec<String> = Vec::new();
     let push = |uuid: &str, referenced: &mut Vec<String>| {

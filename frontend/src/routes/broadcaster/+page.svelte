@@ -303,9 +303,15 @@
   });
 
   // Every broadcaster is instance-scoped: switching instances swaps the
-  // console stream, status, device codes, config, and screenshots.
+  // console stream, status, device codes, config, and screenshots. Keyed on
+  // the instance id — the layout's periodic list refresh re-emits
+  // activeInstance with a fresh object even when the selection is unchanged,
+  // and reloading on every emission would reset the page while you use it.
+  let loadedInstanceId: string | null = null;
   $effect(() => {
-    void $activeInstance?.id;
+    const id = $activeInstance?.id ?? 'default';
+    if (id === loadedInstanceId) return;
+    loadedInstanceId = id;
     void loadAll();
   });
 
