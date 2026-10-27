@@ -21,7 +21,7 @@ use omnibedrock_server::{
     backups::{BackupRequest, Hook, Hooks},
     bds,
     curseforge::{self, CLASSES, CurseForge},
-    endstone::Endstone,
+    endstone::{self, Endstone},
     instances::{
         AccessEntry, DEFAULT_INSTANCE, Deployment, DockerConfig, Instance, InstanceManager,
         InstanceRecord, ResourcePolicy,
@@ -699,6 +699,10 @@ async fn dispatch_authenticated(
         ["server", "backend", "versions"] if read => {
             s.require_for(u, "SERVER_VIEW", svc).await?;
             serde_json::to_value(s.bds.registry().await?).map_err(anyhow::Error::from)?
+        }
+        ["server", "backend", "endstone", "versions"] if read => {
+            s.require_for(u, "SERVER_VIEW", svc).await?;
+            serde_json::to_value(s.endstone.registry().await?).map_err(anyhow::Error::from)?
         }
         ["server", "backend", "install"] if create => {
             s.require_for(u, "SERVER_MANAGE", svc).await?;
@@ -2226,6 +2230,15 @@ async fn backend_status(svc: &Arc<Instance>) -> Value {
         omnibedrock_server::endstone::endstone_binary(&svc.config).exists();
     let endstone_install =
         serde_json::to_value(&*svc.endstone.state.borrow()).unwrap_or(Value::Null);
+    // Update availability compares the marker against the cached PyPI
+    // registry; a stale-or-never-fetched cache just reports "unknown".
+    let endstone_latest = svc.endstone.cached_registry().map(|r| r.latest);
+    let endstone_update_available = match (&endstone_installed, &endstone_latest) {
+        (Some(installed), Some(latest)) => installed["endstone_version"]
+            .as_str()
+            .is_some_and(|v| v != latest),
+        _ => false,
+    };
     json!({
         "backend": settings.backend.as_str(),
         "vanilla_version": settings.vanilla_version,
@@ -2238,6 +2251,8 @@ async fn backend_status(svc: &Arc<Instance>) -> Value {
             "installed": endstone_installed,
             "binary_present": endstone_binary_present,
             "install": endstone_install,
+            "latest": endstone_latest,
+            "update_available": endstone_update_available,
         },
     })
 }
@@ -2378,6 +2393,14 @@ async fn ensure_endstone_toolchain(svc: &Arc<Instance>) -> Result<()> {
 async fn install_endstone(svc: &Arc<Instance>, version: Option<String>) -> Result<Value> {
     if let Some(v) = &version {
         component(v)?;
+        // Same guard as the BDS installer: reject versions PyPI never
+        // published instead of failing later inside uv.
+        let registry = svc.endstone.registry().await?;
+        if !endstone::version_exists(&registry, v) {
+            return Err(ApiError::bad(format!(
+                "Endstone version '{v}' is not in the release registry"
+            )));
+        }
     }
     if svc.endstone.state.borrow().phase != "idle" {
         return Err(ApiError::conflict(

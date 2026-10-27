@@ -13,9 +13,11 @@
 use crate::server::Console;
 use anyhow::Context;
 use omnibedrock_core::config::Config;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -29,6 +31,56 @@ const UV_RELEASE_BASE: &str = "https://releases.astral.sh/github/uv/releases/dow
 /// Endstone requires Python >=3.11; 3.12 is the pinned managed interpreter.
 const PYTHON_VERSION: &str = "3.12";
 const PROCESS_TIMEOUT: Duration = Duration::from_secs(600);
+/// Endstone's own release registry: the PyPI JSON API. `info.version` is the
+/// latest stable release; `releases` keys enumerate every published version.
+const PYPI_JSON: &str = "https://pypi.org/pypi/endstone/json";
+const REGISTRY_TTL: Duration = Duration::from_secs(600);
+
+/// The available Endstone versions, mirroring `bds::Registry`'s shape.
+#[derive(Clone, Debug, Serialize)]
+pub struct EndstoneRegistry {
+    pub latest: String,
+    /// Every published version, newest first.
+    pub versions: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct PypiProject {
+    info: PypiInfo,
+    #[serde(default)]
+    releases: HashMap<String, Value>,
+}
+#[derive(Deserialize)]
+struct PypiInfo {
+    version: String,
+}
+
+/// Newest first, semver-flavored: numeric components compare numerically
+/// (`1.2.10` > `1.2.9`), a tagged component (`4rc1`, `4.post1`) sorts just
+/// below its plain release and above lower numbers (`0.6.4rc1` > `0.6.3`),
+/// and non-numeric components sort below all numeric ones. `latest` always
+/// comes straight from PyPI, so this only orders the display list.
+fn version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    fn key(version: &str) -> Vec<(u8, u64, u8, String)> {
+        version
+            .split(['.', '-', '+'])
+            .map(|part| {
+                let digits: String = part.chars().take_while(char::is_ascii_digit).collect();
+                let tag = &part[digits.len()..];
+                match (digits.is_empty(), tag.is_empty()) {
+                    // purely non-numeric ("dev"): below every numeric component
+                    (true, _) => (0, 0, 1, (*tag).to_string()),
+                    // "12": plain numeric
+                    (false, true) => (1, digits.parse().unwrap_or(0), 1, String::new()),
+                    // "4rc1" / "4.post1": numeric with a pre/post-release tag,
+                    // which sorts just below the plain release
+                    (false, false) => (1, digits.parse().unwrap_or(0), 0, (*tag).to_string()),
+                }
+            })
+            .collect()
+    }
+    key(b).cmp(&key(a))
+}
 
 fn uv_asset() -> (&'static str, &'static str) {
     if cfg!(windows) {
@@ -203,6 +255,8 @@ enum Control {
 pub struct Endstone {
     control: mpsc::Sender<Control>,
     pub state: watch::Receiver<crate::bds::InstallState>,
+    http: reqwest::Client,
+    registry: Arc<tokio::sync::RwLock<Option<(std::time::Instant, EndstoneRegistry)>>>,
     config: Arc<Config>,
 }
 
@@ -222,6 +276,8 @@ impl Endstone {
         let manager = Self {
             control,
             state,
+            http: http.clone(),
+            registry: Arc::new(tokio::sync::RwLock::new(None)),
             config,
         };
         tokio::spawn(worker(
@@ -229,6 +285,7 @@ impl Endstone {
             control_rx,
             state_tx,
             http,
+            manager.registry.clone(),
             console,
             shutdown,
         ));
@@ -242,6 +299,25 @@ impl Endstone {
             .await
             .ok()?;
         serde_json::from_str(&text).ok()
+    }
+    /// The Endstone version recorded in the install marker, if any.
+    pub async fn installed_version(&self) -> Option<String> {
+        let installed = self.installed().await?;
+        installed["endstone_version"].as_str().map(str::to_string)
+    }
+    /// Fetch the Endstone release registry (cached for `REGISTRY_TTL`).
+    pub async fn registry(&self) -> anyhow::Result<EndstoneRegistry> {
+        fetch_registry_cached(&self.http, &self.registry).await
+    }
+    /// The cached registry without touching the network; `None` until the
+    /// first successful fetch. Keeps hot paths (status polling) offline.
+    pub fn cached_registry(&self) -> Option<EndstoneRegistry> {
+        self.registry
+            .try_read()
+            .ok()?
+            .as_ref()
+            .filter(|(at, _)| at.elapsed() < REGISTRY_TTL)
+            .map(|(_, r)| r.clone())
     }
     /// Queue a toolchain installation; the reply resolves when it finishes.
     pub async fn install(
@@ -260,11 +336,17 @@ impl Endstone {
     }
 }
 
+/// Validate a requested version against the registry.
+pub fn version_exists(registry: &EndstoneRegistry, version: &str) -> bool {
+    registry.versions.iter().any(|v| v == version)
+}
+
 async fn worker(
     config: Arc<Config>,
     mut control: mpsc::Receiver<Control>,
     state: watch::Sender<crate::bds::InstallState>,
     http: reqwest::Client,
+    registry: Arc<tokio::sync::RwLock<Option<(std::time::Instant, EndstoneRegistry)>>>,
     console: Console,
     shutdown: tokio_util::sync::CancellationToken,
 ) {
@@ -288,20 +370,13 @@ async fn worker(
                 // Every instance shares one toolchain under <data_dir>/tools;
                 // serialize installs panel-wide, then re-check in case another
                 // instance's install just finished the same work.
+                // run_install resolves "latest" through the shared registry
+                // cache and no-ops when the toolchain is already current, so
+                // update requests and start-bootstraps are safe to queue here.
                 static TOOLCHAIN: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
                 let _guard = TOOLCHAIN.lock().await;
-                if version.is_none()
-                    && tokio::task::spawn_blocking({
-                        let config = config.clone();
-                        move || resolve_launch(&config).is_some()
-                    })
-                    .await
-                    .unwrap_or(false)
-                {
-                    let _ = reply.send(Ok("Endstone toolchain already installed".into()));
-                    continue;
-                }
-                let result = run_install(&config, &state, &http, &console, version).await;
+                let result =
+                    run_install(&config, &state, &http, &registry, &console, version).await;
                 state.send_modify(|s| {
                     s.phase = "idle".into();
                     s.progress = None;
@@ -312,23 +387,60 @@ async fn worker(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 async fn run_install(
     config: &Config,
     state: &watch::Sender<crate::bds::InstallState>,
     http: &reqwest::Client,
+    registry_cache: &tokio::sync::RwLock<Option<(std::time::Instant, EndstoneRegistry)>>,
     console: &Console,
     version: Option<String>,
 ) -> anyhow::Result<String> {
-    // A versionless install on a valid toolchain is a no-op: reuse it instead
-    // of re-downloading and recreating the venv. Explicit version installs
-    // (and repairs after a broken install) always run.
+    // Resolve the target release up front: a versionless install means
+    // "latest", resolved through the PyPI registry exactly like the BDS
+    // updater resolves "latest" through its version registry. When the
+    // registry is unreachable, fall back to letting pip pick the newest
+    // release it can see rather than failing the whole install.
+    let resolved: Option<String> = match &version {
+        Some(v) => Some(v.clone()),
+        None => match fetch_registry_cached(http, registry_cache).await {
+            Ok(registry) => Some(registry.latest),
+            Err(e) => {
+                console
+                    .publish(
+                        format!("[LOCAL] Endstone: {e:#} — pip will pick the newest release"),
+                        "panel",
+                        false,
+                    )
+                    .await;
+                None
+            }
+        },
+    };
+    let spec = match &resolved {
+        Some(v) => format!("endstone=={v}"),
+        None => "endstone".to_string(),
+    };
+
+    let installed_version = read_marker_version(config).await;
+    let marker_present = tokio::fs::try_exists(Endstone::installed_marker(config))
+        .await
+        .unwrap_or(false);
+    // A versionless install that is already at the resolved latest is a
+    // no-op — this is the update check. Without a resolved version (registry
+    // down) keep the old "existing toolchain" skip so routine starts never
+    // reinstall just because PyPI was briefly unreachable.
     if version.is_none()
-        && tokio::fs::try_exists(endstone_binary(config))
-            .await
-            .unwrap_or(false)
-        && tokio::fs::try_exists(Endstone::installed_marker(config))
-            .await
-            .unwrap_or(false)
+        && match (&resolved, &installed_version) {
+            (Some(latest), Some(installed)) => installed == latest,
+            (None, _) => {
+                marker_present
+                    && tokio::fs::try_exists(endstone_binary(config))
+                        .await
+                        .unwrap_or(false)
+            }
+            (Some(_), None) => false,
+        }
     {
         let summary = tokio::fs::read_to_string(Endstone::installed_marker(config))
             .await
@@ -343,89 +455,119 @@ async fn run_install(
                 )
             })
             .unwrap_or_else(|| "existing toolchain".to_string());
-        let message =
-            format!("Endstone toolchain already installed ({summary}) — skipping reinstall");
+        let already_latest = matches!((&resolved, &installed_version),
+            (Some(l), Some(i)) if i == l);
+        let message = if already_latest {
+            format!("Endstone toolchain already at latest ({summary}) — nothing to update")
+        } else {
+            format!("Endstone toolchain already installed ({summary}) — skipping reinstall")
+        };
         console
             .publish(format!("[LOCAL] {message}"), "panel", false)
             .await;
         return Ok(message);
     }
-    state.send_modify(|s| {
-        s.phase = "uv".into();
-        s.version = version.clone();
-        s.detail = None;
-        s.progress = None;
-    });
-    let uv = ensure_uv(config, http, state, console).await?;
 
-    state.send_modify(|s| {
-        s.phase = "python".into();
-        s.progress = None;
-    });
-    console
-        .publish(
-            format!("[LOCAL] Endstone: installing managed CPython {PYTHON_VERSION}"),
-            "panel",
-            false,
-        )
-        .await;
-    run_uv(
-        config,
-        &uv,
-        &["python", "install", PYTHON_VERSION],
-        "python install",
-    )
-    .await?;
-
-    state.send_modify(|s| {
-        s.phase = "venv".into();
-        s.progress = None;
-    });
+    // The versionless "update to latest" upgrades the package inside the
+    // existing venv when it still holds a working `endstone` executable;
+    // explicit version installs keep the old full-recreate semantics (that is
+    // the repair path after a broken venv). uv and the managed CPython only
+    // need provisioning on the bootstrap path.
     let venv = venv_dir(config);
-    console
-        .publish(
-            format!(
-                "[LOCAL] Endstone: creating virtualenv at {}",
-                venv.display()
-            ),
-            "panel",
-            false,
-        )
-        .await;
-    run_uv(
-        config,
-        &uv,
-        &[
-            "venv",
-            venv.to_string_lossy().as_ref(),
-            "--python",
-            PYTHON_VERSION,
-            "--clear",
-        ],
-        "create venv",
-    )
-    .await?;
-
-    state.send_modify(|s| {
-        s.phase = "endstone".into();
-        s.progress = None;
-    });
-    let spec = match &version {
-        Some(v) => format!("endstone=={v}"),
-        None => "endstone".to_string(),
-    };
-    console
-        .publish(
-            format!("[LOCAL] Endstone: installing {spec} (prebuilt wheel)"),
-            "panel",
-            false,
-        )
-        .await;
     let venv_python = venv.join(if cfg!(windows) {
         "Scripts\\python.exe"
     } else {
         "bin/python"
     });
+    let in_place = version.is_none()
+        && tokio::fs::try_exists(endstone_binary(config))
+            .await
+            .unwrap_or(false);
+
+    state.send_modify(|s| {
+        s.phase = "uv".into();
+        s.version = resolved.clone();
+        s.detail = None;
+        s.progress = None;
+    });
+    let uv = ensure_uv(config, http, state, console).await?;
+
+    if in_place {
+        state.send_modify(|s| {
+            s.phase = "endstone".into();
+            s.progress = None;
+        });
+        console
+            .publish(
+                format!(
+                    "[LOCAL] Endstone: upgrading venv at {} ({})",
+                    venv.display(),
+                    spec
+                ),
+                "panel",
+                false,
+            )
+            .await;
+    } else {
+        state.send_modify(|s| {
+            s.phase = "python".into();
+            s.progress = None;
+        });
+        console
+            .publish(
+                format!("[LOCAL] Endstone: installing managed CPython {PYTHON_VERSION}"),
+                "panel",
+                false,
+            )
+            .await;
+        run_uv(
+            config,
+            &uv,
+            &["python", "install", PYTHON_VERSION],
+            "python install",
+        )
+        .await?;
+
+        state.send_modify(|s| {
+            s.phase = "venv".into();
+            s.progress = None;
+        });
+        console
+            .publish(
+                format!(
+                    "[LOCAL] Endstone: creating virtualenv at {}",
+                    venv.display()
+                ),
+                "panel",
+                false,
+            )
+            .await;
+        run_uv(
+            config,
+            &uv,
+            &[
+                "venv",
+                venv.to_string_lossy().as_ref(),
+                "--python",
+                PYTHON_VERSION,
+                "--clear",
+            ],
+            "create venv",
+        )
+        .await?;
+
+        state.send_modify(|s| {
+            s.phase = "endstone".into();
+            s.progress = None;
+        });
+        console
+            .publish(
+                format!("[LOCAL] Endstone: installing {spec} (prebuilt wheel)"),
+                "panel",
+                false,
+            )
+            .await;
+    }
     run_uv(
         config,
         &uv,
@@ -440,7 +582,7 @@ async fn run_install(
         "pip install endstone",
     )
     .await?;
-    let installed_version = installed_endstone_version(config, &uv, &venv_python).await;
+    let installed = installed_endstone_version(config, &uv, &venv_python).await;
 
     // Drop pre-relocation toolchain pieces if the runtime moved to a
     // space-free location; they can never launch correctly there.
@@ -454,13 +596,21 @@ async fn run_install(
         }
     }
 
-    let marker = json!({
+    let mut marker = json!({
         "uv_version": UV_VERSION,
         "python_version": PYTHON_VERSION,
-        "endstone_version": installed_version,
+        "endstone_version": installed,
         "binary": endstone_binary(config),
         "installed_at": crate::server::now(),
     });
+    if let Some(previous) = installed_version
+        && Some(&previous) != installed.as_ref()
+    {
+        marker["previous_version"] = json!(previous);
+    }
+    if let Some(resolved) = &resolved {
+        marker["requested"] = json!(resolved);
+    }
     omnibedrock_core::files::atomic_write(
         &Endstone::installed_marker(config),
         serde_json::to_vec(&marker)?.as_slice(),
@@ -468,12 +618,58 @@ async fn run_install(
     .await?;
     let message = format!(
         "Endstone toolchain ready (endstone {}, CPython {PYTHON_VERSION}, uv {UV_VERSION})",
-        installed_version.as_deref().unwrap_or("unknown")
+        installed.as_deref().unwrap_or("unknown")
     );
     console
         .publish(format!("[LOCAL] {message}"), "panel", false)
         .await;
     Ok(message)
+}
+
+/// Fetch the Endstone release registry with a bare client, honoring the
+/// shared TTL cache so installs, status reads, and the versions endpoint all
+/// see the same snapshot.
+async fn fetch_registry_cached(
+    http: &reqwest::Client,
+    cache: &tokio::sync::RwLock<Option<(std::time::Instant, EndstoneRegistry)>>,
+) -> anyhow::Result<EndstoneRegistry> {
+    if let Some((at, cached)) = cache.read().await.clone()
+        && at.elapsed() < REGISTRY_TTL
+    {
+        return Ok(cached);
+    }
+    let registry = fetch_registry(http).await?;
+    *cache.write().await = Some((std::time::Instant::now(), registry.clone()));
+    Ok(registry)
+}
+
+/// Fetch the Endstone release registry with a bare client.
+async fn fetch_registry(http: &reqwest::Client) -> anyhow::Result<EndstoneRegistry> {
+    let text = http
+        .get(PYPI_JSON)
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| anyhow::anyhow!("fetch Endstone release registry: {e}"))?
+        .text()
+        .await?;
+    let project: PypiProject =
+        serde_json::from_str(&text).context("parse Endstone release registry")?;
+    let mut versions: Vec<String> = project.releases.into_keys().collect();
+    versions.sort_by(|a, b| version_cmp(a, b));
+    Ok(EndstoneRegistry {
+        latest: project.info.version,
+        versions,
+    })
+}
+
+/// The `endstone_version` recorded in the toolchain marker, if any.
+async fn read_marker_version(config: &Config) -> Option<String> {
+    let text = tokio::fs::read_to_string(Endstone::installed_marker(config))
+        .await
+        .ok()?;
+    let marker: Value = serde_json::from_str(&text).ok()?;
+    marker["endstone_version"].as_str().map(str::to_string)
 }
 
 /// Download and verify the pinned uv binary unless it is already present.
@@ -710,5 +906,50 @@ mod tests {
             assert_eq!(dir, dir, "paths must be deterministic");
         }
         assert_eq!(venv_dir(&config), venv_dir(&config));
+    }
+
+    #[test]
+    fn versions_sort_newest_first() {
+        let mut versions = vec![
+            "0.5.10",
+            "0.5.9",
+            "1.0.0",
+            "0.10.0",
+            "0.9.1",
+            "1.0.0rc1",
+            "0.5.9.post1",
+        ];
+        versions.sort_by(|a, b| version_cmp(a, b));
+        // rc1 loses to its own release but beats older versions; a `.post1`
+        // release sorts just above its base (PEP 440).
+        assert_eq!(
+            versions,
+            vec![
+                "1.0.0",
+                "1.0.0rc1",
+                "0.10.0",
+                "0.9.1",
+                "0.5.10",
+                "0.5.9.post1",
+                "0.5.9"
+            ]
+        );
+    }
+
+    #[test]
+    fn registry_parses_pypi_shape() {
+        let project: PypiProject = serde_json::from_str(
+            r#"{
+                "info": {"version": "0.6.4"},
+                "releases": {
+                    "0.6.4": [], "0.6.3": [], "0.6.10": [], "0.6.4rc1": []
+                }
+            }"#,
+        )
+        .expect("parse PyPI JSON");
+        let mut versions: Vec<String> = project.releases.into_keys().collect();
+        versions.sort_by(|a, b| version_cmp(a, b));
+        assert_eq!(project.info.version, "0.6.4");
+        assert_eq!(versions, vec!["0.6.10", "0.6.4", "0.6.4rc1", "0.6.3"]);
     }
 }

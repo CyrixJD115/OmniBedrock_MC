@@ -1,4 +1,4 @@
-import type { ServerStatus, ServerActionResponse, Backup, AddonList, Addon, Player, PropertyEntry, IniFile, WorldInfo, BackupSettings, SchedulerConfig, CommandEntry, IncludeItem, FolderEntry, BackendInfo, VersionRegistry, BroadcasterStatus, CfProject, StoreSearchResponse, StoreMeta, StoreFilesResponse, StoreInstallResponse, Instance, HostInfo } from '$types/index';
+import type { ServerStatus, ServerActionResponse, Backup, AddonList, Addon, Player, PropertyEntry, IniFile, WorldInfo, BackupSettings, SchedulerConfig, CommandEntry, IncludeItem, FolderEntry, BackendInfo, VersionRegistry, EndstoneRegistry, BroadcasterStatus, CfProject, StoreSearchResponse, StoreMeta, StoreFilesResponse, StoreInstallResponse, Instance, HostInfo } from '$types/index';
 
 const API_BASE = '/api/v1';
 let authToken = '';
@@ -129,6 +129,7 @@ export const api = {
   // Server backend (Endstone / Vanilla BDS)
   getBackendInfo: () => request<BackendInfo>('/server/backend'),
   getVersionRegistry: () => request<VersionRegistry>('/server/backend/versions'),
+  getEndstoneVersions: () => request<EndstoneRegistry>('/server/backend/endstone/versions'),
   installBds: (version: string) =>
     request<{ success: boolean; message: string }>('/server/backend/install', {
       method: 'POST',

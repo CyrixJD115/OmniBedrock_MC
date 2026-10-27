@@ -3,7 +3,7 @@
   import { api } from '$lib/api/client';
   import { addToast } from '$stores/toast';
   import { userPermissions } from '$stores/auth';
-  import type { BackendInfo, VersionRegistry } from '$types/index';
+  import type { BackendInfo, VersionRegistry, EndstoneRegistry } from '$types/index';
   import { Settings as SettingsIcon, Server, Download, RefreshCw, Check, Save, ArrowRightLeft, LockKeyhole, LockOpen, Store as StoreIcon, Palette, Sun, Moon, Monitor } from '@lucide/svelte';
   import { setToken } from '$lib/api/client';
   import { currentUser, authToken as authTokenStore } from '$stores/auth';
@@ -13,8 +13,10 @@
   let s = $state<Record<string, unknown>>({});
   let backend = $state<BackendInfo | null>(null);
   let registry = $state<VersionRegistry | null>(null);
+  let endstoneRegistry = $state<EndstoneRegistry | null>(null);
   let channel = $state<'release' | 'preview'>('release');
   let selectedVersion = $state('latest');
+  let selectedEndstone = $state('latest');
   let busy = $state('');
   let serverSettings = $state<Record<string, unknown>>({});
   let panel = $state<{ login_enabled: boolean; default_credentials: boolean } | null>(null);
@@ -35,6 +37,7 @@
   const updateAvailable = $derived(
     backend?.installed && backend.latest && backend.installed!.version !== backend.latest
   );
+  const endstoneUpdateAvailable = $derived(backend?.endstone.update_available ?? false);
 
   async function refreshBackend() {
     try { backend = await api.getBackendInfo(); } catch { /* transient */ }
@@ -46,11 +49,16 @@
     }
   }
 
+  async function loadEndstoneRegistry() {
+    try { endstoneRegistry = await api.getEndstoneVersions(); } catch { /* dropdown stays on 'latest' */ }
+  }
+
   onMount(async () => {
     try { s = await api.getSettings(); } catch { /* silent */ }
     try { panel = await api.getPanelSettings(); } catch { /* silent */ }
     try { cfSettings = await api.getCurseForgeSettings(); } catch { /* silent */ }
     await loadRegistry();
+    void loadEndstoneRegistry();
     poll = setInterval(async () => {
       await refreshBackend();
       if (installing && backend) {
@@ -92,7 +100,8 @@
     if (!canManage || anyInstalling) return;
     busy = 'endstone';
     try {
-      const r = await api.installEndstone();
+      const version = selectedEndstone === 'latest' ? undefined : selectedEndstone;
+      const r = await api.installEndstone(version);
       addToast(r.message || 'Install started', 'success');
       await refreshBackend();
     } catch (e: any) { addToast(`Install failed: ${e.message}`, 'error'); }
@@ -337,22 +346,36 @@
               <span class="text-[10px] text-green-400 font-mono">
                 toolchain ✓ endstone {backend.endstone.installed.endstone_version ?? '?'} · py {backend.endstone.installed.python_version}
               </span>
-              <button onclick={installEndstoneToolchain} disabled={!!busy}
-                      class="btn-primary flex items-center gap-1.5 text-xs !bg-teal-600 hover:!bg-teal-500">
-                <Download size={13} /> Update Endstone toolchain
-              </button>
+              {#if backend.endstone.latest}
+                <span class="text-[10px] text-deep-400 font-mono">latest {backend.endstone.latest}</span>
+              {/if}
+              {#if endstoneUpdateAvailable}
+                <span class="text-[10px] text-yellow-400 uppercase tracking-wider">update available</span>
+              {/if}
             {:else}
               <span class="text-[10px] text-yellow-400">Endstone toolchain not installed</span>
-              <button onclick={installEndstoneToolchain} disabled={!!busy}
-                      class="btn-primary flex items-center gap-1.5 text-xs !bg-teal-600 hover:!bg-teal-500"
-                      title="Downloads uv, a managed CPython, and Endstone into the panel data dir — no system Python required">
-                <Download size={13} /> Install Endstone toolchain
-              </button>
             {/if}
+            <select bind:value={selectedEndstone} class="input text-xs w-auto font-mono">
+              <option value="latest">latest{#if endstoneRegistry} ({endstoneRegistry.latest}){/if}</option>
+              {#each endstoneRegistry?.versions ?? [] as v (v)}
+                <option value={v}>{v}</option>
+              {/each}
+            </select>
+            <button onclick={installEndstoneToolchain} disabled={!!busy}
+                    class="btn-primary flex items-center gap-1.5 text-xs !bg-teal-600 hover:!bg-teal-500"
+                    title="Downloads uv, a managed CPython, and Endstone into the panel data dir — no system Python required">
+              <Download size={13} />
+              {backend.endstone.installed ? 'Install / update' : 'Install Endstone toolchain'}
+            </button>
+            <button onclick={loadEndstoneRegistry} class="btn-ghost p-2" title="Refresh Endstone version list">
+              <RefreshCw size={13} />
+            </button>
           </div>
           <p class="text-[10px] text-deep-400 mt-2">
             The toolchain (uv + managed CPython + Endstone) lives in the panel data dir — no system Python needed.
             Starting without it also works: the panel installs it automatically first.
+            Versions come from PyPI; <span class="font-mono">latest</span> updates the existing venv in place when a
+            newer release exists, while a pinned version rebuilds the venv from scratch (also the repair path).
           </p>
         {/if}
       {/if}

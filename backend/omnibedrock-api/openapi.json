@@ -151,10 +151,18 @@
     "/server/backend/endstone/install": {
       "post": {
         "tags": ["server"],
-        "summary": "Bootstrap the Endstone toolchain (uv → CPython → venv)",
+        "summary": "Bootstrap or update the Endstone toolchain (uv → CPython → venv; 'latest' updates the venv in place)",
         "x-permission": "SERVER_MANAGE",
         "requestBody": { "x-body": { "version": "string?" } },
         "responses": { "200": { "description": "{success, message}" } }
+      }
+    },
+    "/server/backend/endstone/versions": {
+      "get": {
+        "tags": ["server"],
+        "summary": "Available Endstone versions from PyPI (latest stable + all releases)",
+        "x-permission": "SERVER_VIEW",
+        "responses": { "200": { "description": "Version list" } }
       }
     },
     "/server/backend/switch": {

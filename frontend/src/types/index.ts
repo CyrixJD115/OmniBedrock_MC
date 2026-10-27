@@ -238,6 +238,16 @@ export interface EndstoneToolchain {
   } | null;
   binary_present: boolean;
   install: BdsInstallState;
+  /** Newest stable release per PyPI; null until the first registry fetch. */
+  latest?: string | null;
+  /** Installed endstone version differs from the registry latest. */
+  update_available?: boolean;
+}
+
+export interface EndstoneRegistry {
+  latest: string;
+  /** Every published version, newest first. */
+  versions: string[];
 }
 
 export interface BackendInfo {
