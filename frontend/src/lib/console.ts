@@ -1,4 +1,6 @@
 import { AnsiUp } from 'ansi_up';
+import { writable } from 'svelte/store';
+import type { ConsoleLine } from '$types/index';
 
 const ansi = new AnsiUp();
 
@@ -55,4 +57,77 @@ export function highlightMatches(html: string, query: string, useRegex: boolean)
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// ─── Console feeds ──────────────────────────────────────────────────────────
+
+/** A console line with a client-assigned id that never changes. */
+export type FeedLine = ConsoleLine & { id: number };
+
+/**
+ * A capped console line store with stable per-line keys.
+ *
+ * Keys matter: trimming an index-keyed array re-keys every surviving line, so
+ * a capped console rebuilt its whole DOM on every line once it hit the cap —
+ * which is exactly when it is busiest. Stable ids keep `{#each}` updates to
+ * one append (plus one drop at the cap) regardless of volume. Lines are also
+ * batched per animation frame, so a burst of output costs one store update,
+ * not one per line.
+ */
+export interface ConsoleFeed {
+  subscribe: (run: (lines: FeedLine[]) => void) => () => void;
+  push: (text: string, level?: ConsoleLine['level'], extra?: Partial<ConsoleLine>) => void;
+  clear: () => void;
+}
+
+export function createConsoleFeed(max: number): ConsoleFeed {
+  let uid = 0;
+  const pending: FeedLine[] = [];
+  let scheduled = false;
+  const store = writable<FeedLine[]>([]);
+
+  function flush() {
+    scheduled = false;
+    if (pending.length === 0) return;
+    const batch = pending.splice(0);
+    store.update(lines => {
+      lines.push(...batch);
+      if (lines.length > max) lines.splice(0, lines.length - max);
+      return lines;
+    });
+  }
+
+  function push(text: string, level?: ConsoleLine['level'], extra?: Partial<ConsoleLine>) {
+    pending.push({
+      id: ++uid,
+      text,
+      level: level ?? detectLevel(text),
+      timestamp: Date.now() / 1000,
+      ...extra,
+    });
+    if (!scheduled) {
+      scheduled = true;
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(flush);
+      else queueMicrotask(flush);
+    }
+  }
+
+  function clear() {
+    pending.length = 0;
+    store.set([]);
+  }
+
+  return { subscribe: store.subscribe, push, clear };
+}
+
+// ─── Terminal scrolling ─────────────────────────────────────────────────────
+
+/** True when the element's viewport is within `threshold` px of its bottom. */
+export function nearBottom(el: HTMLElement, threshold = 48): boolean {
+  return el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+}
+
+/** Snap the element to its last line. Call after the DOM has updated. */
+export function stickToBottom(el: HTMLElement): void {
+  el.scrollTop = el.scrollHeight;
 }

@@ -1,5 +1,6 @@
 import { writable, derived } from 'svelte/store';
-import type { ServerStatus, ConsoleLine, Metrics, ErrorStat } from '$types/index';
+import type { ServerStatus, Metrics, ErrorStat } from '$types/index';
+import { createConsoleFeed } from '$lib/console';
 
 export const serverStatus = writable<ServerStatus>({
   status: 'stopped',
@@ -8,7 +9,9 @@ export const serverStatus = writable<ServerStatus>({
   version: null,
 });
 
-export const consoleLines = writable<ConsoleLine[]>([]);
+// Capped at 2000 lines with stable per-line keys and rAF batching — see
+// createConsoleFeed for why the cap no longer stalls the page.
+export const consoleLines = createConsoleFeed(2000);
 export const metrics = writable<Metrics | null>(null);
 export const errorStats = writable<ErrorStat[]>([]);
 

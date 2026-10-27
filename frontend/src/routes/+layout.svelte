@@ -69,8 +69,7 @@
     setToken('');
     instances.set([]);
     connectedInstances = '';
-    consoleBuffer.length = 0;
-    consoleLines.set([]);
+    consoleLines.clear();
     errorStats.set([]);
     metrics.set(null);
     currentUser.set(null as any);
@@ -164,8 +163,7 @@
   async function reconnectInstanceStreams() {
     for (const unsub of unsubs.splice(0)) unsub();
     wsManager.disconnectAll();
-    consoleBuffer.length = 0;
-    consoleLines.set([]);
+    consoleLines.clear();
     try {
       const status = await api.getServerStatus();
       serverStatus.set(status);
@@ -177,26 +175,9 @@
     if ($userPermissions.includes('SERVER_VIEW')) unsubs.push(wsManager.connect(`/api/v1/performance/ws?${query}`, onMetricsMessage));
   }
 
-  const consoleBuffer: ConsoleLine[] = [];
-  let flushPending = false;
-
-  function flushLines() {
-    flushPending = false;
-    if (consoleBuffer.length === 0) return;
-    const batch = consoleBuffer.splice(0);
-    consoleLines.update(lines => {
-        for (const item of batch) {
-          lines.push(item);
-        }
-        if (lines.length > 2000) lines.splice(0, lines.length - 2000);
-        return lines;
-    });
-  }
-
   function onConsoleMessage(data: Record<string, unknown>) {
     if (data.type === 'hello' && data.resumed === false) {
-      consoleBuffer.length = 0;
-      consoleLines.set([]);
+      consoleLines.clear();
     } else if (data.type === 'status') {
       serverStatus.update(status => ({ ...status, status: data.status as typeof status.status }));
     } else if (data.type === 'error_stats') {
@@ -205,13 +186,13 @@
       addToast(`Console history gap: events ${data.from}–${data.to} expired`, 'error');
     } else if (data.type === 'console') {
       const text = data.line as string;
-      consoleBuffer.push({ text, level: (data.level || detectLevel(text)) as ConsoleLine['level'], timestamp: data.timestamp as number,
-        sequence: data.sequence as number, stream_id: data.stream_id as string, source: data.source as ConsoleLine['source'], continued: data.continued as boolean });
-      if (consoleBuffer.length > 2000) consoleBuffer.splice(0, consoleBuffer.length - 2000);
-      if (!flushPending) {
-        flushPending = true;
-        requestAnimationFrame(flushLines);
-      }
+      consoleLines.push(text, (data.level || detectLevel(text)) as ConsoleLine['level'], {
+        timestamp: data.timestamp as number,
+        sequence: data.sequence as number,
+        stream_id: data.stream_id as string,
+        source: data.source as ConsoleLine['source'],
+        continued: data.continued as boolean,
+      });
     }
   }
 

@@ -5,12 +5,14 @@
   import { addToast } from '$stores/toast';
   import { userPermissions } from '$stores/auth';
   import { activeInstance } from '$stores/instances';
-  import { detectLevel } from '$lib/console';
-  import type { BroadcasterStatus, DeviceCode, ConsoleLine } from '$types/index';
+  import { createConsoleFeed, detectLevel, nearBottom, stickToBottom } from '$lib/console';
+  import type { FeedLine } from '$lib/console';
+  import type { BroadcasterStatus, DeviceCode } from '$types/index';
   import { load as yamlLoad, dump as yamlDump } from 'js-yaml';
   import {
     Play, Square, RotateCw, Send, Copy, ExternalLink, Plus, Trash2, Save,
-    Upload, Radio, KeyRound, UserRound, FileCode, RefreshCw, Settings2, FileText
+    Upload, Radio, KeyRound, UserRound, FileCode, RefreshCw, Settings2, FileText,
+    ArrowDown, Eraser
   } from '@lucide/svelte';
 
   /** Known config.yml shape (MCXboxBroadcast config-version 5). */
@@ -165,7 +167,12 @@
 
   let status = $state<BroadcasterStatus | null>(null);
   let codes = $state<Record<string, DeviceCode>>({});
-  let lines = $state<ConsoleLine[]>([]);
+  // Capped feed with stable line keys and rAF batching: see createConsoleFeed.
+  // Without stable keys this console rebuilt its entire DOM for every incoming
+  // line once the cap was reached, which froze stop/restart until it caught up.
+  const feed = createConsoleFeed(500);
+  let lines = $state<FeedLine[]>([]);
+  feed.subscribe(v => { lines = v; });
   let input = $state('');
   let configText = $state('');
   let configDirty = $state(false);
@@ -200,7 +207,12 @@
 
   function onTerminalScroll() {
     if (!terminalEl) return;
-    stick = terminalEl.scrollHeight - terminalEl.scrollTop - terminalEl.clientHeight < 32;
+    stick = nearBottom(terminalEl);
+  }
+
+  function jumpToLatest() {
+    stick = true;
+    if (terminalEl) stickToBottom(terminalEl);
   }
 
   // Runs after the DOM update, so scrollHeight is final and a replayed batch
@@ -208,7 +220,7 @@
   $effect(() => {
     void lines.length;
     if (!autoScroll || !stick || !terminalEl) return;
-    terminalEl.scrollTop = terminalEl.scrollHeight;
+    stickToBottom(terminalEl);
   });
 
   const canManage = $derived($userPermissions.includes('BROADCASTER_MANAGE'));
@@ -252,13 +264,7 @@
 
 
   function pushLine(text: string, level?: string) {
-    lines.push({
-      text,
-      level: (level || detectLevel(text)) as ConsoleLine['level'],
-      timestamp: Date.now() / 1000,
-    });
-    if (lines.length > 500) lines.splice(0, lines.length - 500);
-    lines = lines;
+    feed.push(text, (level || detectLevel(text)) as FeedLine['level']);
   }
 
   async function refresh() {
@@ -271,13 +277,13 @@
   /** (Re)load everything for the active instance: console stream, status, config. */
   async function loadAll() {
     for (const unsub of unsubs.splice(0)) unsub();
-    lines = [];
+    feed.clear();
     stick = true;
     const token = getToken();
     const instance = $activeInstance?.id || 'default';
     const query = `${token ? `token=${encodeURIComponent(token)}&` : ''}instance=${encodeURIComponent(instance)}`;
     unsubs.push(wsManager.connect(`/api/v1/broadcaster/ws?${query}`, (data) => {
-      if (data.type === 'hello' && data.resumed === false) lines = [];
+      if (data.type === 'hello' && data.resumed === false) feed.clear();
       else if (data.type === 'console') {
         pushLine(data.line as string, data.level as string);
       } else if (data.type === 'status') {
@@ -546,28 +552,41 @@
 
   <!-- Console -->
   <div class="card">
-    <div class="flex items-center justify-between">
+    <div class="flex items-center justify-between flex-wrap gap-2">
       <h2 class="card-header flex items-center gap-2"><FileCode size={13} /> Console</h2>
       <div class="flex items-center gap-3">
+        <span class="text-[10px] font-mono text-deep-400">{lines.length} lines</span>
         <label class="flex items-center gap-1.5 text-xs text-deep-400 uppercase tracking-wider cursor-pointer select-none">
           <input type="checkbox" bind:checked={autoScroll} class="accent-bedrock-500" />
           Scroll
         </label>
+        <button onclick={() => feed.clear()} class="btn-ghost p-1.5" title="Clear view (backend history keeps flowing)">
+          <Eraser size={12} />
+        </button>
         <button onclick={refresh} class="btn-ghost p-1.5" title="Refresh"><RefreshCw size={12} /></button>
       </div>
     </div>
-    <div bind:this={terminalEl} onscroll={onTerminalScroll}
-         class="terminal-container h-64 overflow-y-auto p-4 font-terminal text-base leading-relaxed terminal-surface border-2 border-deep-600/50">
-      {#each lines as line, i (i)}
-        <div class={"terminal-line leading-snug " + (
-          line.level === 'error' ? 'terminal-line-error' :
-          line.level === 'warn' ? 'terminal-line-warn' :
-          line.level === 'local' ? 'terminal-line-local' :
-          'terminal-line-info'
-        )}>{line.text}</div>
-      {/each}
-      {#if lines.length === 0}
-        <div class="terminal-line-plain opacity-60 font-mono">&gt; Broadcaster output appears here…</div>
+    <div class="relative">
+      <div bind:this={terminalEl} onscroll={onTerminalScroll}
+           class="terminal-container h-72 md:h-96 overflow-y-auto p-4 font-terminal text-base leading-relaxed terminal-surface border-2 border-deep-600/50">
+        {#each lines as line (line.id)}
+          <div class={"terminal-line leading-snug " + (
+            line.level === 'error' ? 'terminal-line-error' :
+            line.level === 'warn' ? 'terminal-line-warn' :
+            line.level === 'local' ? 'terminal-line-local' :
+            'terminal-line-info'
+          )}>{line.text}</div>
+        {/each}
+        {#if lines.length === 0}
+          <div class="terminal-line-plain opacity-60 font-mono">&gt; Broadcaster output appears here…</div>
+        {/if}
+      </div>
+      {#if !stick && lines.length > 0}
+        <button onclick={jumpToLatest}
+                class="absolute bottom-4 right-4 z-10 flex items-center gap-1.5 px-3 py-1.5 text-[11px] uppercase tracking-wider
+                       bg-deep-900/95 border-2 border-bedrock-500/60 text-bedrock-300 hover:text-strong hover:border-bedrock-400 shadow-block transition-colors">
+          <ArrowDown size={12} /> Jump to latest
+        </button>
       {/if}
     </div>
     {#if canManage}

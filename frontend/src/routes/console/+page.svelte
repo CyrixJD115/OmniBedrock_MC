@@ -6,7 +6,8 @@
   import { userPermissions } from '$stores/auth';
   import { activeInstance } from '$stores/instances';
   import { Send, Trash2, Filter, AlertTriangle, ArrowUp, ArrowDown, Binary, Download, Play, Square, RotateCw } from '@lucide/svelte';
-  import { parseAnsi, highlightMatches, matchesQuery } from '$lib/console';
+  import { parseAnsi, highlightMatches, matchesQuery, nearBottom, stickToBottom } from '$lib/console';
+  import type { FeedLine } from '$lib/console';
   import type { ErrorStat } from '$types/index';
 
   function loadSetting<T>(key: string, def: T): T {
@@ -39,8 +40,11 @@
   let errorSortKey = $state<'count' | 'signature' | 'last_seen'>('count');
   let errorSortDir = $state<'desc' | 'asc'>('desc');
   let currentMatch = $state(-1);
+  // Follow new output only while the reader is already at the bottom; once
+  // they scroll up to inspect history, their position is left alone.
+  let stick = $state(true);
 
-  let lines = $state<{ text: string; level: string; timestamp: number }[]>([]);
+  let lines = $state<FeedLine[]>([]);
   let errors = $state<ErrorStat[]>([]);
 
   consoleLines.subscribe(v => { lines = v; });
@@ -51,13 +55,24 @@
 
   onDestroy(() => { unsubErrors(); });
 
-  // Stick to the bottom whenever the visible lines change. Runs after the DOM
-  // update, so scrollHeight is final (no content-visibility estimates).
+  function onTerminalScroll() {
+    if (!terminalEl) return;
+    stick = nearBottom(terminalEl);
+  }
+
+  function jumpToLatest() {
+    stick = true;
+    if (terminalEl) stickToBottom(terminalEl);
+  }
+
+  // Runs after the DOM update, so scrollHeight is final (no content-visibility
+  // estimates). Batching in the feed keeps this to at most one scroll per
+  // frame, and the stick guard means a detached reader is never yanked down.
   $effect(() => {
     void filtered.length;
     void tab;
-    if (tab !== 'console' || !autoScroll || !terminalEl) return;
-    terminalEl.scrollTop = terminalEl.scrollHeight;
+    if (tab !== 'console' || !autoScroll || !stick || !terminalEl) return;
+    stickToBottom(terminalEl);
   });
 
   onMount(async () => {
@@ -157,7 +172,7 @@
   }
 
   function clearLines() {
-    consoleLines.set([]);
+    consoleLines.clear();
     addToast('Console cleared', 'info');
     currentMatch = -1;
   }
@@ -167,24 +182,24 @@
   }
 
   let filtered = $derived.by(() => {
-    const out: { line: { text: string; level: string; timestamp: number }; idx: number }[] = [];
-    lines.forEach((l, idx) => {
+    const out: FeedLine[] = [];
+    lines.forEach(l => {
       if (levelFilter && l.level !== levelFilter) return;
-      if (!filterText) { out.push({ line: l, idx }); return; }
-      if (matchesQuery(l.text, filterText, useRegex)) out.push({ line: l, idx });
+      if (!filterText) { out.push(l); return; }
+      if (matchesQuery(l.text, filterText, useRegex)) out.push(l);
     });
     return out;
   });
 
-  let matchIndices = $derived(filtered.map(f => f.idx));
+  let matchIds = $derived(filtered.map(f => f.id));
 
-  let matchCount = $derived(matchIndices.length);
+  let matchCount = $derived(matchIds.length);
 
   function navigateMatch(dir: -1 | 1) {
     if (matchCount === 0) return;
     currentMatch = (currentMatch + dir + matchCount) % matchCount;
-    const idx = matchIndices[currentMatch];
-    const el = terminalEl?.querySelector(`[data-line-idx="${idx}"]`) as HTMLElement | null;
+    const id = matchIds[currentMatch];
+    const el = terminalEl?.querySelector(`[data-line-id="${id}"]`) as HTMLElement | null;
     if (el) {
       el.scrollIntoView({ block: 'center' });
       el.classList.add('console-match-active');
@@ -321,27 +336,28 @@
   {#if tab === 'console'}
   <!-- The console viewport keeps a dark surface in every theme/mode: ANSI
        colors and the in-game log aesthetic both assume a dark backdrop. -->
-  <div class="terminal-surface border-2 border-deep-600/50 overflow-hidden">
+  <div class="terminal-surface relative border-2 border-deep-600/50 overflow-hidden">
     <div class="flex items-center gap-2 px-4 py-2 bg-white/5 border-b border-white/10">
       <span class="w-2.5 h-2.5 bg-red-500/80"></span>
       <span class="w-2.5 h-2.5 bg-yellow-500/80"></span>
       <span class="w-2.5 h-2.5 bg-teal-500/80"></span>
       <span class="text-deep-300 text-[10px] uppercase tracking-wider ml-2 font-mono">server-console</span>
+      <span class="text-deep-400 text-[10px] font-mono">{lines.length} lines</span>
       {#if filterActive()}
         <span class="ml-auto text-[10px] font-mono text-deep-300">{filtered.length} / {lines.length} lines</span>
       {/if}
     </div>
-    <div bind:this={terminalEl}
+    <div bind:this={terminalEl} onscroll={onTerminalScroll}
          class="terminal-container h-[55vh] overflow-y-auto p-4 font-terminal text-base leading-relaxed">
-      {#each filtered as f (f.idx)}
-        <div data-line-idx={f.idx}
+      {#each filtered as f (f.id)}
+        <div data-line-id={f.id}
              class={"leading-snug " + (
-               f.line.level === 'error' ? 'terminal-line-error' :
-               f.line.level === 'warn' ? 'terminal-line-warn' :
-               f.line.level === 'debug' ? 'terminal-line-debug' :
-               f.line.level === 'local' ? 'terminal-line-local' :
+               f.level === 'error' ? 'terminal-line-error' :
+               f.level === 'warn' ? 'terminal-line-warn' :
+               f.level === 'debug' ? 'terminal-line-debug' :
+               f.level === 'local' ? 'terminal-line-local' :
                'terminal-line-info'
-             )}>{@html renderLine(f.line.text)}</div>
+             )}>{@html renderLine(f.text)}</div>
       {/each}
       {#if filtered.length === 0}
         <div class="terminal-line-plain opacity-60 font-mono">
@@ -349,6 +365,13 @@
         </div>
       {/if}
     </div>
+    {#if !stick && lines.length > 0}
+      <button onclick={jumpToLatest}
+              class="absolute bottom-4 right-4 z-10 flex items-center gap-1.5 px-3 py-1.5 text-[11px] uppercase tracking-wider
+                     bg-deep-900/95 border-2 border-bedrock-500/60 text-bedrock-300 hover:text-strong hover:border-bedrock-400 shadow-block transition-colors">
+        <ArrowDown size={12} /> Jump to latest
+      </button>
+    {/if}
   </div>
   {:else}
   <div class="card">
