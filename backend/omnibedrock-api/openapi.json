@@ -735,7 +735,8 @@
           "x-body": {
             "name": "string 1..64 (path-safe; becomes the id)",
             "backend": "\"vanilla\"|\"endstone\"",
-            "deployment": "\"native\"|\"docker\"|\"systemd\" (default native)",
+            "deployment": "\"native\"|\"docker\"|\"systemd\" (default native; per-OS UI default: docker on macOS, native elsewhere)",
+            "docker": "{image?: string, extra_mounts?: [\"host:container[:opts]\"]}? docker deployment only; omitted = panel defaults",
             "port": "int UDP port, 0 = auto-pick (default 0)",
             "memory_mb": "int? soft resource cap",
             "cpus": "float? soft resource cap",
@@ -762,6 +763,7 @@
             "name": "string?",
             "port": "int?",
             "deployment": "\"native\"|\"docker\"|\"systemd\"?",
+            "docker": "{image?, extra_mounts?}? full replacement; null clears (docker deployment; needs the instance stopped)",
             "autostart": "bool? (systemd only)",
             "memory_mb": "int?",
             "cpus": "float?",

@@ -23,6 +23,8 @@
     name: '',
     backend: 'vanilla' as 'vanilla' | 'endstone',
     deployment: 'native',
+    dockerImage: '',
+    dockerMounts: '',
     memory: '' as string | number,
     cpus: '' as string | number,
     port: '' as string | number,
@@ -31,6 +33,33 @@
     installAfter: true,
     autostart: false,
   });
+  /** Per-OS deployment default: no official macOS bedrock_server binary, so
+   *  macOS prefers docker; Windows and Linux stay native (opt-in docker). */
+  function defaultDeployment(): 'native' | 'docker' {
+    return $hostInfo?.capabilities?.platform === 'macos' ? 'docker' : 'native';
+  }
+  function emptyForm() {
+    return {
+      name: '',
+      backend: 'vanilla' as 'vanilla' | 'endstone',
+      deployment: defaultDeployment(),
+      dockerImage: '',
+      dockerMounts: '',
+      memory: '',
+      cpus: '',
+      port: '',
+      vanillaVersion: 'latest',
+      endstoneVersion: '',
+      installAfter: true,
+      autostart: false,
+    };
+  }
+  function parseMounts(raw: string): string[] {
+    return raw
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
+  }
   let vanillaVersions = $state<string[]>([]);
   let versionsLoading = $state(false);
 
@@ -52,6 +81,8 @@
     memory: '' as string | number,
     cpus: '' as string | number,
     deployment: 'native',
+    dockerImage: '',
+    dockerMounts: '',
     autostart: false,
     access: [] as AccessEntry[],
   });
@@ -148,6 +179,12 @@
     try {
       const body: Record<string, unknown> = { name: form.name.trim(), backend: form.backend, deployment: form.deployment };
       if (form.deployment === 'systemd') body.autostart = form.autostart;
+      if (form.deployment === 'docker') {
+        body.docker = {
+          image: form.dockerImage.trim() || null,
+          extra_mounts: parseMounts(form.dockerMounts),
+        };
+      }
       if (form.memory !== '' && form.memory !== null) body.memory_mb = Number(form.memory) || null;
       if (form.cpus !== '' && form.cpus !== null) body.cpus = Number(form.cpus) || null;
       if (form.port !== '' && form.port !== null) body.port = Number(form.port);
@@ -188,6 +225,8 @@
       memory: i.resources.memory_mb ?? '',
       cpus: i.resources.cpus ?? '',
       deployment: i.deployment,
+      dockerImage: i.docker?.image ?? '',
+      dockerMounts: (i.docker?.extra_mounts ?? []).join('\n'),
       autostart: i.autostart ?? false,
       access: [...i.access],
     };
@@ -222,6 +261,12 @@
       port: Number(editForm.port) || 0,
     };
     body.autostart = editForm.deployment === 'systemd' && editForm.autostart;
+    if (editForm.deployment === 'docker') {
+      body.docker = {
+        image: editForm.dockerImage.trim() || null,
+        extra_mounts: parseMounts(editForm.dockerMounts),
+      };
+    }
     body.memory_mb = editForm.memory === '' ? null : Number(editForm.memory);
     body.cpus = editForm.cpus === '' ? null : Number(editForm.cpus);
     try {
@@ -268,7 +313,7 @@
         <RefreshCw size={12} /> Refresh
       </button>
       {#if $userPermissions.includes('INSTANCES_CREATE')}
-        <button onclick={() => { form = { name: '', backend: 'vanilla', deployment: 'native', memory: '', cpus: '', port: '', vanillaVersion: 'latest', endstoneVersion: '', installAfter: true, autostart: false }; void loadVersions(); showCreate = true; }}
+        <button onclick={() => { form = emptyForm(); void loadVersions(); showCreate = true; }}
                 class="btn-primary text-xs flex items-center gap-1.5">
           <Plus size={12} /> New Instance
         </button>
@@ -496,8 +541,39 @@
           <p class="text-[10px] text-deep-400 mt-1">
             {#if form.deployment === 'native'}Limits below are monitored but NOT enforced for native processes.{/if}
             {#if form.deployment === 'systemd'}Runs as a systemd user service (omnibedrock-&lt;id&gt;.service): MemoryMax/CPUQuota enforced, survives panel restarts.{/if}
-            {#if form.deployment === 'docker'}--memory/--cpus are enforced by the container runtime; the container is killed on OOM.{/if}
+            {#if form.deployment === 'docker'}--memory/--cpus are enforced by the container runtime; the container runs detached under Docker's unless-stopped restart policy, so it survives panel restarts and reboots (turn the instance's auto-restart off to keep it down).{/if}
           </p>
+          {#if form.deployment === 'docker' && $hostInfo?.capabilities?.platform === 'macos'}
+            <p class="text-[10px] text-amber-400 mt-1 flex items-start gap-1">
+              <ShieldAlert size={10} class="shrink-0 mt-0.5" />
+              Docker is the default here because there is no official macOS bedrock_server binary. Apple Silicon Macs run linux/amd64 images under emulation, which is slower.
+            </p>
+          {/if}
+          {#if form.deployment === 'docker' && $hostInfo?.capabilities?.platform === 'windows'}
+            <p class="text-[10px] text-amber-400 mt-1 flex items-start gap-1">
+              <ShieldAlert size={10} class="shrink-0 mt-0.5" />
+              Docker Desktop adds licensing and WSL2 overhead, and every UDP port must be mapped manually — native is recommended on Windows.
+            </p>
+          {/if}
+          {#if form.deployment === 'docker'}
+            <div class="mt-2 space-y-2 border border-deep-600/40 bg-deep-900/30 p-2">
+              <div>
+                <label class="text-[10px] uppercase tracking-wider text-deep-400">Image (blank = panel default for the runtime)</label>
+                <input bind:value={form.dockerImage} placeholder="omnibedrock-vanilla:latest" class="input w-full text-xs mt-1" />
+              </div>
+              <div>
+                <label class="text-[10px] uppercase tracking-wider text-deep-400">Extra bind mounts (one host:container[:opts] per line)</label>
+                <textarea bind:value={form.dockerMounts} rows="2" placeholder="/mnt/media/worlds:/data/worlds" class="input w-full text-xs mt-1 font-mono"></textarea>
+              </div>
+              <p class="text-[10px] text-deep-400">
+                {#if $hostInfo?.capabilities?.platform === 'linux'}
+                  Runs with host networking: game ports and ICE ranges behave exactly like a native process.
+                {:else}
+                  The instance's UDP port pair is mapped through to the container's stock 19132/19133.
+                {/if}
+              </p>
+            </div>
+          {/if}
           {#if form.deployment === 'systemd'}
             <label class="flex items-center gap-2 text-xs text-deep-300 mt-2">
               <input type="checkbox" bind:checked={form.autostart} />
@@ -571,6 +647,18 @@
             {#if $hostInfo?.capabilities.systemd}<option value="systemd">systemd service — cgroup enforced</option>{/if}
             {#if $hostInfo?.capabilities.docker}<option value="docker">Docker — container enforced</option>{/if}
           </select>
+          {#if editForm.deployment === 'docker'}
+            <div class="mt-2 space-y-2 border border-deep-600/40 bg-deep-900/30 p-2">
+              <div>
+                <label class="text-[10px] uppercase tracking-wider text-deep-400">Image (blank = panel default for the runtime)</label>
+                <input bind:value={editForm.dockerImage} placeholder="omnibedrock-vanilla:latest" class="input w-full text-xs mt-1" />
+              </div>
+              <div>
+                <label class="text-[10px] uppercase tracking-wider text-deep-400">Extra bind mounts (one host:container[:opts] per line)</label>
+                <textarea bind:value={editForm.dockerMounts} rows="2" placeholder="/mnt/media/worlds:/data/worlds" class="input w-full text-xs mt-1 font-mono"></textarea>
+              </div>
+            </div>
+          {/if}
           {#if editForm.deployment === 'systemd'}
             <label class="flex items-center gap-2 text-xs text-deep-300 mt-2">
               <input type="checkbox" bind:checked={editForm.autostart} />

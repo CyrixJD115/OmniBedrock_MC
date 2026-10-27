@@ -424,6 +424,8 @@ export interface Instance {
   created_at: string;
   port: number;
   deployment: 'native' | 'systemd' | 'docker';
+  /** docker deployment only: image override + extra bind mounts. */
+  docker?: { image?: string | null; extra_mounts?: string[] } | null;
   enforcement: 'advisory' | 'cgroup' | 'container';
   resources: ResourcePolicy;
   access: AccessEntry[];
@@ -440,6 +442,8 @@ export interface DeployCapabilities {
   docker: string | null;
   systemd: boolean;
   linger: boolean;
+  /** Host OS: "linux" | "windows" | "macos" — drives the per-OS deployment default. */
+  platform?: string;
 }
 
 export interface HostInfo {

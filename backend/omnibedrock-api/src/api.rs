@@ -23,8 +23,8 @@ use omnibedrock_server::{
     curseforge::{self, CLASSES, CurseForge},
     endstone::Endstone,
     instances::{
-        AccessEntry, DEFAULT_INSTANCE, Deployment, Instance, InstanceManager, InstanceRecord,
-        ResourcePolicy,
+        AccessEntry, DEFAULT_INSTANCE, Deployment, DockerConfig, Instance, InstanceManager,
+        InstanceRecord, ResourcePolicy,
     },
     metrics::Metrics,
     server::{Backend, ServerManager, ServerSettings, Status},
@@ -720,9 +720,13 @@ async fn dispatch_authenticated(
             // Copy the backend out: the settings read guard is not Send and
             // must not live across the bootstrap awaits.
             let backend = svc.server.settings.borrow().backend;
+            let deployment = svc.record().deployment;
             let bootstrap = if action == "start" {
                 match backend {
                     Backend::Vanilla => ensure_vanilla_installed(svc).await,
+                    // Docker containers ship their own Endstone runtime; only
+                    // the vanilla binary is still fetched into the bind mount.
+                    Backend::Endstone if deployment == Deployment::Docker => Ok(()),
                     Backend::Endstone => ensure_endstone_toolchain(svc).await,
                 }
             } else {
@@ -1180,9 +1184,11 @@ async fn dispatch_authenticated(
             s.require_for(u, "SERVER_MANAGE", &instance).await?;
             let action = value_string(b, "action")?.to_owned();
             let backend = instance.server.settings.borrow().backend;
+            let deployment = instance.record().deployment;
             let bootstrap = if action == "start" {
                 match backend {
                     Backend::Vanilla => ensure_vanilla_installed(&instance).await,
+                    Backend::Endstone if deployment == Deployment::Docker => Ok(()),
                     Backend::Endstone => ensure_endstone_toolchain(&instance).await,
                 }
             } else {
@@ -1257,6 +1263,37 @@ fn usage_json(metrics: &Value) -> Value {
     })
 }
 
+/// The optional per-instance Docker options from a request body. Absent or
+/// null clears them (the config defaults then apply at launch).
+fn docker_from_body(b: &Value) -> Result<Option<DockerConfig>> {
+    match b.get("docker") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => {
+            let config = DockerConfig {
+                image: v["image"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(String::from),
+                extra_mounts: v["extra_mounts"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|m| m.as_str().map(str::trim))
+                            .filter(|m| !m.is_empty())
+                            .map(String::from)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            };
+            config
+                .validate()
+                .map_err(|e| ApiError::bad(e.to_string()))?;
+            Ok(Some(config))
+        }
+    }
+}
+
 /// Create an instance after checking quotas, port availability, and the
 /// deployment backend's availability on this host.
 async fn create_instance(s: &AppState, u: &User, b: &Value) -> Result<Value> {
@@ -1294,6 +1331,7 @@ async fn create_instance(s: &AppState, u: &User, b: &Value) -> Result<Value> {
         created_at: chrono::Utc::now().to_rfc3339(),
         port,
         deployment,
+        docker: docker_from_body(b)?,
         resources,
         access: vec![],
         autostart: b["autostart"].as_bool().unwrap_or(false),
@@ -1359,7 +1397,7 @@ async fn update_instance(
             .iter()
             .any(|p| p == "INSTANCES_LIMITS");
     let can_edit_access = can_edit_limits || s.auth.require(u, "INSTANCES_SHARE").await.is_ok();
-    let touches_limits = ["name", "port", "deployment", "memory_mb", "cpus"]
+    let touches_limits = ["name", "port", "deployment", "docker", "memory_mb", "cpus"]
         .iter()
         .any(|k| b.get(*k).is_some());
     if b.get("access").is_some() && !can_edit_access {
@@ -1392,6 +1430,11 @@ async fn update_instance(
     if let Some(deployment) = b["deployment"].as_str() {
         next.deployment =
             Deployment::parse(deployment).map_err(|e| ApiError::bad(e.to_string()))?;
+    }
+    if b.get("docker").is_some() {
+        // Replace the whole object (or clear it with null); partial patches
+        // would silently keep stale mounts around.
+        next.docker = docker_from_body(b)?;
     }
     if let Some(autostart) = b["autostart"].as_bool() {
         if autostart && next.deployment != Deployment::Systemd {
@@ -2389,7 +2432,7 @@ async fn switch_backend(svc: &Arc<Instance>, b: &Value) -> Result<Value> {
     if backend == Backend::Vanilla {
         ensure_vanilla_installed(svc).await?;
     }
-    if backend == Backend::Endstone {
+    if backend == Backend::Endstone && svc.record().deployment != Deployment::Docker {
         ensure_endstone_toolchain(svc).await?;
     }
     let console = svc.server.console.clone();

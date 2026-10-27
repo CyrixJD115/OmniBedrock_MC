@@ -57,6 +57,11 @@ pub struct Cli {
     pub docker_image_vanilla: Option<String>,
     #[arg(long, env = "DOCKER_IMAGE_ENDSTONE")]
     pub docker_image_endstone: Option<String>,
+    /// Docker image used for the broadcaster sidecar container of `docker`
+    /// instances (JRE + MCXboxBroadcastStandalone entrypoint). Missing local
+    /// images are built automatically like the game images.
+    #[arg(long, env = "DOCKER_IMAGE_BROADCASTER")]
+    pub docker_image_broadcaster: Option<String>,
     /// Memory (MiB) kept free for the OS and the panel itself; instance
     /// allocations beyond total − reserve trigger overcommit warnings.
     #[arg(long, env = "HOST_RESERVE_MB")]
@@ -93,6 +98,8 @@ pub struct Config {
     /// Docker images used by the `docker` deployment backend (one per runtime).
     pub docker_image_vanilla: String,
     pub docker_image_endstone: String,
+    /// Docker image for the broadcaster sidecar container.
+    pub docker_image_broadcaster: String,
     /// Headroom reserved for the OS/panel when judging overcommit (MiB).
     pub host_reserve_mb: u64,
     pub ws_heartbeat_interval: u64,
@@ -147,6 +154,7 @@ impl Config {
             java_bin: None,
             docker_image_vanilla: "omnibedrock-vanilla:latest".into(),
             docker_image_endstone: "omnibedrock-endstone:latest".into(),
+            docker_image_broadcaster: "omnibedrock-broadcaster:latest".into(),
             host_reserve_mb: 1024,
             ws_heartbeat_interval: 30,
             console_max_lines: 2000,
@@ -216,6 +224,7 @@ struct FileConfig {
     java_bin: Option<PathBuf>,
     docker_image_vanilla: Option<String>,
     docker_image_endstone: Option<String>,
+    docker_image_broadcaster: Option<String>,
     host_reserve_mb: Option<u64>,
     ws_heartbeat_interval: Option<u64>,
     console_max_lines: Option<usize>,
@@ -286,6 +295,9 @@ fn apply_file(c: &mut Config, file: FileConfig, cache_dir_explicit: &mut bool) {
     }
     if let Some(v) = file.docker_image_endstone {
         c.docker_image_endstone = v;
+    }
+    if let Some(v) = file.docker_image_broadcaster {
+        c.docker_image_broadcaster = v;
     }
     if let Some(v) = file.host_reserve_mb {
         c.host_reserve_mb = v;
@@ -532,6 +544,9 @@ impl Config {
         if let Some(v) = cli.docker_image_endstone.clone() {
             c.docker_image_endstone = v;
         }
+        if let Some(v) = cli.docker_image_broadcaster.clone() {
+            c.docker_image_broadcaster = v;
+        }
         if let Some(v) = cli.host_reserve_mb {
             c.host_reserve_mb = v;
         }
@@ -587,6 +602,7 @@ mod tests {
             java_bin: None,
             docker_image_vanilla: None,
             docker_image_endstone: None,
+            docker_image_broadcaster: None,
             host_reserve_mb: None,
             desktop: false,
         }

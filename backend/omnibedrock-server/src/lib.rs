@@ -8,6 +8,7 @@ pub mod backups;
 pub mod bds;
 pub mod broadcaster;
 pub mod curseforge;
+pub mod docker;
 pub mod endstone;
 pub mod instances;
 mod journal;

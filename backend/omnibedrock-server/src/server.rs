@@ -1,6 +1,7 @@
 //! The supervisor exclusively owns the child. Readers only mutate bounded console state.
 //! No process wait or pipe operation blocks a Tokio worker thread.
-use crate::instances::{Deployment, ResourcePolicy};
+use crate::docker;
+use crate::instances::{Deployment, DockerConfig, ResourcePolicy};
 use crate::journal::Journal;
 use anyhow::{Context, bail};
 use omnibedrock_core::{config::Config, files::atomic_write};
@@ -468,7 +469,7 @@ async fn dispatch_command(sink: &CommandSink, text: &str) -> anyhow::Result<()> 
 }
 
 /// One running instance, however it is hosted: a child process the panel
-/// owns (native or a `docker run` client) or a systemd user service.
+/// owns (native, a `docker attach` client, or a systemd user service).
 struct Running {
     pid: u32,
     sink: CommandSink,
@@ -476,14 +477,20 @@ struct Running {
 }
 
 enum RunKind {
-    /// A process the panel supervises directly, with piped stdio.
+    /// A process the panel supervises directly, with piped stdio. For docker
+    /// instances this process is the `docker logs -f` reader: no stdin child
+    /// exists (commands go through the FIFO) and its exit means the container
+    /// stopped streaming, not that the server is gone.
     Process {
         child: Child,
-        stdin: mpsc::Sender<WriteCommand>,
-        writer: JoinHandle<()>,
+        stdin: Option<mpsc::Sender<WriteCommand>>,
+        writer: Option<JoinHandle<()>>,
         readers: Vec<JoinHandle<()>>,
-        /// Docker container name when the process is a `docker run` client.
+        /// Docker container name when the process reads a container's logs.
         container: Option<String>,
+        /// Reports the moment the container stops running, independent of
+        /// the logs reader's own lifetime.
+        watch: Option<oneshot::Receiver<String>>,
     },
     /// A `omnibedrock-<id>.service` user unit owned by systemd. The panel
     /// attaches its journal and monitors its state but never parents the
@@ -507,7 +514,7 @@ pub struct ServerPaths {
 }
 
 /// How one instance is launched: its identity, deployment backend, limits,
-/// port, and docker images. Swappable while stopped via `set_launch`.
+/// port, and Docker options. Swappable while stopped via `set_launch`.
 #[derive(Clone, Debug)]
 pub struct LaunchContext {
     pub instance_id: String,
@@ -518,8 +525,9 @@ pub struct LaunchContext {
     pub port: u16,
     /// systemd only: keep the unit enabled for boot-time autostart.
     pub autostart: bool,
-    pub docker_image_vanilla: String,
-    pub docker_image_endstone: String,
+    /// Docker options (image override + extra mounts); `default()` for
+    /// native/systemd instances.
+    pub docker: DockerConfig,
 }
 
 impl Default for LaunchContext {
@@ -531,8 +539,7 @@ impl Default for LaunchContext {
             resources: ResourcePolicy::default(),
             port: 19132,
             autostart: false,
-            docker_image_vanilla: "omnibedrock-vanilla:latest".into(),
-            docker_image_endstone: "omnibedrock-endstone:latest".into(),
+            docker: DockerConfig::default(),
         }
     }
 }
@@ -560,8 +567,7 @@ impl ServerManager {
                 journal_root: config.logs_dir.join("console"),
             },
             LaunchContext {
-                docker_image_vanilla: config.docker_image_vanilla.clone(),
-                docker_image_endstone: config.docker_image_endstone.clone(),
+                docker: DockerConfig::default(),
                 ..LaunchContext::default()
             },
         )
@@ -860,21 +866,34 @@ async fn attach_unit(
     })
 }
 
-/// Full `docker run` argv for an instance. The instance's server directory is
-/// mounted at /data; the image provides the runtime (see deploy/docker).
-fn docker_argv(
+/// Full `docker run` argv for an instance: detached, `-i` so the panel's
+/// attach client can forward console commands to the server's stdin, and the
+/// restart policy that makes Docker the instance's supervisor across crashes
+/// and host reboots. The instance's server directory is mounted read-write at
+/// /data (the SAME directory the panel uses); the image only provides the
+/// runtime (see deploy/docker).
+fn docker_run_args(
     config: &Config,
     settings: &ServerSettings,
     ctx: &LaunchContext,
+    host_network: bool,
 ) -> Vec<std::ffi::OsString> {
     let name = crate::instances::container_name(&ctx.instance_id);
     let mut args: Vec<std::ffi::OsString> = vec![
         "docker".into(),
         "run".into(),
-        "-i".into(),
-        "--rm".into(),
+        "-d".into(),
+        "--restart".into(),
+        // The panel's auto_restart setting maps onto the daemon policy: off
+        // means the container stays down after any exit.
+        if settings.auto_restart {
+            "unless-stopped"
+        } else {
+            "no"
+        }
+        .into(),
         "--name".into(),
-        name.clone().into(),
+        name.into(),
     ];
     if let Some(mb) = ctx.resources.memory_mb {
         args.push("--memory".into());
@@ -897,10 +916,20 @@ fn docker_argv(
         args.push("--user".into());
         args.push(format!("{}:{}", uid.as_raw(), gid.as_raw()).into());
     }
-    args.push("-p".into());
-    args.push(format!("{}:19132/udp", ctx.port).into());
-    args.push("-p".into());
-    args.push(format!("{}:19133/udp", ctx.port + 1).into());
+    if host_network {
+        // Linux: the container shares the host network stack, so game ports
+        // and ICE ranges behave exactly like a native process and the server
+        // binds the instance's own registered port pair.
+        args.push("--network".into());
+        args.push("host".into());
+    } else {
+        // Docker Desktop (Windows/macOS): host networking is unavailable, so
+        // the container keeps the stock port pair and it is mapped through.
+        args.push("-p".into());
+        args.push(format!("{}:19132/udp", ctx.port).into());
+        args.push("-p".into());
+        args.push(format!("{}:19133/udp", ctx.port + 1).into());
+    }
     args.push("-v".into());
     args.push(
         format!(
@@ -912,182 +941,133 @@ fn docker_argv(
         )
         .into(),
     );
+    for mount in &ctx.docker.extra_mounts {
+        args.push("-v".into());
+        args.push(mount.clone().into());
+    }
     args.push("-w".into());
     args.push("/data".into());
-    let image = match settings.backend {
-        Backend::Vanilla => &ctx.docker_image_vanilla,
-        Backend::Endstone => &ctx.docker_image_endstone,
+    args.push(ctx.docker.image_for(settings.backend, config).into());
+    // Container paths: the server dir is /data, and stdin comes from the
+    // command FIFO the panel also writes from the host.
+    let server_argv: Vec<std::ffi::OsString> = match settings.backend {
+        Backend::Vanilla => vec!["./bedrock_server".into()],
+        Backend::Endstone => vec![
+            "python".into(),
+            "-m".into(),
+            "endstone".into(),
+            "--no-confirm".into(),
+            "-s".into(),
+            "/data".into(),
+        ],
     };
-    args.push(image.clone().into());
+    args.extend(docker::command_override(&server_argv));
     args
 }
 
-/// Best-effort removal of a stale container before `docker run` reuses its
-/// name (a killed panel can leave `--rm` containers behind).
-async fn docker_rm_stale(container: &str) {
-    let _ = tokio::time::timeout(
-        Duration::from_secs(10),
-        tokio::process::Command::new("docker")
-            .args(["rm", "-f", container])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status(),
-    )
-    .await;
-}
-
-async fn docker_kill(container: &str) {
-    let _ = tokio::time::timeout(
-        Duration::from_secs(10),
-        tokio::process::Command::new("docker")
-            .args(["kill", container])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status(),
-    )
-    .await;
-}
-
-/// Runtime-only Dockerfile bodies for the two instance images, identical to
-/// deploy/docker in the repository. Generated under the cache directory so
-/// packaged installations (with no checkout around) can still build them.
-const DOCKERFILE_VANILLA: &str = "\
-# Generated by OmniBedrock; runtime libraries for the official BDS binary.
-FROM debian:bookworm-slim
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        ca-certificates libcurl4 libzip4 curl \
-    && rm -rf /var/lib/apt/lists/*
-WORKDIR /data
-CMD [\"./bedrock_server\"]
-";
-
-const DOCKERFILE_ENDSTONE: &str = "\
-# Generated by OmniBedrock; Endstone runtime on CPython 3.12.
-FROM python:3.12-slim
-RUN pip install --no-cache-dir endstone
-WORKDIR /data
-CMD [\"python\", \"-m\", \"endstone\", \"--no-confirm\", \"-s\", \"/data\"]
-";
-
-/// Make sure the configured image exists; when it does not, generate its
-/// Dockerfile under the cache directory and build it, streaming progress
-/// into the instance console. Custom (registry) images are never built —
-/// building only ever targets the panel's own `omnibedrock-*` images.
-async fn ensure_docker_image(
-    config: &Config,
-    image: &str,
-    backend: Backend,
-    console: &Console,
-) -> anyhow::Result<()> {
-    let inspect = tokio::process::Command::new("docker")
-        .args(["image", "inspect", image])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .await;
-    if inspect.is_ok_and(|s| s.success()) {
-        return Ok(());
-    }
-    if !image.starts_with("omnibedrock-") {
-        bail!(
-            "image {image} is missing; pull it or build it manually \
-             (the panel only auto-builds its own omnibedrock-* images)"
-        );
-    }
-    let safe: String = image
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '-'
+/// Watch one running container via `docker inspect` and report the moment it
+/// stops running. The attach client's exit alone is NOT a reliable container
+/// exit signal: the daemon can restart the container under its restart policy,
+/// which detaches clients while the container keeps going.
+fn spawn_docker_monitor(container: String, exit: oneshot::Sender<String>) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut errors = 0u32;
+        loop {
+            tokio::time::sleep(Duration::from_millis(750)).await;
+            match docker::state_and_exit(&container).await {
+                Some((status, _code)) if status == "running" => {
+                    errors = 0;
+                }
+                Some((status, code)) => {
+                    let _ = exit.send(match code {
+                        Some(c) => format!("container {status} (exit code {c})"),
+                        None => format!("container {status}"),
+                    });
+                    return;
+                }
+                None => {
+                    errors += 1;
+                    if errors >= 5 {
+                        let _ = exit.send("docker unreachable".into());
+                        return;
+                    }
+                }
             }
-        })
-        .collect();
-    let context = config.cache_dir.join("docker").join(safe);
-    tokio::fs::create_dir_all(&context).await?;
-    let dockerfile = context.join("Dockerfile");
-    let body = match backend {
-        Backend::Vanilla => DOCKERFILE_VANILLA,
-        Backend::Endstone => DOCKERFILE_ENDSTONE,
-    };
-    // Only ever (re)generate our own generated context; anything unexpected
-    // in that directory is left alone and reported.
-    if tokio::fs::try_exists(&dockerfile).await.unwrap_or(false) {
-        let existing = tokio::fs::read_to_string(&dockerfile)
-            .await
-            .unwrap_or_default();
-        anyhow::ensure!(
-            existing.starts_with("# Generated by OmniBedrock"),
-            "refusing to overwrite {}",
-            dockerfile.display()
-        );
-    }
-    tokio::fs::write(&dockerfile, body).await?;
-    console
-        .publish(
-            format!("[LOCAL] Building missing image {image}…"),
-            "panel",
-            false,
-        )
-        .await;
-    let build = tokio::time::timeout(
-        Duration::from_secs(600),
-        tokio::process::Command::new("docker")
-            // No --progress=plain: minimal Docker installs ship the legacy
-            // builder, which rejects the flag; it streams to stderr anyway.
-            .args(["build"])
-            .arg("-t")
-            .arg(image)
-            .arg(&context)
-            .stdin(std::process::Stdio::null())
-            .output(),
-    )
-    .await
-    .context("docker build timed out (10 min)")?
-    .context("failed to run docker build")?;
-    let output = format!(
-        "{}{}",
-        String::from_utf8_lossy(&build.stdout),
-        String::from_utf8_lossy(&build.stderr)
-    );
-    for line in output.lines().filter(|l| l.contains("ERROR")).take(20) {
-        console
-            .publish(format!("[LOCAL] {line}"), "panel", false)
-            .await;
-    }
-    if !build.status.success() {
-        bail!("docker build for {image} failed (see console for error lines)");
-    }
-    console
-        .publish(format!("[LOCAL] Image {image} built."), "panel", false)
-        .await;
-    Ok(())
+        }
+    })
 }
 
-/// Spawn one process the panel owns (native instance or `docker run` client)
-/// and wire its stdio into the console.
+/// Attach console + command plumbing to an already-running container (fresh
+/// start, revive recheck, or adoption after a panel restart): spawn the
+/// `docker logs -f` reader, the container state monitor, and point the
+/// command sink at the FIFO inside the bind-mounted server directory. The
+/// container itself must already be running.
+async fn attach_docker(
+    config: &Config,
+    console: &Console,
+    ctx: &LaunchContext,
+    settings: &ServerSettings,
+    container: &str,
+) -> anyhow::Result<Running> {
+    let fifo = docker::host_stdin_fifo(&config.bedrock_server_dir);
+    crate::systemd::ensure_fifo(&fifo).await?;
+    let mut running = spawn_process(
+        config,
+        console,
+        ctx,
+        settings.backend,
+        docker::logs_argv(container, 200),
+        Some(container.to_string()),
+        false,
+        Some(CommandSink::Fifo(fifo)),
+    )
+    .await?;
+    let (exit_tx, exit_rx) = oneshot::channel();
+    spawn_docker_monitor(container.to_string(), exit_tx);
+    if let RunKind::Process { watch, .. } = &mut running.kind {
+        *watch = Some(exit_rx);
+    }
+    Ok(running)
+}
+
+/// Attach to the instance's container when it is running; error otherwise.
+/// Never starts or creates anything — revival is exclusively the daemon's
+/// restart policy's job, so the panel cannot fight a manual `docker stop`.
+async fn attach_running_container(
+    config: &Config,
+    console: &Console,
+    ctx: &LaunchContext,
+    settings: &ServerSettings,
+) -> anyhow::Result<Running> {
+    let container = crate::instances::container_name(&ctx.instance_id);
+    match docker::state(&container).await.as_deref() {
+        Some("running") => attach_docker(config, console, ctx, settings, &container).await,
+        _ => anyhow::bail!("container {container} is not running"),
+    }
+}
+
+/// Spawn one process the panel owns (a native server, or the `docker logs`
+/// reader of a container) and wire its stdio into the console. `with_stdin`
+/// is false for log readers; their sink comes from `sink_override`.
 #[allow(clippy::too_many_arguments)]
 async fn spawn_process(
     config: &Config,
     console: &Console,
     ctx: &LaunchContext,
-    settings: &ServerSettings,
+    backend: Backend,
     argv: Vec<std::ffi::OsString>,
     container: Option<String>,
+    with_stdin: bool,
+    sink_override: Option<CommandSink>,
 ) -> anyhow::Result<Running> {
     let mut cmd = Command::new(&argv[0]);
     cmd.args(&argv[1..]);
     if ctx.deployment != Deployment::Docker {
         // Native children inherit the server directory so vanilla BDS finds
-        // its own files; docker uses -w inside the image.
+        // its own files; containers run with -w inside the image.
         cmd.current_dir(&config.bedrock_server_dir);
     }
-    configure_process(&mut cmd);
+    configure_process(&mut cmd, with_stdin);
     let mut child = cmd.spawn().with_context(|| {
         format!(
             "launch {} instance ({})",
@@ -1098,27 +1078,32 @@ async fn spawn_process(
     let pid = child.id().context("child has no PID")?;
     let stdout = child.stdout.take().context("missing stdout")?;
     let stderr = child.stderr.take().context("missing stderr")?;
-    let mut stdin = child.stdin.take().context("missing stdin")?;
-    let (tx, mut rx) = mpsc::channel::<WriteCommand>(config.command_queue_capacity);
-    let writer = tokio::spawn(async move {
-        while let Some(cmd) = rx.recv().await {
-            if cmd.reply.is_closed() {
-                continue;
+    let (tx, writer) = if with_stdin {
+        let mut stdin = child.stdin.take().context("missing stdin")?;
+        let (tx, mut rx) = mpsc::channel::<WriteCommand>(config.command_queue_capacity);
+        let writer = tokio::spawn(async move {
+            while let Some(cmd) = rx.recv().await {
+                if cmd.reply.is_closed() {
+                    continue;
+                }
+                let result = async {
+                    stdin.write_all(cmd.text.as_bytes()).await?;
+                    stdin.write_all(b"\n").await?;
+                    stdin.flush().await?;
+                    Ok::<_, anyhow::Error>(())
+                }
+                .await;
+                let failed = result.is_err();
+                let _ = cmd.reply.send(result);
+                if failed {
+                    break;
+                }
             }
-            let result = async {
-                stdin.write_all(cmd.text.as_bytes()).await?;
-                stdin.write_all(b"\n").await?;
-                stdin.flush().await?;
-                Ok::<_, anyhow::Error>(())
-            }
-            .await;
-            let failed = result.is_err();
-            let _ = cmd.reply.send(result);
-            if failed {
-                break;
-            }
-        }
-    });
+        });
+        (Some(tx), Some(writer))
+    } else {
+        (None, None)
+    };
     let readers = vec![
         tokio::spawn(read_pipe(
             stdout,
@@ -1136,19 +1121,25 @@ async fn spawn_process(
     tracing::info!(
         pid,
         instance = %ctx.instance_id,
-        backend = settings.backend.as_str(),
+        backend = backend.as_str(),
         deployment = ctx.deployment.as_str(),
+        container = ?container,
         "game server started"
     );
+    let sink = match sink_override {
+        Some(sink) => sink,
+        None => CommandSink::Pipe(tx.clone().context("pipe sink without stdin child")?),
+    };
     Ok(Running {
         pid,
-        sink: CommandSink::Pipe(tx.clone()),
+        sink,
         kind: RunKind::Process {
             child,
             stdin: tx,
             writer,
             readers,
             container,
+            watch: None,
         },
     })
 }
@@ -1162,11 +1153,12 @@ async fn launch(
 ) -> anyhow::Result<Running> {
     tokio::fs::create_dir_all(&config.bedrock_server_dir).await?;
     // All runtimes read server.properties from the server dir (Endstone
-    // wraps BDS). Native/systemd pin the instance's registered pair
-    // (P v4 / P+1 v6); docker pins the container-internal stock pair
-    // 19132/19133 and publishes both through the host port mappings.
+    // wraps BDS). Native/systemd and host-networked Linux containers pin the
+    // instance's registered pair (P v4 / P+1 v6); port-mapped containers
+    // (Docker Desktop) pin the container-internal stock pair 19132/19133 and
+    // publish both through the host port mappings.
     match ctx.deployment {
-        Deployment::Docker => {
+        Deployment::Docker if !cfg!(target_os = "linux") => {
             crate::instances::enforce_instance_port(config, 19132).await;
         }
         _ => {
@@ -1192,31 +1184,98 @@ async fn launch(
                 .await;
         }
     }
-    let base_argv = match settings.backend {
-        Backend::Endstone => base_argv_endstone(config)?,
-        Backend::Vanilla => base_argv_vanilla(config)?,
-    };
     match ctx.deployment {
-        Deployment::Native => spawn_process(config, console, ctx, settings, base_argv, None).await,
-        Deployment::Docker => {
-            let image = match settings.backend {
-                Backend::Vanilla => &ctx.docker_image_vanilla,
-                Backend::Endstone => &ctx.docker_image_endstone,
+        Deployment::Native => {
+            let base_argv = match settings.backend {
+                Backend::Endstone => base_argv_endstone(config)?,
+                Backend::Vanilla => base_argv_vanilla(config)?,
             };
-            ensure_docker_image(config, image, settings.backend, console).await?;
-            let container = crate::instances::container_name(&ctx.instance_id);
-            docker_rm_stale(&container).await;
             spawn_process(
                 config,
                 console,
                 ctx,
-                settings,
-                docker_argv(config, settings, ctx),
-                Some(container),
+                settings.backend,
+                base_argv,
+                None,
+                true,
+                None,
             )
             .await
         }
+        Deployment::Docker => {
+            // The image provides the runtime only; the BDS binary and every
+            // server file come from the bind-mounted instance directory, so
+            // the host needs no endstone toolchain for docker instances.
+            let container = crate::instances::container_name(&ctx.instance_id);
+            let host_network = cfg!(target_os = "linux");
+            // The command FIFO must exist before the container's shell opens
+            // it (the run command fails loudly otherwise).
+            crate::systemd::ensure_fifo(&docker::host_stdin_fifo(&config.bedrock_server_dir))
+                .await?;
+            let image = ctx.docker.image_for(settings.backend, config);
+            let dockerfile = match settings.backend {
+                Backend::Vanilla => docker::DOCKERFILE_VANILLA,
+                Backend::Endstone => docker::DOCKERFILE_ENDSTONE,
+            };
+            docker::ensure_image(config, &image, dockerfile, console).await?;
+            match docker::state(&container).await.as_deref() {
+                Some("running") => {
+                    console
+                        .publish(
+                            format!(
+                                "[LOCAL] Container {container} is already running; reattaching."
+                            ),
+                            "panel",
+                            false,
+                        )
+                        .await;
+                    attach_docker(config, console, ctx, settings, &container).await
+                }
+                _ => {
+                    // A stopped container is recreated rather than
+                    // `docker start`ed so a changed image or mount
+                    // configuration takes effect on the next run.
+                    docker::rm(&container).await;
+                    let args = docker_run_args(config, settings, ctx, host_network);
+                    let output = tokio::time::timeout(
+                        Duration::from_secs(120),
+                        Command::new(&args[0])
+                            .args(&args[1..])
+                            .stdin(Stdio::null())
+                            .output(),
+                    )
+                    .await
+                    .context("docker run timed out")?
+                    .context("failed to run docker")?;
+                    if !output.status.success() {
+                        bail!(
+                            "docker run failed: {}",
+                            String::from_utf8_lossy(&output.stderr).trim()
+                        );
+                    }
+                    console
+                        .publish(
+                            format!(
+                                "[LOCAL] Container {container} started (restart policy: {}).",
+                                if settings.auto_restart {
+                                    "unless-stopped"
+                                } else {
+                                    "no"
+                                }
+                            ),
+                            "panel",
+                            false,
+                        )
+                        .await;
+                    attach_docker(config, console, ctx, settings, &container).await
+                }
+            }
+        }
         Deployment::Systemd => {
+            let base_argv = match settings.backend {
+                Backend::Endstone => base_argv_endstone(config)?,
+                Backend::Vanilla => base_argv_vanilla(config)?,
+            };
             // Real user-service hosting: install the unit, let systemd parent
             // the process, then attach console and monitoring. The unit file
             // is regenerated every launch so moves/updates heal themselves.
@@ -1278,12 +1337,16 @@ async fn launch(
         }
     }
 }
-fn configure_process(cmd: &mut Command) {
-    cmd.stdin(Stdio::piped())
-        .stdout(Stdio::piped())
+fn configure_process(cmd: &mut Command, with_stdin: bool) {
+    cmd.stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .env("PYTHONUNBUFFERED", "1");
+    if with_stdin {
+        cmd.stdin(Stdio::piped());
+    } else {
+        cmd.stdin(Stdio::null());
+    }
     #[cfg(unix)]
     cmd.process_group(0);
 }
@@ -1320,19 +1383,18 @@ async fn drain(r: Running) {
             child,
             writer,
             mut readers,
-            container,
             ..
         } => {
             // A launcher can exit while its descendants retain the pipes.
-            // Clean up its group.
+            // Clean up its group. For a docker logs reader this only tears
+            // down panel plumbing: the container keeps running (its restart
+            // policy owns its lifetime).
             signal_tree(pid, true);
             drop(child);
-            // Killing the docker-run client does not stop the container; force it.
-            if let Some(container) = &container {
-                docker_kill(container).await;
+            if let Some(writer) = writer {
+                writer.abort();
+                let _ = writer.await;
             }
-            writer.abort();
-            let _ = writer.await;
             for mut reader in readers.drain(..) {
                 if tokio::time::timeout(Duration::from_secs(30), &mut reader)
                     .await
@@ -1360,6 +1422,35 @@ async fn drain(r: Running) {
 /// Unified "how did it end" future for the supervisor's exit branch.
 async fn wait_running(r: &mut Running) -> String {
     match &mut r.kind {
+        RunKind::Process {
+            child,
+            container: Some(container),
+            watch,
+            ..
+        } => {
+            let container = container.clone();
+            let reader = child.wait();
+            let watch = watch.as_mut();
+            tokio::select! {
+                // The logs reader ended: either the container stopped (the
+                // stream closes with it) or the daemon restarted the
+                // container under its policy. Container state decides which.
+                _ = reader => {
+                    match docker::state_and_exit(&container).await {
+                        Some((status, _)) if status == "running" => "reattach needed".to_string(),
+                        Some((_, Some(0))) => "container exited (exit code 0)".to_string(),
+                        Some((_, Some(code))) => format!("container exited (exit code {code})"),
+                        _ => "container is gone".to_string(),
+                    }
+                }
+                msg = async {
+                    match watch {
+                        Some(w) => w.await.unwrap_or_else(|_| "container watch ended".into()),
+                        None => std::future::pending().await,
+                    }
+                } => msg,
+            }
+        }
         RunKind::Process { child, .. } => match child.wait().await {
             Ok(status) => format!("exit status {status}"),
             Err(e) => format!("wait failed: {e}"),
@@ -1379,8 +1470,41 @@ async fn terminate(r: &mut Running, settings: &ServerSettings, force: bool) -> a
             container,
             ..
         } => {
+            // Docker stop ladder: graceful `stop` through the command FIFO
+            // (identical to native), then ALWAYS `docker stop` — it stops a
+            // still-running process AND records the manual stop that keeps
+            // the restart policy from reviving the container after its own
+            // exit (a bare process exit WOULD be revived). `docker kill` is
+            // the force shortcut.
+            if let Some(container) = container {
+                if !force {
+                    let _ = dispatch_command(&sink, "stop").await;
+                    let _ = tokio::time::timeout(stop_budget, child.wait()).await;
+                }
+                if force {
+                    docker::kill(container).await;
+                } else if let Err(e) = docker::stop(container, settings.stop_timeout).await {
+                    tracing::warn!(%e, container, "docker stop failed; escalating");
+                    docker::kill(container).await;
+                }
+                // The logs reader exits once the container stops.
+                if tokio::time::timeout(kill_budget, child.wait())
+                    .await
+                    .is_err()
+                {
+                    docker::kill(container).await;
+                    let _ = tokio::time::timeout(kill_budget, child.wait()).await;
+                }
+                return Ok(());
+            }
             if !force {
-                let _ = write_command(stdin, "stop").await;
+                let _ = write_command(
+                    stdin
+                        .as_ref()
+                        .context("native process lost its stdin pipe")?,
+                    "stop",
+                )
+                .await;
                 if tokio::time::timeout(stop_budget, child.wait())
                     .await
                     .is_ok()
@@ -1390,17 +1514,6 @@ async fn terminate(r: &mut Running, settings: &ServerSettings, force: bool) -> a
                 signal_tree(pid, false);
                 #[cfg(not(unix))]
                 child.start_kill()?;
-                if tokio::time::timeout(kill_budget, child.wait())
-                    .await
-                    .is_ok()
-                {
-                    return Ok(());
-                }
-            }
-            // Docker: killing the docker-run client leaves the container
-            // running; the daemon must kill it before the name can be reused.
-            if let Some(container) = container.clone() {
-                docker_kill(&container).await;
                 if tokio::time::timeout(kill_budget, child.wait())
                     .await
                     .is_ok()
@@ -1457,7 +1570,9 @@ async fn supervise(
     shutdown: CancellationToken,
 ) {
     let mut running: Option<Running> = None;
-    let mut restart_at: Option<tokio::time::Instant> = None;
+    // Next automatic relaunch: the flag marks a docker RECHECK (attach only,
+    // never create/start) vs a native relaunch.
+    let mut restart_at: Option<(tokio::time::Instant, bool)> = None;
     lock_state(&paths.state_dir, false).await;
     loop {
         enum Wake {
@@ -1472,7 +1587,7 @@ async fn supervise(
             _ = shutdown.cancelled() => Wake::Shutdown,
             c = controls.recv() => Wake::Control(c),
             exit = async { match running.as_mut() { Some(r) => wait_running(r).await, None => std::future::pending().await } } => Wake::Exit(exit),
-            _ = async { match restart_at { Some(at) => tokio::time::sleep_until(at).await, None => std::future::pending().await } } => Wake::Restart,
+            _ = async { match restart_at { Some((at, _)) => tokio::time::sleep_until(at).await, None => std::future::pending().await } } => Wake::Restart,
         };
         match wake {
             Wake::Shutdown | Wake::Control(None) => {
@@ -1485,6 +1600,18 @@ async fn supervise(
                         // detach and leave it running for the user manager.
                         tracing::info!(
                             "detaching unit instance at panel shutdown; service keeps running"
+                        );
+                    } else if matches!(
+                        &r.kind,
+                        RunKind::Process {
+                            container: Some(_),
+                            ..
+                        }
+                    ) {
+                        // A docker container outlives the panel on purpose:
+                        // detach and leave it to its restart policy.
+                        tracing::info!(
+                            "detaching container instance at panel shutdown; restart policy keeps it running"
                         );
                     } else if let Err(e) = terminate(&mut r, &options, false).await {
                         tracing::error!(%e, "shutdown stop failed");
@@ -1504,6 +1631,17 @@ async fn supervise(
                         // service without stopping it (panel restart).
                         tracing::info!("detaching unit instance; service keeps running");
                         Ok(())
+                    } else if matches!(
+                        &r.kind,
+                        RunKind::Process {
+                            container: Some(_),
+                            ..
+                        }
+                    ) {
+                        tracing::info!(
+                            "detaching container instance; restart policy keeps it running"
+                        );
+                        Ok(())
                     } else {
                         terminate(&mut r, &options, false).await
                     };
@@ -1522,10 +1660,37 @@ async fn supervise(
                 break;
             }
             Wake::Control(Some(Control::Adopt(reply))) => {
-                // After a panel restart, adopt a unit that is still active.
+                // After a panel restart, adopt a unit or container that is
+                // still active instead of reporting the instance stopped.
                 let launch_ctx = launch_tx.borrow().clone();
                 let result = if running.is_some() {
                     Ok("Server is already running".into())
+                } else if launch_ctx.deployment == Deployment::Docker {
+                    state.send_modify(|s| s.status = Status::Starting);
+                    let current = settings.borrow().clone();
+                    match attach_running_container(&config, &console, &launch_ctx, &current).await {
+                        Ok(r) => {
+                            let pid = r.pid;
+                            let container =
+                                crate::instances::container_name(&launch_ctx.instance_id);
+                            commands.send_replace(Some(r.sink.clone()));
+                            state.send_modify(|s| {
+                                s.status = Status::Running;
+                                s.pid = Some(pid);
+                                s.started_at = Some(Instant::now());
+                                s.crash_count = 0;
+                            });
+                            running = Some(r);
+                            lock_state(&paths.state_dir, true).await;
+                            Ok(format!(
+                                "Adopted running container {container} (PID: {pid})"
+                            ))
+                        }
+                        Err(_) => {
+                            state.send_modify(|s| s.status = Status::Stopped);
+                            Ok("nothing to adopt".into())
+                        }
+                    }
                 } else if launch_ctx.deployment != Deployment::Systemd {
                     Ok("nothing to adopt".into())
                 } else {
@@ -1656,6 +1821,103 @@ async fn supervise(
                 if let Some(r) = running.take() {
                     drain(r).await;
                 }
+                let launch_ctx = launch_tx.borrow().clone();
+                if launch_ctx.deployment == Deployment::Docker {
+                    // Supervision split: the daemon's restart policy owns
+                    // revival; the panel only re-attaches and reports.
+                    if exit == "reattach needed" {
+                        // The container is still running; only the panel's
+                        // attach plumbing died. Re-attach without a crash.
+                        console
+                            .publish(
+                                "[LOCAL] Container still running; reattaching console.".into(),
+                                "panel",
+                                false,
+                            )
+                            .await;
+                        state.send_modify(|s| s.status = Status::Starting);
+                        let current = settings.borrow().clone();
+                        match attach_running_container(&config, &console, &launch_ctx, &current)
+                            .await
+                        {
+                            Ok(r) => {
+                                let pid = r.pid;
+                                commands.send_replace(Some(r.sink.clone()));
+                                state.send_modify(|s| {
+                                    s.status = Status::Running;
+                                    s.pid = Some(pid);
+                                    s.started_at = Some(Instant::now());
+                                });
+                                running = Some(r);
+                                lock_state(&paths.state_dir, true).await;
+                            }
+                            Err(e) => {
+                                state.send_modify(|s| s.status = Status::Crashed);
+                                console
+                                    .publish(
+                                        format!("[LOCAL] Reattach failed: {e:#}"),
+                                        "panel",
+                                        false,
+                                    )
+                                    .await;
+                                // The container may be mid-restart or the
+                                // daemon briefly gone; keep checking.
+                                let delay = settings.borrow().auto_restart_delay.max(1);
+                                restart_at = Some((
+                                    tokio::time::Instant::now() + Duration::from_secs(delay),
+                                    true,
+                                ));
+                            }
+                        }
+                    } else {
+                        let clean = exit.ends_with("(exit code 0)");
+                        state.send_modify(|s| {
+                            s.status = if clean {
+                                Status::Stopped
+                            } else {
+                                Status::Crashed
+                            };
+                            s.pid = None;
+                            s.started_at = None;
+                            if !clean {
+                                s.crash_count += 1;
+                            }
+                        });
+                        lock_state(&paths.state_dir, false).await;
+                        let crashes = state.borrow().crash_count;
+                        if clean {
+                            console
+                                .publish(
+                                    format!(
+                                        "[LOCAL] {exit}; the container stays down unless its \
+                                         restart policy revives it."
+                                    ),
+                                    "panel",
+                                    false,
+                                )
+                                .await;
+                        } else {
+                            console
+                                .publish(
+                                    format!(
+                                        "[LOCAL] {exit}, crash #{crashes}; the restart policy owns \
+                                         revival and the panel reattaches once it runs again."
+                                    ),
+                                    "panel",
+                                    false,
+                                )
+                                .await;
+                        }
+                        // Recheck soon: attach when the daemon brought the
+                        // container back, stay hands-off when it did not.
+                        let delay = settings.borrow().auto_restart_delay.max(1);
+                        restart_at = Some((
+                            tokio::time::Instant::now() + Duration::from_secs(delay),
+                            true,
+                        ));
+                    }
+                    continue;
+                }
                 state.send_modify(|s| {
                     s.status = Status::Crashed;
                     s.pid = None;
@@ -1673,31 +1935,54 @@ async fn supervise(
                     )
                     .await;
                 if options.auto_restart && crashes <= options.max_crashes {
-                    restart_at = Some(
+                    restart_at = Some((
                         tokio::time::Instant::now()
                             + Duration::from_secs(options.auto_restart_delay),
-                    );
+                        false,
+                    ));
                 }
             }
             Wake::Restart => {
-                restart_at = None;
+                let (_at, attach_only) = restart_at
+                    .take()
+                    .unwrap_or((tokio::time::Instant::now(), false));
                 state.send_modify(|s| s.status = Status::Starting);
                 console.reset_stats();
                 let current = settings.borrow().clone();
                 let launch_ctx = launch_tx.borrow().clone();
-                match launch(&config, &paths, &current, &console, &launch_ctx).await {
+                let result = if attach_only {
+                    // Docker recheck: attach when the restart policy revived
+                    // the container, never start or create anything.
+                    attach_running_container(&config, &console, &launch_ctx, &current).await
+                } else {
+                    launch(&config, &paths, &current, &console, &launch_ctx).await
+                };
+                match result {
                     Ok(r) => {
+                        let pid = r.pid;
                         commands.send_replace(Some(r.sink.clone()));
+                        // crash_count is deliberately NOT reset here: the
+                        // auto-restart budget counts across relaunches (only
+                        // an explicit start/adopt starts a fresh streak).
                         state.send_modify(|s| {
                             s.status = Status::Running;
-                            s.pid = Some(r.pid);
+                            s.pid = Some(pid);
                             s.started_at = Some(Instant::now());
                         });
                         running = Some(r);
                         lock_state(&paths.state_dir, true).await;
                     }
                     Err(e) => {
-                        state.send_modify(|s| s.status = Status::Crashed);
+                        // A recheck failure means the container is genuinely
+                        // not running (the policy did not revive it): report
+                        // stopped unless this was a real crash.
+                        state.send_modify(|s| {
+                            s.status = if attach_only && s.crash_count == 0 {
+                                Status::Stopped
+                            } else {
+                                Status::Crashed
+                            };
+                        });
                         console
                             .publish(
                                 format!("[LOCAL] Auto-restart failed: {e:#}"),
@@ -1709,5 +1994,130 @@ async fn supervise(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod docker_args_tests {
+    use super::*;
+    use crate::instances::DockerConfig;
+
+    fn ctx() -> LaunchContext {
+        LaunchContext {
+            instance_id: "test-instance".into(),
+            deployment: Deployment::Docker,
+            port: 20000,
+            docker: DockerConfig {
+                image: Some("omnibedrock-test:1".into()),
+                extra_mounts: vec!["/srv/media:/data/media:ro".into()],
+            },
+            ..LaunchContext::default()
+        }
+    }
+
+    fn plain(args: &[std::ffi::OsString]) -> Vec<String> {
+        args.iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn detached_run_args_carry_policy_mounts_and_host_network() {
+        let args = plain(&docker_run_args(
+            &Config::default(),
+            &ServerSettings::default(),
+            &ctx(),
+            true,
+        ));
+        assert_eq!(args[0], "docker");
+        // Detached: the daemon owns the container; the panel only reads its
+        // logs and writes its command FIFO.
+        assert!(args.contains(&"-d".to_string()));
+        assert!(!args.contains(&"-i".to_string()));
+        let restart = args.iter().position(|a| a == "--restart").unwrap();
+        assert_eq!(args[restart + 1], "unless-stopped");
+        let name = args.iter().position(|a| a == "--name").unwrap();
+        assert_eq!(args[name + 1], "omnibedrock-test-instance");
+        let net = args.iter().position(|a| a == "--network").unwrap();
+        assert_eq!(args[net + 1], "host");
+        assert!(
+            !args.iter().any(|a| a == "-p"),
+            "host network maps no ports"
+        );
+        let mount = args.iter().position(|a| a == "-v").unwrap();
+        assert!(args[mount + 1].ends_with(":/data"));
+        assert_eq!(
+            args.iter()
+                .filter(|a| a.as_str() == "/srv/media:/data/media:ro")
+                .count(),
+            1
+        );
+        let workdir = args.iter().position(|a| a == "-w").unwrap();
+        assert_eq!(args[workdir + 1], "/data");
+        let image = args.iter().position(|a| a == "omnibedrock-test:1").unwrap();
+        // The command override follows the image and redirects stdin to the
+        // FIFO both sides of the bind mount share.
+        assert_eq!(
+            args[image + 1..],
+            [
+                "sh",
+                "-c",
+                "exec python -m endstone --no-confirm -s /data <> /data/stdin.fifo"
+            ]
+        );
+    }
+
+    #[test]
+    fn mapped_ports_replace_host_network_and_policy_follows_auto_restart() {
+        let settings = ServerSettings {
+            auto_restart: false,
+            ..Default::default()
+        };
+        let args = plain(&docker_run_args(
+            &Config::default(),
+            &settings,
+            &ctx(),
+            false,
+        ));
+        assert!(!args.iter().any(|a| a == "--network"));
+        let p1 = args.iter().position(|a| a == "-p").unwrap();
+        assert_eq!(args[p1 + 1], "20000:19132/udp");
+        assert!(args.contains(&"20001:19133/udp".to_string()));
+        let restart = args.iter().position(|a| a == "--restart").unwrap();
+        assert_eq!(args[restart + 1], "no");
+    }
+
+    #[test]
+    fn image_falls_back_to_the_config_default_per_runtime() {
+        let config = Config::default();
+        let mut c = ctx();
+        c.docker.image = None;
+        let args = plain(&docker_run_args(
+            &config,
+            &ServerSettings::default(),
+            &c,
+            true,
+        ));
+        assert!(args.contains(&config.docker_image_endstone));
+    }
+
+    #[test]
+    fn limits_translate_to_container_flags() {
+        let mut c = ctx();
+        c.resources = ResourcePolicy {
+            memory_mb: Some(512),
+            cpus: Some(1.5),
+        };
+        let args = plain(&docker_run_args(
+            &Config::default(),
+            &ServerSettings::default(),
+            &c,
+            true,
+        ));
+        let memory = args.iter().position(|a| a == "--memory").unwrap();
+        assert_eq!(args[memory + 1], "512m");
+        assert!(args.contains(&"--memory-swap".to_string()));
+        let cpus = args.iter().position(|a| a == "--cpus").unwrap();
+        assert_eq!(args[cpus + 1], "1.5");
     }
 }

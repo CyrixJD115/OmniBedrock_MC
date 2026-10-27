@@ -176,6 +176,56 @@ impl Deployment {
     }
 }
 
+/// Per-instance Docker options for the `docker` deployment backend. Optional
+/// everywhere: instances that never touch Docker keep `None`, and every field
+/// falls back to the panel-level defaults (see `Config::docker_image_*`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DockerConfig {
+    /// Image override; `None` uses the config default for the active runtime
+    /// (omnibedrock-vanilla / omnibedrock-endstone).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    /// Extra `-v` bind mounts applied verbatim, one `host:container[:opts]`
+    /// spec each. The server directory mount is implicit and always present.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_mounts: Vec<String>,
+}
+
+impl DockerConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if let Some(image) = &self.image {
+            anyhow::ensure!(
+                !image.trim().is_empty() && !image.contains(char::is_whitespace),
+                "docker image must be a single non-empty reference"
+            );
+        }
+        for spec in &self.extra_mounts {
+            let parts: Vec<&str> = spec.split(':').collect();
+            anyhow::ensure!(
+                (2..=3).contains(&parts.len()) && parts.iter().all(|p| !p.is_empty()),
+                "extra mount '{spec}' must look like host:container[:opts]"
+            );
+            anyhow::ensure!(
+                !spec.chars().any(char::is_whitespace),
+                "extra mount '{spec}' must not contain whitespace"
+            );
+            anyhow::ensure!(
+                parts[1].starts_with('/'),
+                "extra mount '{spec}' container path must be absolute"
+            );
+        }
+        Ok(())
+    }
+    /// The image for one runtime: the per-instance override, else the config
+    /// default for that backend.
+    pub fn image_for(&self, backend: crate::server::Backend, config: &Config) -> String {
+        self.image.clone().unwrap_or_else(|| match backend {
+            crate::server::Backend::Vanilla => config.docker_image_vanilla.clone(),
+            crate::server::Backend::Endstone => config.docker_image_endstone.clone(),
+        })
+    }
+}
+
 /// Instance access is expressed with the SAME role catalog as global roles:
 /// an entry assigns catalog roles to one user on this instance. Legacy files
 /// store a two-level `level` field (manage|view); it migrates to the roles
@@ -225,6 +275,10 @@ pub struct InstanceRecord {
     pub port: u16,
     #[serde(default)]
     pub deployment: Deployment,
+    /// Docker options; only meaningful when `deployment` is Docker. Older
+    /// records (and every native/systemd instance) carry `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docker: Option<DockerConfig>,
     #[serde(default)]
     pub resources: ResourcePolicy,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -285,6 +339,7 @@ impl Instance {
             "created_at": record.created_at,
             "port": record.port,
             "deployment": record.deployment.as_str(),
+            "docker": record.docker,
             "enforcement": record.deployment.enforcement(),
             "resources": {
                 "memory_mb": record.resources.memory_mb,
@@ -305,6 +360,9 @@ impl Instance {
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct DeployCapabilities {
     pub docker: Option<String>,
+    /// Host OS as reported to the UI ("linux" | "windows" | "macos"); the
+    /// instance dialog preselects the deployment default for this platform.
+    pub platform: String,
     /// A systemd user manager is reachable (user-service instances can run).
     pub systemd: bool,
     /// Linger is on: user units keep running (and start at boot) without an
@@ -386,6 +444,7 @@ impl InstanceManager {
                     created_at: timestamp(),
                     port: legacy_port(&config).await,
                     deployment: Deployment::Native,
+                    docker: None,
                     resources: ResourcePolicy::default(),
                     access: vec![],
                     autostart: false,
@@ -548,6 +607,9 @@ impl InstanceManager {
         quota_check: impl FnOnce(&[InstanceRecord]) -> anyhow::Result<()>,
     ) -> anyhow::Result<Arc<Instance>> {
         record.resources.validate()?;
+        if let Some(docker) = &record.docker {
+            docker.validate().map_err(|e| anyhow::anyhow!("{e}"))?;
+        }
         match record.deployment {
             Deployment::Systemd if !self.capabilities.systemd => {
                 bail!(
@@ -593,6 +655,9 @@ impl InstanceManager {
         quota_check: impl FnOnce(&[InstanceRecord]) -> anyhow::Result<()>,
     ) -> anyhow::Result<Arc<Instance>> {
         next.resources.validate()?;
+        if let Some(docker) = &next.docker {
+            docker.validate().map_err(|e| anyhow::anyhow!("{e}"))?;
+        }
         let instance = self
             .get(id)
             .await
@@ -603,6 +668,7 @@ impl InstanceManager {
         }
         let running = instance.server.snapshot().status == Status::Running;
         let relaunch_changed = next.deployment != current.deployment
+            || next.docker != current.docker
             || next.resources != current.resources
             || next.port != current.port;
         if running && relaunch_changed {
@@ -636,9 +702,10 @@ impl InstanceManager {
                 .collect();
             quota_check(&projected)?;
             *instance.record.write().expect("instance record lock") = next.clone();
+            instance.server.set_launch(launch_context(&next));
             instance
-                .server
-                .set_launch(launch_context(&self.config, &next));
+                .broadcaster
+                .set_docker(broadcaster_docker_spec(&next, &self.config));
             if next.port != current.port {
                 enforce_instance_port(&instance.config, next.port).await;
             }
@@ -685,6 +752,10 @@ impl InstanceManager {
         instance.bds.shutdown().await;
         instance.endstone.shutdown().await;
         let _ = instance.broadcaster.shutdown().await;
+        if deployment == Deployment::Docker {
+            crate::docker::rm(&container_name(id)).await;
+            crate::docker::rm(&format!("{}-broadcaster", container_name(id))).await;
+        }
         instance.token.cancel();
         let removed = {
             let mut instances = self.instances.write().await;
@@ -729,7 +800,7 @@ impl InstanceManager {
     }
 }
 
-fn launch_context(config: &Config, record: &InstanceRecord) -> LaunchContext {
+fn launch_context(record: &InstanceRecord) -> LaunchContext {
     LaunchContext {
         instance_id: record.id.clone(),
         instance_name: record.name.clone(),
@@ -737,9 +808,24 @@ fn launch_context(config: &Config, record: &InstanceRecord) -> LaunchContext {
         resources: record.resources,
         port: record.port,
         autostart: record.autostart,
-        docker_image_vanilla: config.docker_image_vanilla.clone(),
-        docker_image_endstone: config.docker_image_endstone.clone(),
+        docker: record.docker.clone().unwrap_or_default(),
     }
+}
+
+/// The broadcaster sidecar spec for one record: a container only when the
+/// instance runs on the docker backend AND the host can give the sidecar the
+/// same network view as a native broadcaster (Linux host networking). Every
+/// other combination keeps the native Java child process.
+pub fn broadcaster_docker_spec(
+    record: &InstanceRecord,
+    config: &Config,
+) -> Option<crate::broadcaster::DockerSpec> {
+    (record.deployment == Deployment::Docker && cfg!(target_os = "linux")).then(|| {
+        crate::broadcaster::DockerSpec {
+            container: format!("{}-broadcaster", container_name(&record.id)),
+            image: config.docker_image_broadcaster.clone(),
+        }
+    })
 }
 
 /// Build every service for one instance from its record. The default instance
@@ -803,7 +889,7 @@ async fn build_instance(
         instance_config.clone(),
         token.clone(),
         paths,
-        launch_context(&instance_config, &record),
+        launch_context(&record),
     )?;
     let bds = Bds::new(instance_config.clone(), console.clone(), token.clone());
     let endstone = Endstone::new(instance_config.clone(), console.clone(), token.clone());
@@ -813,6 +899,7 @@ async fn build_instance(
         instance_config.clone(),
         token.clone(),
         (record.id != DEFAULT_INSTANCE).then(|| config.broadcaster_dir.clone()),
+        broadcaster_docker_spec(&record, config),
     )?;
     let backups = if record.id == DEFAULT_INSTANCE {
         Backups::new(instance_config.clone(), server.clone(), token.clone()).await?
@@ -840,15 +927,17 @@ async fn build_instance(
         token,
         operations: Arc::new(tokio::sync::Mutex::new(())),
     });
-    // A systemd unit keeps running across panel restarts; reconnect its
-    // console and monitoring instead of reporting it stopped.
-    if instance
-        .record
-        .read()
-        .expect("instance record lock")
-        .deployment
-        == Deployment::Systemd
-    {
+    // A systemd unit or docker container keeps running across panel
+    // restarts; reconnect console and monitoring instead of reporting the
+    // instance stopped.
+    if matches!(
+        instance
+            .record
+            .read()
+            .expect("instance record lock")
+            .deployment,
+        Deployment::Systemd | Deployment::Docker
+    ) {
         match instance.server.adopt_if_active().await {
             Ok(message) if message.starts_with("Adopted") => {
                 tracing::info!(instance = %instance.record.read().expect("instance record lock").id, "{message}")
@@ -1058,6 +1147,7 @@ async fn probe_capabilities() -> DeployCapabilities {
         docker,
         systemd,
         linger,
+        platform: std::env::consts::OS.into(),
     }
 }
 
@@ -1127,6 +1217,7 @@ mod tests {
                 created_at: String::new(),
                 port: 1,
                 deployment: Deployment::Native,
+                docker: None,
                 resources: ResourcePolicy {
                     memory_mb: Some(1024),
                     cpus: Some(2.0),
@@ -1141,6 +1232,7 @@ mod tests {
                 created_at: String::new(),
                 port: 2,
                 deployment: Deployment::Native,
+                docker: None,
                 resources: ResourcePolicy {
                     memory_mb: Some(512),
                     cpus: Some(1.0),
@@ -1214,6 +1306,7 @@ mod tests {
             created_at: String::new(),
             port: 1,
             deployment: Deployment::Native,
+            docker: None,
             resources: ResourcePolicy::default(),
             access: vec![
                 AccessEntry {
@@ -1344,6 +1437,76 @@ mod tests {
         // CPU overcommit is independent of memory health.
         let (_, cpu) = overcommit_status(65536.0, 1024, 1024, 4, 6.0);
         assert!(cpu.unwrap().contains("exceeds the host's"));
+    }
+
+    #[test]
+    fn docker_config_validation() {
+        let ok = DockerConfig {
+            image: Some("omnibedrock-vanilla:1.21".into()),
+            extra_mounts: vec!["/a:/b:ro".into(), "/c:/d".into()],
+        };
+        assert!(ok.validate().is_ok());
+        assert!(DockerConfig::default().validate().is_ok());
+        // Image must be a single reference.
+        assert!(
+            DockerConfig {
+                image: Some("two words".into()),
+                extra_mounts: vec![]
+            }
+            .validate()
+            .is_err()
+        );
+        // Mounts need host:container, no whitespace, absolute container path.
+        assert!(
+            DockerConfig {
+                image: None,
+                extra_mounts: vec!["/a:b c".into()]
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            DockerConfig {
+                image: None,
+                extra_mounts: vec!["onlyhost".into()]
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            DockerConfig {
+                image: None,
+                extra_mounts: vec!["/a:relative".into()]
+            }
+            .validate()
+            .is_err()
+        );
+        // The per-instance override beats the config default per runtime.
+        let config = Config::default();
+        assert_eq!(
+            ok.image_for(crate::server::Backend::Vanilla, &config),
+            "omnibedrock-vanilla:1.21"
+        );
+        assert_eq!(
+            DockerConfig::default().image_for(crate::server::Backend::Endstone, &config),
+            config.docker_image_endstone
+        );
+    }
+
+    #[test]
+    fn record_serde_docker_field_is_optional() {
+        let record: InstanceRecord = serde_yaml::from_str(
+            "id: a\nname: A\nowner: o\ncreated_at: 'x'\ndeployment: docker\ndocker:\n  image: omnibedrock-vanilla:1\n  extra_mounts:\n    - /a:/b:ro\n",
+        )
+        .unwrap();
+        let docker = record.docker.expect("docker options parsed");
+        assert_eq!(docker.image.as_deref(), Some("omnibedrock-vanilla:1"));
+        assert_eq!(docker.extra_mounts, vec!["/a:/b:ro".to_string()]);
+        // Records written before the docker backend keep deserializing.
+        let legacy: InstanceRecord =
+            serde_yaml::from_str("id: a\nname: A\nowner: o\ncreated_at: 'x'\n").unwrap();
+        assert!(legacy.docker.is_none());
+        assert_eq!(legacy.deployment, Deployment::Native);
     }
 
     #[test]

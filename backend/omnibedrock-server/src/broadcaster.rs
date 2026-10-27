@@ -75,6 +75,16 @@ pub struct DeviceCode {
     pub at: f64,
 }
 
+/// Sidecar container hosting for the broadcaster (docker deployment backend,
+/// Linux host networking — see `instances::broadcaster_docker_spec`). The
+/// container has NO restart policy: the panel owns its lifecycle exactly like
+/// the native Java child, only through the daemon.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DockerSpec {
+    pub container: String,
+    pub image: String,
+}
+
 type Reply = oneshot::Sender<anyhow::Result<String>>;
 enum Control {
     Start(Reply),
@@ -86,9 +96,15 @@ enum Control {
 struct Running {
     child: Child,
     pid: u32,
-    stdin: mpsc::Sender<String>,
-    writer: tokio::task::JoinHandle<()>,
+    /// The stdin writer task; `None` for the docker sidecar (its commands go
+    /// through the FIFO, and the child is only a `docker logs` reader).
+    stdin: Option<mpsc::Sender<String>>,
+    writer: Option<tokio::task::JoinHandle<()>>,
     readers: Vec<tokio::task::JoinHandle<()>>,
+    /// Set when the child reads the sidecar container's logs.
+    container: Option<String>,
+    /// Sidecar command FIFO on the host (inside the mounted dir).
+    fifo: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -104,6 +120,8 @@ pub struct Broadcaster {
     /// instance's own dir has none. `None` for the default instance, whose
     /// dir IS the panel dir.
     jar_home: Option<PathBuf>,
+    /// Sidecar hosting spec; `Some` only for docker instances on Linux.
+    docker: watch::Sender<Option<DockerSpec>>,
 }
 
 impl Broadcaster {
@@ -111,6 +129,7 @@ impl Broadcaster {
         config: Arc<Config>,
         shutdown: CancellationToken,
         jar_home: Option<PathBuf>,
+        docker: Option<DockerSpec>,
     ) -> anyhow::Result<Self> {
         let console = Console::with_journal_root(
             config.logs_dir.join("broadcaster-console"),
@@ -121,6 +140,7 @@ impl Broadcaster {
         let (status_tx, status) = watch::channel(BcSnapshot::default());
         let (codes_tx, device_codes) = watch::channel(BTreeMap::new());
         let (java_tx, java) = watch::channel(None);
+        let (docker_tx, docker_rx) = watch::channel(docker);
         let (control, control_rx) = mpsc::channel(16);
         let manager = Self {
             control,
@@ -130,6 +150,7 @@ impl Broadcaster {
             java: java.clone(),
             config: config.clone(),
             jar_home: jar_home.clone(),
+            docker: docker_tx,
         };
         // Detect the Java runtime in the background; startup never blocks on it.
         let detect_config = config.clone();
@@ -161,8 +182,15 @@ impl Broadcaster {
             status_tx,
             console,
             shutdown,
+            docker_rx,
         ));
         Ok(manager)
+    }
+
+    /// Switch sidecar hosting (deployment changes are only allowed while the
+    /// instance is stopped, so no running process has to be migrated).
+    pub fn set_docker(&self, docker: Option<DockerSpec>) {
+        self.docker.send_replace(docker);
     }
 
     pub fn dir(&self) -> PathBuf {
@@ -353,6 +381,7 @@ async fn launch(
     jar: &std::path::Path,
     config: &Config,
     console: &Console,
+    docker: Option<&DockerSpec>,
 ) -> anyhow::Result<Running> {
     tokio::fs::create_dir_all(&config.broadcaster_dir).await?;
     if !jar.exists() {
@@ -362,24 +391,54 @@ async fn launch(
             JAR_NAME
         );
     }
-    let mut child = java_command(config, jar)
-        .spawn()
-        .context("java not found; install Java or set JAVA_BIN")?;
+    let container = docker.map(|spec| spec.container.clone());
+    let fifo = docker.map(|_| crate::docker::host_stdin_fifo(&config.broadcaster_dir));
+    let (mut cmd, with_stdin) = match docker {
+        // The sidecar's output streams through `docker logs -f`; the child
+        // has no stdin of its own.
+        Some(spec) => {
+            let argv = crate::docker::logs_argv(&spec.container, 200);
+            let mut cmd = Command::new(&argv[0]);
+            cmd.args(&argv[1..]);
+            (cmd, false)
+        }
+        None => (java_command(config, jar), true),
+    };
+    cmd.stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    if with_stdin {
+        cmd.stdin(Stdio::piped());
+    } else {
+        cmd.stdin(Stdio::null());
+    }
+    #[cfg(unix)]
+    cmd.process_group(0);
+    let mut child = cmd.spawn().context(if container.is_some() {
+        "failed to read the broadcaster container logs"
+    } else {
+        "java not found; install Java or set JAVA_BIN"
+    })?;
     let pid = child.id().context("child has no PID")?;
     let stdout = child.stdout.take().context("missing stdout")?;
     let stderr = child.stderr.take().context("missing stderr")?;
-    let mut stdin = child.stdin.take().context("missing stdin")?;
-    let (tx, mut rx) = mpsc::channel::<String>(config.command_queue_capacity);
-    let writer = tokio::spawn(async move {
-        while let Some(text) = rx.recv().await {
-            if stdin.write_all(text.as_bytes()).await.is_err()
-                || stdin.write_all(b"\n").await.is_err()
-                || stdin.flush().await.is_err()
-            {
-                break;
+    let (tx, writer) = if with_stdin {
+        let mut stdin = child.stdin.take().context("missing stdin")?;
+        let (tx, mut rx) = mpsc::channel::<String>(config.command_queue_capacity);
+        let writer = tokio::spawn(async move {
+            while let Some(text) = rx.recv().await {
+                if stdin.write_all(text.as_bytes()).await.is_err()
+                    || stdin.write_all(b"\n").await.is_err()
+                    || stdin.flush().await.is_err()
+                {
+                    break;
+                }
             }
-        }
-    });
+        });
+        (Some(tx), Some(writer))
+    } else {
+        (None, None)
+    };
     let readers = vec![
         tokio::spawn(read_pipe(
             stdout,
@@ -394,14 +453,127 @@ async fn launch(
             config.console_max_line_bytes,
         )),
     ];
-    tracing::info!(pid, "broadcaster started");
+    tracing::info!(pid, container = ?container, "broadcaster started");
     Ok(Running {
         child,
         pid,
         stdin: tx,
         writer,
         readers,
+        container,
+        fifo,
     })
+}
+
+/// Run the broadcaster as a sidecar container on the host network so its
+/// ICE/UDP behavior matches the native setup (Linux only; see
+/// `instances::broadcaster_docker_spec`). The broadcaster directory is
+/// mounted at /data (config.yml, token cache, screenshots) and the shared
+/// jar read-only, so the container itself stays stateless.
+async fn launch_docker(
+    spec: &DockerSpec,
+    jar: &std::path::Path,
+    config: &Config,
+    console: &Console,
+) -> anyhow::Result<()> {
+    crate::docker::ensure_image(
+        config,
+        &spec.image,
+        crate::docker::DOCKERFILE_BROADCASTER,
+        console,
+    )
+    .await?;
+    let jar_text = jar.to_string_lossy();
+    anyhow::ensure!(
+        !jar_text.contains(':'),
+        "broadcaster jar path {jar_text} contains ':' and cannot be bind-mounted"
+    );
+    match crate::docker::state(&spec.container).await.as_deref() {
+        Some("running") => {
+            console
+                .publish(
+                    format!(
+                        "[LOCAL] Broadcaster container {} is already running; reattaching.",
+                        spec.container
+                    ),
+                    "panel",
+                    false,
+                )
+                .await;
+        }
+        _ => {
+            crate::docker::rm(&spec.container).await;
+            // Commands reach the sidecar through a FIFO inside the mounted
+            // broadcaster directory (same mechanism as the systemd backend).
+            let fifo = crate::docker::host_stdin_fifo(&config.broadcaster_dir);
+            crate::systemd::ensure_fifo(&fifo).await?;
+            let mut args: Vec<std::ffi::OsString> = vec![
+                "docker".into(),
+                "run".into(),
+                "-d".into(),
+                "--name".into(),
+                spec.container.clone().into(),
+            ];
+            if cfg!(target_os = "linux") {
+                // Host networking keeps ICE/UDP behavior identical to the
+                // native broadcaster process.
+                args.push("--network".into());
+                args.push("host".into());
+            }
+            #[cfg(unix)]
+            {
+                let uid = nix::unistd::getuid();
+                let gid = nix::unistd::getgid();
+                args.push("--user".into());
+                args.push(format!("{}:{}", uid.as_raw(), gid.as_raw()).into());
+            }
+            args.push("-v".into());
+            args.push(
+                format!(
+                    "{}:/data",
+                    config.broadcaster_dir.to_string_lossy().replace('\\', "/")
+                )
+                .into(),
+            );
+            args.push("-v".into());
+            args.push(format!("{jar_text}:/data/{JAR_NAME}:ro").into());
+            args.push("-w".into());
+            args.push("/data".into());
+            args.push(spec.image.clone().into());
+            args.extend(crate::docker::command_override(&[
+                "java".into(),
+                "-jar".into(),
+                format!("/data/{JAR_NAME}").into(),
+            ]));
+            let output = tokio::time::timeout(
+                Duration::from_secs(120),
+                Command::new(&args[0])
+                    .args(&args[1..])
+                    .stdin(Stdio::null())
+                    .output(),
+            )
+            .await
+            .context("docker run timed out")?
+            .context("failed to run docker")?;
+            if !output.status.success() {
+                bail!(
+                    "docker run for the broadcaster failed: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                );
+            }
+            console
+                .publish(
+                    format!(
+                        "[LOCAL] Broadcaster container {} started (host network).",
+                        spec.container
+                    ),
+                    "panel",
+                    false,
+                )
+                .await;
+        }
+    }
+    Ok(())
 }
 
 fn signal_tree(pid: u32, force: bool) {
@@ -427,7 +599,41 @@ fn signal_tree(pid: u32, force: bool) {
 }
 
 async fn terminate(running: &mut Running) -> anyhow::Result<()> {
-    let _ = running.stdin.send("stop".into()).await;
+    if let Some(container) = running.container.clone() {
+        // The sidecar has no restart policy, but the daemon owns the
+        // process: graceful `stop` through the command FIFO, then `docker
+        // stop` (SIGTERM), then `docker kill`.
+        let Some(fifo) = running.fifo.clone() else {
+            return Ok(());
+        };
+        if let Err(e) = write_fifo(&fifo, "stop").await {
+            tracing::debug!(%e, "broadcaster fifo stop failed; escalating");
+        }
+        if tokio::time::timeout(Duration::from_secs(3), running.child.wait())
+            .await
+            .is_ok()
+        {
+            return Ok(());
+        }
+        if let Err(e) = crate::docker::stop(&container, 5).await {
+            tracing::warn!(%e, container, "broadcaster docker stop failed; escalating");
+            crate::docker::kill(&container).await;
+        }
+        if tokio::time::timeout(STOP_TIMEOUT, running.child.wait())
+            .await
+            .is_err()
+        {
+            crate::docker::kill(&container).await;
+            let _ = tokio::time::timeout(STOP_TIMEOUT, running.child.wait()).await;
+        }
+        return Ok(());
+    }
+    let _ = running
+        .stdin
+        .as_ref()
+        .context("broadcaster lost its stdin")?
+        .send("stop".into())
+        .await;
     if tokio::time::timeout(STOP_TIMEOUT, running.child.wait())
         .await
         .is_ok()
@@ -448,9 +654,13 @@ async fn terminate(running: &mut Running) -> anyhow::Result<()> {
 }
 
 async fn drain(mut running: Running) {
+    // For a logs reader this only tears down panel plumbing; the
+    // container's lifetime belongs to the daemon.
     signal_tree(running.pid, true);
-    running.writer.abort();
-    let _ = running.writer.await;
+    if let Some(writer) = running.writer.take() {
+        writer.abort();
+        let _ = writer.await;
+    }
     for mut reader in running.readers.drain(..) {
         if tokio::time::timeout(Duration::from_secs(10), &mut reader)
             .await
@@ -469,6 +679,7 @@ async fn supervise(
     status: watch::Sender<BcSnapshot>,
     console: Console,
     shutdown: CancellationToken,
+    docker_rx: watch::Receiver<Option<DockerSpec>>,
 ) {
     let mut running: Option<Running> = None;
     loop {
@@ -517,13 +728,32 @@ async fn supervise(
                 let result = if running.is_some() {
                     Ok("Broadcaster is already running".into())
                 } else {
-                    match launch(
-                        &resolve_jar(&config, jar_home.as_deref()),
-                        &config,
-                        &console,
-                    )
-                    .await
-                    {
+                    let docker_spec = docker_rx.borrow().clone();
+                    let preflight = match &docker_spec {
+                        Some(spec) => {
+                            launch_docker(
+                                spec,
+                                &resolve_jar(&config, jar_home.as_deref()),
+                                &config,
+                                &console,
+                            )
+                            .await
+                        }
+                        None => Ok(()),
+                    };
+                    let launched = match preflight {
+                        Err(e) => Err(e),
+                        Ok(()) => {
+                            launch(
+                                &resolve_jar(&config, jar_home.as_deref()),
+                                &config,
+                                &console,
+                                docker_spec.as_ref(),
+                            )
+                            .await
+                        }
+                    };
+                    match launched {
                         Ok(r) => {
                             status.send_modify(|s| {
                                 s.status = BcStatus::Running;
@@ -568,13 +798,32 @@ async fn supervise(
                         });
                         stopped?;
                     }
-                    match launch(
-                        &resolve_jar(&config, jar_home.as_deref()),
-                        &config,
-                        &console,
-                    )
-                    .await
-                    {
+                    let docker_spec = docker_rx.borrow().clone();
+                    let preflight = match &docker_spec {
+                        Some(spec) => {
+                            launch_docker(
+                                spec,
+                                &resolve_jar(&config, jar_home.as_deref()),
+                                &config,
+                                &console,
+                            )
+                            .await
+                        }
+                        None => Ok(()),
+                    };
+                    let launched = match preflight {
+                        Err(e) => Err(e),
+                        Ok(()) => {
+                            launch(
+                                &resolve_jar(&config, jar_home.as_deref()),
+                                &config,
+                                &console,
+                                docker_spec.as_ref(),
+                            )
+                            .await
+                        }
+                    };
+                    match launched {
                         Ok(r) => {
                             status.send_modify(|s| {
                                 s.status = BcStatus::Running;
@@ -593,12 +842,21 @@ async fn supervise(
             }
             Wake::Control(Some(Control::Command(text, reply))) => {
                 let result = match running.as_ref() {
-                    Some(r) => r
-                        .stdin
-                        .send(text)
-                        .await
-                        .map(|_| ())
-                        .map_err(|e| anyhow::anyhow!("stdin closed: {e}")),
+                    Some(r) => match &r.stdin {
+                        Some(stdin) => stdin
+                            .send(text)
+                            .await
+                            .map(|_| ())
+                            .map_err(|e| anyhow::anyhow!("stdin closed: {e}")),
+                        None => {
+                            // Sidecar: write the command into the FIFO the
+                            // container's java process reads its stdin from.
+                            match &r.fifo {
+                                Some(fifo) => write_fifo(fifo, &text).await,
+                                None => Err(anyhow::anyhow!("sidecar has no command FIFO")),
+                            }
+                        }
+                    },
                     None => Err(anyhow::anyhow!("Broadcaster is not running")),
                 };
                 let _ = reply.send(result);
@@ -622,6 +880,25 @@ async fn supervise(
             }
         }
     }
+}
+
+/// Write one command line into a FIFO, opening read+write so the call never
+/// blocks waiting for a reader.
+async fn write_fifo(path: &std::path::Path, text: &str) -> anyhow::Result<()> {
+    use tokio::io::AsyncWriteExt;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut fifo = tokio::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .await?;
+        fifo.write_all(text.as_bytes()).await?;
+        fifo.write_all(b"\n").await?;
+        fifo.flush().await?;
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .context("FIFO command timed out")?
 }
 
 pub const DEFAULT_CONFIG: &str = include_str!("broadcaster_default_config.yml");
