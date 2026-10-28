@@ -31,6 +31,16 @@
         "responses": { "200": { "description": "OpenAPI 3.0 inventory of the API" } }
       }
     },
+  "/build-id": {
+    "get": {
+      "tags": ["system"],
+      "summary": "Embedded UI build hash",
+      "description": "SHA-256 of the dashboard bundled into this binary. Public; matches the boot log's 'UI build:' line, so a stale open page can detect a new backend and self-reload.",
+      "x-public": true,
+      "security": [],
+      "responses": { "200": { "description": "Returns {build_id}" } }
+    }
+  },
     "/auth/login": {
       "post": {
         "tags": ["auth"],

@@ -47,6 +47,10 @@ walkdir.workspace = true
 name = "omnibedrock"
 path = "src/main.rs"
 
+[build-dependencies]
+hex.workspace = true
+sha2.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true
 tokio-tungstenite.workspace = true

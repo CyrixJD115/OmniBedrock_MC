@@ -9,6 +9,7 @@
 //! source-less trees (Docker cargo stage, packaged crates). Set
 //! `OMNI_SKIP_FRONTEND_BUILD=1` to never invoke npm and accept the
 //! placeholder.
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -26,6 +27,18 @@ fn main() {
     println!(
         "cargo:rerun-if-changed={}",
         frontend.join("package.json").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        frontend.join("package-lock.json").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        frontend.join("vite.config.ts").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        frontend.join("svelte.config.js").display()
     );
     println!("cargo:rerun-if-env-changed=OMNI_SKIP_FRONTEND_BUILD");
 
@@ -84,6 +97,52 @@ fn main() {
         let _ = std::fs::create_dir_all(&build_dir);
         let _ = std::fs::write(index, PLACEHOLDER);
     }
+
+    // Fingerprint the tree that include_dir! bakes in. Emitting the hash as
+    // a rustc env is what makes the embed RELIABLE: rerun-if-changed alone
+    // only re-runs this script, and a re-run that changes no directive lets
+    // cargo keep the crate — whose include_dir! expansion then embeds
+    // whatever was on disk during some earlier compile. A changed env value
+    // is a crate input, so a different UI always forces a real recompile and
+    // the binary, the boot log, and /api/v1/build-id all carry the same hash.
+    let ui_hash = hash_dir(&build_dir);
+    println!("cargo:rustc-env=OMNI_UI_HASH={ui_hash}");
+}
+
+/// SHA-256 over the embedded UI tree: every regular file's relative path and
+/// contents, sorted for determinism across filesystems. An empty or missing
+/// tree still hashes (to the placeholder's stable value).
+fn hash_dir(root: &Path) -> String {
+    let mut files: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+    fn walk(dir: &Path, files: &mut Vec<(PathBuf, Vec<u8>)>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, files);
+            } else if let Ok(contents) = std::fs::read(&path) {
+                files.push((path, contents));
+            }
+        }
+    }
+    walk(root, &mut files);
+    files.sort();
+    let mut hasher = Sha256::new();
+    for (path, contents) in &files {
+        let rel = path
+            .strip_prefix(root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .as_bytes()
+            .to_vec();
+        hasher.update((rel.len() as u64).to_le_bytes());
+        hasher.update(&rel);
+        hasher.update((contents.len() as u64).to_le_bytes());
+        hasher.update(contents);
+    }
+    hex::encode(hasher.finalize())
 }
 
 /// Refuse to ship a placeholder when real UI sources are present. A cargo

@@ -279,6 +279,12 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         // Machine-readable endpoint inventory, public like /health so tools
         // and agents can discover the API without a source dive.
         .route("/openapi.json", get(|| async { openapi_doc() }))
+        // Embedded-UI fingerprint (matches the boot log's "UI build:" line),
+        // public so a stale open page can detect a new backend and reload.
+        .route(
+            "/build-id",
+            get(|| async { Json(json!({"build_id": crate::bundle::UI_BUILD_HASH})) }),
+        )
         .route("/console/ws", get(websocket::console_upgrade))
         .route("/performance/ws", get(websocket::metrics_upgrade))
         .route("/backups/ws", get(websocket::backups_upgrade))

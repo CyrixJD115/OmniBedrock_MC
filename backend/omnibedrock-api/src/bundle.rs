@@ -4,12 +4,23 @@
 //! served from the same process as the API, so one executable is the whole
 //! panel. App routes (`/store`, `/addons`, …) have no file extension and fall
 //! back to `index.html`, letting the client router take over.
+//!
+//! Freshness is enforced by `build.rs`: it hashes the embedded tree into
+//! [`UI_BUILD_HASH`], and because that hash reaches the crate as a `rustc-env`
+//! value, any UI change forces a real recompile — `include_dir!` can never
+//! quietly serve a stale dashboard.
 use axum::{
     body::Body,
     http::{Method, Request, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use include_dir::{Dir, include_dir};
+
+/// SHA-256 of the embedded UI tree, injected by build.rs. Printed as
+/// `UI build: …` at boot and served from `GET /api/v1/build-id`, so a stale
+/// open page (and its operator) can tell exactly which dashboard this
+/// backend is running.
+pub const UI_BUILD_HASH: &str = env!("OMNI_UI_HASH");
 
 static UI: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../frontend/build");
 
@@ -32,7 +43,22 @@ pub async fn serve(request: Request<Body>) -> Response {
     };
     // Mime always follows the file actually served — the SPA shell must go
     // out as text/html even when the URL was /store, or Chromium blocks it.
-    let immutable = served_path.starts_with("_app/");
+    let cache_control = cache_control_for(served_path);
+    // The tree hash covers every byte, so hash + path identifies content for
+    // as long as this binary runs — and changes wholesale on any UI change.
+    let etag = format!(
+        "\"{}:{}\"",
+        &UI_BUILD_HASH[..16],
+        file.path().to_string_lossy()
+    );
+    if if_none_match_hits(request.headers(), &etag) {
+        return Response::builder()
+            .header(header::CACHE_CONTROL, cache_control)
+            .header(header::ETAG, etag)
+            .status(StatusCode::NOT_MODIFIED)
+            .body(Body::empty())
+            .unwrap_or_else(|_| internal_error());
+    }
     let response = Response::builder()
         .header(
             header::CONTENT_TYPE,
@@ -40,15 +66,8 @@ pub async fn serve(request: Request<Body>) -> Response {
                 .first_or_octet_stream()
                 .as_ref(),
         )
-        .header(
-            header::CACHE_CONTROL,
-            if immutable {
-                // Vite-hashed assets never change content for a given name.
-                "public, max-age=31536000, immutable"
-            } else {
-                "no-cache"
-            },
-        );
+        .header(header::CACHE_CONTROL, cache_control)
+        .header(header::ETAG, etag);
     if request.method() == Method::HEAD {
         return response
             .body(Body::empty())
@@ -59,10 +78,79 @@ pub async fn serve(request: Request<Body>) -> Response {
         .unwrap_or_else(|_| internal_error())
 }
 
+/// Cache policy per served file. Only Vite's content-hashed subtree may be
+/// cached forever; `/_app/version.json` changes every deploy and must
+/// revalidate exactly like the shell.
+fn cache_control_for(served_path: &str) -> &'static str {
+    if served_path.starts_with("_app/immutable/") {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    }
+}
+
+/// RFC 9110 If-None-Match: `*` matches anything; otherwise the ETag matches
+/// when it appears in the client's comma-separated list (compared strongly;
+/// the panel never issues weak ETags).
+fn if_none_match_hits(headers: &axum::http::HeaderMap, etag: &str) -> bool {
+    let Some(value) = headers.get(header::IF_NONE_MATCH) else {
+        return false;
+    };
+    let Ok(raw) = value.to_str() else {
+        return false;
+    };
+    raw.split(',').any(|candidate| {
+        let candidate = candidate.trim();
+        candidate == "*" || candidate == etag
+    })
+}
+
 fn internal_error() -> Response {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         "failed to build response",
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderMap;
+
+    #[test]
+    fn immutable_cache_applies_only_to_vite_hashed_assets() {
+        assert_eq!(
+            cache_control_for("_app/immutable/entry/start.abc123.js"),
+            "public, max-age=31536000, immutable"
+        );
+        // SvelteKit's per-deploy files live under _app/ but outside immutable/.
+        assert_eq!(cache_control_for("_app/version.json"), "no-cache");
+        assert_eq!(cache_control_for("index.html"), "no-cache");
+        assert_eq!(cache_control_for("favicon.png"), "no-cache");
+    }
+
+    #[test]
+    fn build_hash_contract_holds() {
+        // build.rs must inject a full SHA-256 hex digest; every consumer
+        // (boot log, build-id route, ETags) slices it.
+        assert_eq!(UI_BUILD_HASH.len(), 64);
+        assert!(UI_BUILD_HASH.chars().all(|c| c.is_ascii_hexdigit()));
+        // The embed is really there and the shell is reachable for the SPA.
+        assert!(UI.get_file("index.html").is_some());
+    }
+
+    #[test]
+    fn if_none_match_semantics() {
+        let mut headers = HeaderMap::new();
+        assert!(!if_none_match_hits(&headers, "\"x\""));
+        headers.insert(
+            header::IF_NONE_MATCH,
+            header::HeaderValue::from_static("\"a\", \"x\""),
+        );
+        assert!(if_none_match_hits(&headers, "\"x\""));
+        assert!(!if_none_match_hits(&headers, "\"y\""));
+        headers.insert(header::IF_NONE_MATCH, header::HeaderValue::from_static("*"));
+        assert!(if_none_match_hits(&headers, "\"anything\""));
+    }
 }

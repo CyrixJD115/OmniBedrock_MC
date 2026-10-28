@@ -64,6 +64,9 @@ pub async fn spawn(
         .await
         .with_context(|| format!("bind API listener on {address}"))?;
     let app = router(state.clone())?;
+    // Fingerprint of the embedded dashboard (build.rs hashes frontend/build
+    // into the binary); matches GET /api/v1/build-id byte for byte.
+    tracing::info!("UI build: {}", crate::bundle::UI_BUILD_HASH);
     tracing::info!(
         %address,
         startup_ms = boot.elapsed().as_millis() as u64,
