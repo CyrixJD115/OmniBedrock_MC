@@ -377,6 +377,31 @@ pub(crate) async fn read_pipe<R: AsyncRead + Unpin>(
     source: &'static str,
     max: usize,
 ) {
+    read_pipe_advised(pipe, console, source, max, None).await
+}
+
+/// Regex for the boot-blocker line the Endstone launcher (and BDS) prints
+/// when something else holds the game port: "Port [19132] may be in use by
+/// another process."
+static PORT_IN_USE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)port\s*\[?\s*(\d{1,5})\s*\]?\s+may be in use").unwrap());
+
+/// Boot-failure context attached to a game server's output pipes: which
+/// backend is starting and which port it would have bound, so a "port may
+/// be in use" line can be answered with the fix instead of a raw exit code.
+#[derive(Clone, Copy)]
+struct PipeAdvice {
+    backend: Backend,
+    fallback_port: u16,
+}
+
+async fn read_pipe_advised<R: AsyncRead + Unpin>(
+    pipe: R,
+    console: Console,
+    source: &'static str,
+    max: usize,
+    advice: Option<PipeAdvice>,
+) {
     let mut reader = BufReader::with_capacity(32 * 1024, pipe);
     let mut pending = Vec::with_capacity(4096);
     loop {
@@ -404,13 +429,32 @@ pub(crate) async fn read_pipe<R: AsyncRead + Unpin>(
                     pending.pop();
                 }
             }
-            console
-                .publish(
-                    String::from_utf8_lossy(&pending).into_owned(),
-                    source,
-                    !complete,
-                )
-                .await;
+            let line = String::from_utf8_lossy(&pending).into_owned();
+            console.publish(line.clone(), source, !complete).await;
+            // A held game port kills the boot with exit code 1 moments after
+            // this line; answer it with the fix while the cause is on screen.
+            if complete
+                && let Some(advice) = &advice
+                && let Some(capture) = PORT_IN_USE.captures(&line)
+            {
+                let port: u16 = capture[1].parse().unwrap_or(advice.fallback_port);
+                let hint = match advice.backend {
+                    Backend::Endstone => format!(
+                        "Boot blocked: TCP port {port} is held by another process — the \
+                         Endstone launcher claims server-port BEFORE the server starts, then \
+                         exits with code 1. Free the port (the usual holder is this \
+                         instance's broadcaster, which must be started AFTER the server) or \
+                         change server-port in Properties, then start again."
+                    ),
+                    Backend::Vanilla => format!(
+                        "Boot blocked: TCP port {port} is held by another process. Free it or \
+                         change server-port in Properties, then start again."
+                    ),
+                };
+                console
+                    .publish(format!("[LOCAL] {hint}"), "panel", false)
+                    .await;
+            }
             pending.clear();
         }
     }
@@ -1104,18 +1148,30 @@ async fn spawn_process(
     } else {
         (None, None)
     };
+    // The advisory port mirrors what launch() pinned into server.properties:
+    // port-mapped containers use the stock internal pair, everything else
+    // the instance's registered port.
+    let advice = PipeAdvice {
+        backend,
+        fallback_port: match ctx.deployment {
+            Deployment::Docker if !cfg!(target_os = "linux") => 19132,
+            _ => ctx.port,
+        },
+    };
     let readers = vec![
-        tokio::spawn(read_pipe(
+        tokio::spawn(read_pipe_advised(
             stdout,
             console.clone(),
             "stdout",
             config.console_max_line_bytes,
+            Some(advice),
         )),
-        tokio::spawn(read_pipe(
+        tokio::spawn(read_pipe_advised(
             stderr,
             console.clone(),
             "stderr",
             config.console_max_line_bytes,
+            Some(advice),
         )),
     ];
     tracing::info!(
@@ -1165,7 +1221,21 @@ async fn launch(
             crate::instances::enforce_instance_port(config, ctx.port).await;
         }
     }
-    crate::instances::warn_transport_mismatch(config, console).await;
+    // Backend-aware NetherNet/port guidance replaces the old blanket
+    // "nethernet ignores server-port" warning (wrong since Endstone 0.11.15
+    // multiplexes NetherNet onto server-port).
+    let endstone_version = if settings.backend == Backend::Endstone {
+        crate::endstone::read_marker_version(config).await
+    } else {
+        None
+    };
+    crate::instances::advise_transport(
+        config,
+        console,
+        settings.backend,
+        endstone_version.as_deref(),
+    )
+    .await;
     // Heal pack-order versions for worlds imported before the sync existed
     // and surface still-missing pack uuids as one console line instead of
     // letting BDS log per-pack "was not found" noise.
@@ -2119,5 +2189,88 @@ mod docker_args_tests {
         assert!(args.contains(&"--memory-swap".to_string()));
         let cpus = args.iter().position(|a| a == "--cpus").unwrap();
         assert_eq!(args[cpus + 1], "1.5");
+    }
+}
+
+#[cfg(test)]
+mod pipe_advice_tests {
+    use super::*;
+
+    fn console(dir: &std::path::Path) -> Console {
+        Console::with_journal_root(dir.join("journal"), 128, 65536, 1 << 20)
+    }
+
+    #[tokio::test]
+    async fn endstone_port_in_use_line_gets_an_actionable_advisory() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let console = console(dir.path());
+        let input = "Port [19132] may be in use by another process. Free up port and re-run \
+                     program or adjust server.properties file to use alternate ports for \
+                     server\nNOISE: nothing to see here\n";
+        read_pipe_advised(
+            std::io::Cursor::new(input),
+            console.clone(),
+            "stdout",
+            4096,
+            Some(PipeAdvice {
+                backend: Backend::Endstone,
+                fallback_port: 24474,
+            }),
+        )
+        .await;
+        let tail = console.tail(10);
+        // Launcher line, panel advisory, then the trailing noise line; the
+        // port comes from the log line, not the fallback.
+        assert_eq!(tail.len(), 3, "{:?}", tail);
+        let advisory = &tail[1];
+        assert!(advisory.line.contains("Boot blocked"), "{}", advisory.line);
+        assert!(advisory.line.contains("19132"), "{}", advisory.line);
+        assert!(advisory.line.contains("broadcaster"), "{}", advisory.line);
+        assert_eq!(tail[0].source, "stdout");
+        assert_eq!(advisory.source, "panel");
+    }
+
+    #[tokio::test]
+    async fn vanilla_port_in_use_line_gets_the_plain_advisory() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let console = console(dir.path());
+        // Unbracketed port form falls back to the configured port when the
+        // regex misses; here it parses and wins over the fallback.
+        read_pipe_advised(
+            std::io::Cursor::new("Port 20100 may be in use\n"),
+            console.clone(),
+            "stderr",
+            4096,
+            Some(PipeAdvice {
+                backend: Backend::Vanilla,
+                fallback_port: 19132,
+            }),
+        )
+        .await;
+        let tail = console.tail(10);
+        assert_eq!(tail.len(), 2, "{:?}", tail);
+        assert!(
+            tail[1].line.contains("20100") && tail[1].line.contains("Boot blocked"),
+            "{}",
+            tail[1].line
+        );
+    }
+
+    #[tokio::test]
+    async fn ordinary_output_stays_advisory_free() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let console = console(dir.path());
+        read_pipe_advised(
+            std::io::Cursor::new("Server started\nIPv4 supported, port: 19132\n"),
+            console.clone(),
+            "stdout",
+            4096,
+            Some(PipeAdvice {
+                backend: Backend::Endstone,
+                fallback_port: 19132,
+            }),
+        )
+        .await;
+        assert_eq!(console.tail(10).len(), 2, "{:?}", console.tail(10));
     }
 }

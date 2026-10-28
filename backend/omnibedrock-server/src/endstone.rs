@@ -60,7 +60,7 @@ struct PypiInfo {
 /// below its plain release and above lower numbers (`0.6.4rc1` > `0.6.3`),
 /// and non-numeric components sort below all numeric ones. `latest` always
 /// comes straight from PyPI, so this only orders the display list.
-fn version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+pub(crate) fn version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     fn key(version: &str) -> Vec<(u8, u64, u8, String)> {
         version
             .split(['.', '-', '+'])
@@ -664,7 +664,7 @@ async fn fetch_registry(http: &reqwest::Client) -> anyhow::Result<EndstoneRegist
 }
 
 /// The `endstone_version` recorded in the toolchain marker, if any.
-async fn read_marker_version(config: &Config) -> Option<String> {
+pub(crate) async fn read_marker_version(config: &Config) -> Option<String> {
     let text = tokio::fs::read_to_string(Endstone::installed_marker(config))
         .await
         .ok()?;

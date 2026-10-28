@@ -954,6 +954,46 @@ async fn dispatch_authenticated(
         }
         ["properties", "raw"] if write => {
             s.require_for(u, "PROPERTIES_EDIT", svc).await?;
+            let text = value_string(b, "text")?;
+            // The raw editor must not become a side door around the
+            // per-key server-udp-ports checks: validate the embedded value
+            // against the same backend matrix before anything is written.
+            {
+                let settings = svc.server.settings.borrow().clone();
+                let mut transport = "nethernet";
+                let mut port: u16 = 19132;
+                let mut udp_ports: Option<String> = None;
+                for line in text.lines() {
+                    let line = line.trim();
+                    if line.starts_with('#') {
+                        continue;
+                    }
+                    let Some((key, raw_value)) = line.split_once('=') else {
+                        continue;
+                    };
+                    // Cut inline comments, which the raw editor preserves.
+                    let value = raw_value.split('#').next().unwrap_or("").trim();
+                    match key.trim() {
+                        "transport" => transport = value,
+                        "server-port" => {
+                            if let Ok(p) = value.parse() {
+                                port = p;
+                            }
+                        }
+                        "server-udp-ports" => udp_ports = Some(value.to_string()),
+                        _ => {}
+                    }
+                }
+                if let Some(udp) = udp_ports {
+                    omnibedrock_server::instances::validate_udp_ports_value(
+                        settings.backend,
+                        transport,
+                        port,
+                        &udp,
+                    )
+                    .map_err(ApiError::bad)?;
+                }
+            }
             let _lock = s.edits.lock().await;
             // Writes must land in the SAME file the reads come from: the
             // X-Instance-scoped server dir, not the panel-level default.
@@ -963,7 +1003,7 @@ async fn dispatch_authenticated(
                     FsPath::new("server.properties"),
                 )
                 .await?,
-                value_string(b, "text")?.as_bytes(),
+                text.as_bytes(),
             )
             .await?;
             success("Properties saved")
@@ -974,6 +1014,29 @@ async fn dispatch_authenticated(
             files::validate_property(key, value)?;
             let _lock = s.edits.lock().await;
             let text = properties_text(svc).await?;
+            // server-udp-ports means different things per backend/transport;
+            // reject values that would silently bind nothing instead of
+            // letting a bad forward rule surface as "clients can't join".
+            if *key == "server-udp-ports" {
+                let settings = svc.server.settings.borrow().clone();
+                let transport = text
+                    .lines()
+                    .find_map(|l| l.trim().strip_prefix("transport="))
+                    .map(str::trim)
+                    .unwrap_or("nethernet");
+                let port = text
+                    .lines()
+                    .find_map(|l| l.trim().strip_prefix("server-port="))
+                    .and_then(|v| v.trim().parse::<u16>().ok())
+                    .unwrap_or(19132);
+                omnibedrock_server::instances::validate_udp_ports_value(
+                    settings.backend,
+                    transport,
+                    port,
+                    value,
+                )
+                .map_err(ApiError::bad)?;
+            }
             let mut entries = files::properties(&text);
             let mut found = false;
             for e in &mut entries {
