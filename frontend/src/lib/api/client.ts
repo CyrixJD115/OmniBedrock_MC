@@ -154,7 +154,7 @@ export const api = {
 
   // MCXboxBroadcast
   getBroadcasterStatus: () => request<BroadcasterStatus>('/broadcaster/status'),
-  broadcasterAction: (action: 'start' | 'stop' | 'restart') =>
+  broadcasterAction: (action: 'start' | 'stop' | 'restart' | 'takeover') =>
     request<{ success: boolean; message: string }>('/broadcaster/action', {
       method: 'POST',
       body: JSON.stringify({ action }),

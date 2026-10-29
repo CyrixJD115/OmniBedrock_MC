@@ -2599,12 +2599,19 @@ async fn broadcaster(
                 "dir": bc.dir(),
                 "accounts": bc.accounts().await,
                 "device_codes": bc.device_codes(),
+                // Validated config.yml relay targets (loopback-vs-public) for
+                // the co-location banner.
+                "relay": bc.relay_status().await,
+                // Panel-side query-ping health against the relay target.
+                "ping": bc.ping_health(),
+                // A broadcaster java for this instance the panel did not spawn.
+                "external": bc.external().await,
             })
         }
         ["broadcaster", "action"] if create => {
             s.require_for(u, "BROADCASTER_MANAGE", svc).await?;
             let action = value_string(b, "action")?;
-            if !["start", "stop", "restart"].contains(&action) {
+            if !["start", "stop", "restart", "takeover"].contains(&action) {
                 return Err(ApiError::bad("Invalid broadcaster action"));
             }
             success(

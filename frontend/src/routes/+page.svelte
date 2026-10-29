@@ -1,13 +1,17 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { serverStatus, metrics, isServerRunning } from '$stores/index';
   import { api } from '$lib/api/client';
   import { addToast } from '$stores/toast';
   import { userPermissions } from '$stores/auth';
-  import { Play, Square, RotateCw, Terminal, Users, HardDrive, Globe, Cpu, Clock, Activity } from '@lucide/svelte';
+  import { activeInstance } from '$stores/instances';
+  import { Play, Square, RotateCw, Terminal, Users, HardDrive, Globe, Cpu, Clock, Activity, TriangleAlert, Radio } from '@lucide/svelte';
+  import type { BroadcasterStatus } from '$types/index';
 
   let loading = $state(true);
   let acting = $state<string | null>(null);
+  let broadcaster = $state<BroadcasterStatus | null>(null);
+  let bcPoll: ReturnType<typeof setInterval> | undefined;
 
   function formatUptime(seconds: number): string {
     const h = Math.floor(seconds / 3600);
@@ -24,6 +28,19 @@
       addToast('Could not reach backend', 'error');
     }
     loading = false;
+    // Surface a broadcaster that cannot reach its ping target (Bug 4: the
+    // jar only logs an ERROR every 30s, nothing else tells the user).
+    const pollBc = async () => {
+      try {
+        broadcaster = await api.getBroadcasterStatus();
+      } catch { /* transient */ }
+    };
+    void pollBc();
+    bcPoll = setInterval(pollBc, 10000);
+  });
+
+  onDestroy(() => {
+    if (bcPoll) clearInterval(bcPoll);
   });
 
   async function act(action: string) {
@@ -70,6 +87,44 @@
       </div>
     {/if}
   </div>
+
+  {#if broadcaster?.ping?.ok === false}
+    <div class="card border-yellow-500/40">
+      <div class="flex items-start gap-3">
+        <Radio size={18} class="text-yellow-400 mt-0.5 shrink-0" />
+        <div class="text-xs text-deep-300 space-y-1">
+          <p class="font-bold text-yellow-300 uppercase tracking-wider">
+            Broadcaster cannot reach the server ping target
+          </p>
+          <p>
+            The broadcaster for <span class="text-strong">{$activeInstance?.name ?? $activeInstance?.id ?? 'default'}</span> cannot ping
+            <span class="font-mono text-strong">{broadcaster.ping.target ?? 'its configured target'}</span>,
+            so the Xbox session advertises stale player/world values. Check that the server is
+            running and that <span class="font-mono">session.remote-address</span> points at this
+            host's server-port (127.0.0.1 for a co-located broadcaster).
+          </p>
+        </div>
+      </div>
+    </div>
+  {/if}
+  {#if broadcaster?.relay && (broadcaster.relay.relay?.public || broadcaster.relay.legacy?.public)}
+    <div class="card border-red-500/40">
+      <div class="flex items-start gap-3">
+        <TriangleAlert size={18} class="text-red-400 mt-0.5 shrink-0" />
+        <div class="text-xs text-deep-300 space-y-1">
+          <p class="font-bold text-red-300 uppercase tracking-wider">
+            Broadcaster relay target uses a public IP
+          </p>
+          <p>
+            The broadcaster runs on the same host as the server, so its relay target must be
+            <span class="font-mono text-strong">127.0.0.1</span> — a public IP breaks every
+            friends-list join (hairpin NAT). Fix it on the
+            <a href="/broadcaster" class="text-bedrock-400 hover:underline">Broadcaster page</a>.
+          </p>
+        </div>
+      </div>
+    </div>
+  {/if}
 
   <!-- Status Cards -->
   <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

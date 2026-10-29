@@ -283,6 +283,38 @@ export interface BroadcasterStatus {
   dir: string;
   accounts: BroadcasterAccount[];
   device_codes: Record<string, DeviceCode>;
+  /** config.yml relay targets with a co-location (public IP) verdict. */
+  relay: RelayAnalysis;
+  /** Panel-side query-ping health against the relay target. */
+  ping: PingHealth;
+  /** A broadcaster java for this instance the panel did not spawn. */
+  external: ExternalBroadcaster | null;
+}
+
+export interface RelayTarget {
+  text: string;
+  public: boolean;
+}
+
+export interface RelayAnalysis {
+  query_server: boolean;
+  /** session.remote-address / remote-port — the operational offer-relay target. */
+  relay: RelayTarget | null;
+  /** session-info.ip / port — legacy pre-v7 keys the jar migrates on load. */
+  legacy: RelayTarget | null;
+}
+
+export interface PingHealth {
+  target: string | null;
+  ok: boolean | null;
+  failing_since: number | null;
+  last_checked: number | null;
+}
+
+export interface ExternalBroadcaster {
+  pid: number;
+  /** True when it was spawned by a previous panel run (pidfile match). */
+  orphaned: boolean;
 }
 
 export interface BroadcasterAccount {

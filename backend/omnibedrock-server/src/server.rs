@@ -1627,6 +1627,45 @@ async fn lock_state(state_dir: &std::path::Path, locked: bool) {
         tracing::error!(%e, "console lock persistence failed");
     }
 }
+
+/// Wait (bounded) for the instance's UDP port pair to become bindable before
+/// launching. Starting into a port the previous process is still releasing
+/// makes the fresh server die at bind — and the instance report a false
+/// "crashed" even though a manual start seconds later works fine.
+async fn wait_ports_free(port: u16, console: &Console) -> anyhow::Result<()> {
+    const BUDGET: Duration = Duration::from_secs(10);
+    let deadline = Instant::now() + BUDGET;
+    let mut announced = false;
+    loop {
+        if crate::instances::port_bindable(port).await
+            && crate::instances::port_bindable(port + 1).await
+        {
+            return Ok(());
+        }
+        if !announced {
+            console
+                .publish(
+                    format!(
+                        "[LOCAL] Waiting for ports {port}/{} to be released before starting...",
+                        port + 1
+                    ),
+                    "panel",
+                    false,
+                )
+                .await;
+            announced = true;
+        }
+        if Instant::now() >= deadline {
+            bail!(
+                "UDP ports {port}/{} are still in use after {}s — stop whatever holds them \
+                 (or pick another port) and start again",
+                port + 1,
+                BUDGET.as_secs()
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
 #[allow(clippy::too_many_arguments)]
 async fn supervise(
     config: Arc<Config>,
@@ -1854,7 +1893,15 @@ async fn supervise(
                         console.reset_stats();
                         let current = settings.borrow().clone();
                         let launch_ctx = launch_tx.borrow().clone();
-                        match launch(&config, &paths, &current, &console, &launch_ctx).await {
+                        let launched = match wait_ports_free(launch_ctx.port, &console).await {
+                            Ok(()) => {
+                                launch(&config, &paths, &current, &console, &launch_ctx).await
+                            }
+                            // Precise reason instead of a bind failure inside
+                            // the server process (which would read "crashed").
+                            Err(e) => Err(e),
+                        };
+                        match launched {
                             Ok(r) => {
                                 let pid = r.pid;
                                 commands.send_replace(Some(r.sink.clone()));
@@ -2025,7 +2072,10 @@ async fn supervise(
                     // the container, never start or create anything.
                     attach_running_container(&config, &console, &launch_ctx, &current).await
                 } else {
-                    launch(&config, &paths, &current, &console, &launch_ctx).await
+                    match wait_ports_free(launch_ctx.port, &console).await {
+                        Ok(()) => launch(&config, &paths, &current, &console, &launch_ctx).await,
+                        Err(e) => Err(e),
+                    }
                 };
                 match result {
                     Ok(r) => {

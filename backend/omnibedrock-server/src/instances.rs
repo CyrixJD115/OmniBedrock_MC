@@ -1252,7 +1252,7 @@ pub async fn enforce_instance_port(config: &Config, port: u16) {
 /// sockets (`server-portv6`), so an IPv4-only probe would happily hand out a
 /// port another instance is already listening on over IPv6. Hosts without
 /// any IPv6 (the loopback probe fails) fall back to the IPv4 verdict.
-async fn port_bindable(port: u16) -> bool {
+pub(crate) async fn port_bindable(port: u16) -> bool {
     if tokio::net::UdpSocket::bind(("0.0.0.0", port))
         .await
         .is_err()

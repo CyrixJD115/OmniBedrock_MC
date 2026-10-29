@@ -661,7 +661,7 @@
     "/broadcaster/status": {
       "get": {
         "tags": ["broadcaster"],
-        "summary": "MCXboxBroadcast integration status",
+        "summary": "MCXboxBroadcast integration status (process, relay targets, ping health, external processes)",
         "x-permission": "BROADCASTER_VIEW",
         "responses": { "200": { "description": "Status object" } }
       }
@@ -669,9 +669,9 @@
     "/broadcaster/action": {
       "post": {
         "tags": ["broadcaster"],
-        "summary": "Start / stop the broadcaster",
+        "summary": "Start / stop / restart the broadcaster, or take over an external one",
         "x-permission": "BROADCASTER_MANAGE",
-        "requestBody": { "x-body": { "action": "string" } },
+        "requestBody": { "x-body": { "action": "string: start | stop | restart | takeover" } },
         "responses": { "200": { "description": "{success, message}" } }
       }
     },

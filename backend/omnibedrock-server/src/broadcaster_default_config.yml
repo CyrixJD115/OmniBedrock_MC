@@ -1,5 +1,19 @@
 # Core session settings
 session:
+  # ── OFFER-RELAY TARGET (operational) ─────────────────────────────────────
+  # Where join offers received over Xbox Live are relayed to, and the address
+  # joining clients are handed for the NetherNet handshake. The panel runs
+  # the broadcaster on the SAME host as the server, so this must stay the
+  # loopback address — Endstone advertises its own public address to clients.
+  # NEVER put a public IP here: routers refuse the hairpin loop and every
+  # friends-list join fails with "Failed to relay offer ... connection
+  # refused" (client-side InitialConnection-81).
+  remote-address: 127.0.0.1
+
+  # The port of the server to relay joins to — the instance's server-port
+  # (seeded automatically by the panel for fresh configs).
+  remote-port: {{PORT}}
+
   # The amount of time in seconds to update session information
   # Warning: This can be no lower than 20 due to Xbox rate limits
   update-interval: 30
@@ -14,49 +28,29 @@ session:
   # Fallback to config values if all other server query methods fail
   config-fallback: false
 
-  # The data to broadcast over xbox live, this is the default if querying is enabled
+  # The data to broadcast over xbox live, this is the default if querying is
+  # enabled. The live player/world values are synced from the server through
+  # the query ping above.
   session-info:
     # The host name to broadcast
-    host-name: Geyser Test Server
+    host-name: OmniBedrock Server
 
     # The world name to broadcast
-    world-name: GeyserMC Demo & Test Server
+    world-name: OmniBedrock
 
     # The game mode to broadcast (Survival, Creative, Adventure)
     game-mode: Survival
 
-    # The current number of players
+    # The current number of players (fallback when querying is off/failing)
     players: 0
 
-    # The maximum number of players
+    # The maximum number of players (fallback when querying is off/failing)
     max-players: 20
 
-    # IMPORTANT: this must be an address JOINING CLIENTS can reach, because
-    # after the NetherNet handshake the broadcaster tells their game to
-    # transfer to exactly this ip:port over RakNet. A wrong value is the
-    # classic "Transferred bedrock client ... but the player never spawns"
-    # failure:
-    #   - Friends joining over the internet: your PUBLIC/WAN IP, with the
-    #     port forwarded as UDP on the router to this machine.
-    #   - Friends on the same LAN: the machine's LAN IP (e.g. 192.168.x.x).
-    #   - Friends on a VPN (Tailscale/Zerotier/...): the host's VPN IP.
-    # Localhost or an IP your friends can't route to will break every join.
-    ip: 192.168.1.115
-
-    # The port of the server
-    port: 19132
-
-  # Restrict the local UDP port range for WebRTC (NetherNet) ICE candidates,
-  # so only a small range needs opening behind a firewall or in Docker with
-  # host networking. Each in-progress join uses one port (freed once the player
-  # is transferred), so this caps concurrent joins, not total players.
-  # Leave both at 0 for the OS ephemeral range (default).
-  ice-port-range:
-    # Lowest UDP port to use, or 0 for the OS default
-    min: 0
-
-    # Highest UDP port to use, or 0 for the OS default
-    max: 0
+  # When the session fills up a new one is created and the old one is closed
+  # true: Players in the old session lose the friends of friends tag, so their friends can't see the server
+  # false: Players in the old session keep the friends of friends tag, but their friends get an error when trying to join
+  hide-old-sessions: true
 
 # Friend list sync settings
 friend-sync:
@@ -107,4 +101,4 @@ debug-mode: false
 suppress-session-update-message: false
 
 # Do not change!
-config-version: 5
+config-version: 7

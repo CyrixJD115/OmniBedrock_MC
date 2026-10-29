@@ -12,12 +12,14 @@
   import {
     Play, Square, RotateCw, Send, Copy, ExternalLink, Plus, Trash2, Save,
     Upload, Radio, KeyRound, UserRound, FileCode, RefreshCw, Settings2, FileText,
-    ArrowDown, Eraser
+    ArrowDown, Eraser, TriangleAlert
   } from '@lucide/svelte';
 
-  /** Known config.yml shape (MCXboxBroadcast config-version 5). */
+  /** Known config.yml shape (MCXboxBroadcast config-version 7). */
   interface BcVisualConfig {
     session: {
+      'remote-address': string;
+      'remote-port': string;
       'update-interval': number;
       'query-server': boolean;
       'web-query-fallback': boolean;
@@ -28,9 +30,8 @@
         'game-mode': string;
         players: number;
         'max-players': number;
-        ip: string;
-        port: number;
       };
+      'hide-old-sessions': boolean;
       'ice-port-range': { min: number; max: number };
     };
     'friend-sync': {
@@ -52,6 +53,11 @@
   function visualDefaults(): BcVisualConfig {
     return {
       session: {
+        // The offer-relay target: loopback, because the panel runs the
+        // broadcaster on the same host as the server (config-version 7;
+        // pre-v7 session-info.ip/port are migrated into these keys by the jar).
+        'remote-address': '127.0.0.1',
+        'remote-port': 'auto',
         'update-interval': 30,
         'query-server': true,
         'web-query-fallback': false,
@@ -62,9 +68,8 @@
           'game-mode': 'Survival',
           players: 0,
           'max-players': 20,
-          ip: '127.0.0.1',
-          port: 19132,
         },
+        'hide-old-sessions': true,
         'ice-port-range': { min: 0, max: 0 },
       },
       'friend-sync': {
@@ -104,17 +109,18 @@
     const f = doc['friend-sync'] ?? {};
     const expiry = f['expiry'] ?? {};
     const n = doc['notifications'] ?? {};
+    d.session['remote-address'] = str(s['remote-address'], '127.0.0.1');
+    d.session['remote-port'] = str(s['remote-port'], 'auto');
     d.session['update-interval'] = num(s['update-interval'], 30);
     d.session['query-server'] = bool(s['query-server'], true);
     d.session['web-query-fallback'] = bool(s['web-query-fallback'], false);
     d.session['config-fallback'] = bool(s['config-fallback'], false);
+    d.session['hide-old-sessions'] = bool(s['hide-old-sessions'], true);
     d.session['session-info']['host-name'] = str(info['host-name'], '');
     d.session['session-info']['world-name'] = str(info['world-name'], '');
     d.session['session-info']['game-mode'] = str(info['game-mode'], 'Survival');
     d.session['session-info']['players'] = num(info['players'], 0);
     d.session['session-info']['max-players'] = num(info['max-players'], 20);
-    d.session['session-info']['ip'] = str(info['ip'], '127.0.0.1');
-    d.session['session-info']['port'] = num(info['port'], 19132);
     d.session['ice-port-range'].min = num(ice['min'], 0);
     d.session['ice-port-range'].max = num(ice['max'], 0);
     d['friend-sync']['update-interval'] = num(f['update-interval'], 60);
@@ -136,10 +142,13 @@
   function overlayModel(doc: Record<string, any>, model: BcVisualConfig): Record<string, any> {
     doc['session'] = {
       ...(doc['session'] ?? {}),
+      'remote-address': model.session['remote-address'],
+      'remote-port': model.session['remote-port'],
       'update-interval': model.session['update-interval'],
       'query-server': model.session['query-server'],
       'web-query-fallback': model.session['web-query-fallback'],
       'config-fallback': model.session['config-fallback'],
+      'hide-old-sessions': model.session['hide-old-sessions'],
       'session-info': {
         ...(doc['session']?.['session-info'] ?? {}),
         ...model.session['session-info'],
@@ -345,7 +354,7 @@
     for (const unsub of unsubs) unsub();
   });
 
-  async function action(kind: 'start' | 'stop' | 'restart') {
+  async function action(kind: 'start' | 'stop' | 'restart' | 'takeover') {
     if (busy) return;
     busy = kind;
     try {
@@ -454,6 +463,83 @@
     </div>
   {/if}
 
+  {#if status?.external && status.status.status !== 'running'}
+    <div class="card border-yellow-500/40">
+      <div class="flex items-start justify-between gap-3 flex-wrap">
+        <div class="flex items-start gap-3">
+          <Radio size={18} class="text-yellow-400 mt-0.5 shrink-0" />
+          <div class="text-xs text-deep-300 space-y-1">
+            <p class="font-bold text-yellow-300 uppercase tracking-wider">
+              Running (external){status.external.orphaned ? ' — left over from a previous panel run' : ''}
+            </p>
+            <p>
+              A broadcaster java is already running for this instance (PID
+              <span class="font-mono text-strong">{status.external.pid}</span>) but the panel does not
+              own it. Starting a second one would make both fight over the same Xbox session.
+            </p>
+          </div>
+        </div>
+        {#if canManage}
+          <div class="flex gap-2">
+            <button onclick={() => action('stop')} disabled={!!busy}
+                    class="btn-ghost flex items-center gap-1.5 text-xs">
+              <Square size={13} /> {busy === 'stop' ? 'Stopping…' : 'Stop external'}
+            </button>
+            <button onclick={() => action('takeover')} disabled={!!busy}
+                    class="btn-primary flex items-center gap-1.5 text-xs">
+              <RotateCw size={13} /> {busy === 'takeover' ? 'Taking over…' : 'Take over'}
+            </button>
+          </div>
+        {/if}
+      </div>
+    </div>
+  {/if}
+
+  {#if status?.relay && (status.relay.relay?.public || status.relay.legacy?.public)}
+    <div class="card border-red-500/40">
+      <div class="flex items-start gap-3">
+        <TriangleAlert size={18} class="text-red-400 mt-0.5 shrink-0" />
+        <div class="text-xs text-deep-300 space-y-1">
+          <p class="font-bold text-red-300 uppercase tracking-wider">Public IP in the relay target</p>
+          <p>
+            The broadcaster runs on the same host as the server, so the relay target must be
+            <span class="font-mono text-strong">127.0.0.1</span>. A public IP there loops through the
+            router (hairpin NAT is refused) and every friends-list join fails with
+            <span class="font-mono">"Failed to relay offer … connection refused"</span>
+            (client-side InitialConnection-81).
+          </p>
+          <p class="font-mono break-all text-deep-400">
+            {#if status.relay.relay?.public}session.remote-address: {status.relay.relay.text}{/if}
+            {#if status.relay.relay?.public && status.relay.legacy?.public} · {/if}
+            {#if status.relay.legacy?.public}session-info.ip: {status.relay.legacy.text} (legacy){/if}
+          </p>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  {#if status?.ping?.ok === false}
+    <div class="card border-yellow-500/40">
+      <div class="flex items-start gap-3">
+        <TriangleAlert size={18} class="text-yellow-400 mt-0.5 shrink-0" />
+        <div class="text-xs text-deep-300 space-y-1">
+          <p class="font-bold text-yellow-300 uppercase tracking-wider">
+            Broadcaster cannot reach the server ping target
+          </p>
+          <p>
+            The query ping against <span class="font-mono text-strong">{status.ping.target ?? '—'}</span>
+            fails, so the session advertises stale player/world values
+            (<span class="font-mono">"Failed to ping server, falling back to config values"</span> in the console).
+            Check that the server is running and that the relay target points at this host's server-port.
+          </p>
+          {#if status.ping.failing_since}
+            <p class="text-deep-400">failing since {new Date(status.ping.failing_since * 1000).toLocaleTimeString()}</p>
+          {/if}
+        </div>
+      </div>
+    </div>
+  {/if}
+
   <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
     <!-- Status + controls -->
     <div class="card">
@@ -461,30 +547,52 @@
       <div class="space-y-3">
         {#if status}
           <div class="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
-            <span class="text-deep-400">State</span><span class="text-strong capitalize">{status.status.status}</span>
+            <span class="text-deep-400">State</span>
+            <span class="text-strong capitalize">
+              {status.status.status}{status.external && status.status.status !== 'running' ? ' (external)' : ''}
+            </span>
             <span class="text-deep-400">PID</span><span class="font-mono text-strong">{status.status.pid ?? '—'}</span>
             <span class="text-deep-400">Uptime</span><span class="font-mono text-strong">{status.status.status === 'running' ? fmtUptime(status.status.uptime) : '—'}</span>
             <span class="text-deep-400">Java</span>
             <span class="font-mono text-strong truncate" title={status.java ?? ''}>{status.java ?? 'not detected'}</span>
+            <span class="text-deep-400">Relay target</span>
+            <span class="font-mono text-strong truncate" title={status.relay?.relay?.text ?? ''}>
+              {status.relay?.relay?.text ?? 'auto (127.0.0.1)'}
+              {#if status.relay?.relay?.public}<span class="text-red-400"> public!</span>{/if}
+            </span>
+            <span class="text-deep-400">Ping</span>
+            <span class="font-mono {status.ping?.ok === false ? 'text-red-400' : status.ping?.ok === true ? 'text-teal-400' : 'text-strong'}">
+              {status.ping?.ok === true ? 'ok' : status.ping?.ok === false ? 'failing' : '—'}
+            </span>
+            <span class="text-deep-400">Dir</span>
+            <span class="font-mono text-deep-300 break-all" title={status.dir}>{status.dir}</span>
+            <span class="text-deep-400">Jar</span>
+            <span class="font-mono text-deep-300 break-all" title={status.jar}>{status.jar}</span>
           </div>
         {:else}
           <p class="text-xs text-deep-400">Loading…</p>
         {/if}
         {#if canManage}
           <div class="flex gap-2 pt-1">
-            <button onclick={() => action('start')} disabled={!!busy || status?.status.status === 'running'}
+            <button onclick={() => action('start')} disabled={!!busy || status?.status.status === 'running' || !!status?.external}
                     class="btn-primary flex-1 flex items-center justify-center gap-1.5 text-xs">
               <Play size={13} /> Start
             </button>
-            <button onclick={() => action('stop')} disabled={!!busy || status?.status.status !== 'running'}
+            <button onclick={() => action('stop')} disabled={!!busy || (status?.status.status !== 'running' && !status?.external)}
                     class="btn-ghost flex-1 flex items-center justify-center gap-1.5 text-xs">
               <Square size={13} /> Stop
             </button>
-            <button onclick={() => action('restart')} disabled={!!busy}
+            <button onclick={() => action('restart')} disabled={!!busy || status?.status.status !== 'running'}
                     class="btn-ghost flex items-center justify-center gap-1.5 text-xs px-3" title="Restart">
               <RotateCw size={13} />
             </button>
           </div>
+          {#if status?.external && status.status.status !== 'running'}
+            <p class="text-[10px] text-yellow-400 leading-snug">
+              An external broadcaster (PID {status.external.pid}) is running — use the banner above
+              to stop it or take over.
+            </p>
+          {/if}
         {/if}
       </div>
     </div>
@@ -631,6 +739,27 @@
         <div class="space-y-4 max-h-[28rem] overflow-y-auto pr-1">
           <fieldset class="border border-deep-600/30 p-3 space-y-3" disabled={!canManage}>
             <legend class="px-2 text-[10px] uppercase tracking-widest text-bedrock-300">Session</legend>
+            <div class="border border-bedrock-500/30 bg-bedrock-950/20 p-3 space-y-2">
+              <p class="text-[10px] uppercase tracking-widest text-bedrock-300">Relay target (operational)</p>
+              <div class="grid grid-cols-2 gap-3">
+                <label class="space-y-1 block">
+                  <span class="text-[10px] text-deep-400 uppercase tracking-wider">Relay address (session.remote-address)</span>
+                  <input type="text" bind:value={cfg.session['remote-address']} onchange={markVisualDirty}
+                         class="input w-full text-xs font-mono" />
+                </label>
+                <label class="space-y-1 block">
+                  <span class="text-[10px] text-deep-400 uppercase tracking-wider">Relay port (session.remote-port)</span>
+                  <input type="text" inputmode="numeric" bind:value={cfg.session['remote-port']} onchange={markVisualDirty}
+                         class="input w-full text-xs font-mono" placeholder="auto or the server-port" />
+                </label>
+              </div>
+              <p class="text-[10px] text-deep-400 leading-snug">
+                Join offers are relayed here. The panel runs the broadcaster on the same host as the
+                server, so keep <span class="font-mono text-bedrock-300">127.0.0.1</span> — a public IP
+                fails every friends-list join (hairpin NAT is refused; client-side InitialConnection-81).
+                The panel warns at start when a public IP is configured.
+              </p>
+            </div>
             <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
               <label class="space-y-1 block">
                 <span class="text-[10px] text-deep-400 uppercase tracking-wider">Update interval (s)</span>
@@ -670,6 +799,10 @@
                 <input type="checkbox" bind:checked={cfg.session['config-fallback']} onchange={markVisualDirty} class="accent-bedrock-500" />
                 Config fallback
               </label>
+              <label class="flex items-center gap-2 text-xs text-deep-300">
+                <input type="checkbox" bind:checked={cfg.session['hide-old-sessions']} onchange={markVisualDirty} class="accent-bedrock-500" />
+                Hide old sessions
+              </label>
             </div>
             <div class="grid grid-cols-2 md:grid-cols-4 gap-3 border-t border-deep-600/20 pt-3">
               <label class="space-y-1 block md:col-span-2">
@@ -681,19 +814,6 @@
                 <span class="text-[10px] text-deep-400 uppercase tracking-wider">World name</span>
                 <input type="text" bind:value={cfg.session['session-info']['world-name']} onchange={markVisualDirty}
                        class="input w-full text-xs" />
-              </label>
-              <label class="space-y-1 block">
-                <span class="text-[10px] text-deep-400 uppercase tracking-wider">Server IP</span>
-                <input type="text" bind:value={cfg.session['session-info'].ip} onchange={markVisualDirty}
-                       class="input w-full text-xs font-mono" />
-                <span class="text-[10px] text-deep-400 block leading-snug">
-                  must be reachable by joining clients — see the note under this editor
-                </span>
-              </label>
-              <label class="space-y-1 block">
-                <span class="text-[10px] text-deep-400 uppercase tracking-wider">Port</span>
-                <input type="number" min="1" max="65535" bind:value={cfg.session['session-info'].port} onchange={markVisualDirty}
-                       class="input w-full text-xs font-mono" />
               </label>
               <label class="space-y-1 block">
                 <span class="text-[10px] text-deep-400 uppercase tracking-wider">Players (fallback)</span>
@@ -794,13 +914,16 @@
                   disabled={!canManage}></textarea>
       {/if}
       <p class="text-[10px] text-deep-400 mt-2 leading-relaxed">
-        <span class="text-yellow-400 uppercase tracking-wider">Join address:</span>
-        <span class="font-mono text-deep-400">session.session-info.ip</span> is the address clients are told to connect to
-        after the NetherNet handshake, so it must be reachable by whoever joins — not just by this machine.
-        <span class="text-strong">Friends over the internet</span> need your public/WAN IP (and the port forwarded as UDP
-        on the router); a <span class="text-strong">LAN IP</span> only works for players on the same network; a
-        <span class="text-strong">VPN IP</span> (e.g. Tailscale) works for VPN members. A private IP that friends can't
-        route to fails every join: the log shows "Transferred bedrock client …" but the player never reaches the server.
+        <span class="text-yellow-400 uppercase tracking-wider">Relay target:</span>
+        <span class="font-mono text-deep-400">session.remote-address</span> is where join offers are
+        relayed to, and it doubles as the address the query ping checks. Because the panel runs the
+        broadcaster on the same host as the server, keep it at
+        <span class="font-mono text-strong">127.0.0.1</span> with the instance's server-port — Endstone
+        advertises its own public address to clients. A public IP here sends every relay through the
+        router's hairpin loop, which is refused: friends-list joins fail with
+        <span class="font-mono">"Failed to relay offer … connection refused"</span> while everything
+        else looks healthy. Older configs with <span class="font-mono">session-info.ip</span> are
+        migrated into the relay keys by the jar itself (config-version 7).
       </p>
       <p class="text-[10px] text-deep-400 mt-1">
         Full MCXboxBroadcast config. Save, then restart the broadcaster to apply — the panel itself needs no restart.
