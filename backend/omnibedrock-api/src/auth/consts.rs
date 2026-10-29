@@ -1,0 +1,72 @@
+//! The permission catalog shared by permission resolution, role seeding and
+//! role administration, plus the panel settings file name used by the auth
+//! service.
+
+pub const PERMISSIONS: &[&str] = &[
+    "CONSOLE_VIEW",
+    "CONSOLE_SEND",
+    "SERVER_VIEW",
+    "SERVER_MANAGE",
+    "PLAYERS_VIEW",
+    "PLAYERS_KICK",
+    "PLAYERS_BAN",
+    "PLAYERS_OP",
+    "PROPERTIES_VIEW",
+    "PROPERTIES_EDIT",
+    "ADDONS_VIEW",
+    "ADDONS_MANAGE",
+    "STORE_VIEW",
+    "STORE_INSTALL",
+    "BACKUPS_VIEW",
+    "BACKUPS_CREATE",
+    "BACKUPS_RESTORE",
+    "BACKUPS_DELETE",
+    "USERS_VIEW",
+    "USERS_CREATE",
+    "USERS_EDIT",
+    "USERS_DELETE",
+    "ROLES_MANAGE",
+    "FILES_VIEW",
+    "FILES_EDIT",
+    "AUDIT_VIEW",
+    "SETTINGS_VIEW",
+    "SETTINGS_EDIT",
+    "BROADCASTER_VIEW",
+    "BROADCASTER_MANAGE",
+    "INSTANCES_CREATE",
+    "INSTANCES_VIEW_ALL",
+    "INSTANCES_SHARE",
+    "INSTANCES_DELETE",
+    "INSTANCES_LIMITS",
+];
+/// Permissions that only make sense on one instance; they are the set instance
+/// access roles may grant (global-only capabilities like USERS_* or
+/// INSTANCES_CREATE are never implied by instance access).
+pub const INSTANCE_PERMISSIONS: &[&str] = &[
+    "CONSOLE_VIEW",
+    "CONSOLE_SEND",
+    "SERVER_VIEW",
+    "SERVER_MANAGE",
+    "PLAYERS_VIEW",
+    "PLAYERS_KICK",
+    "PLAYERS_BAN",
+    "PLAYERS_OP",
+    "PROPERTIES_VIEW",
+    "PROPERTIES_EDIT",
+    "ADDONS_VIEW",
+    "ADDONS_MANAGE",
+    "STORE_VIEW",
+    "STORE_INSTALL",
+    "BACKUPS_VIEW",
+    "BACKUPS_CREATE",
+    "BACKUPS_RESTORE",
+    "BACKUPS_DELETE",
+    "FILES_VIEW",
+    "FILES_EDIT",
+    "BROADCASTER_VIEW",
+    "INSTANCES_SHARE",
+    "INSTANCES_DELETE",
+    "INSTANCES_LIMITS",
+];
+
+pub(super) const DEFAULT_PANEL_SETTINGS: &str = "panel_settings.yaml";
