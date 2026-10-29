@@ -9,22 +9,16 @@
   let password = $state('');
   let loading = $state(false);
   let error = $state('');
-  let defaultCredentials = $state(false);
   let loginEnabled = $state(true);
 
   onMount(async () => {
     try {
       const panel = await api.getPanelSettings();
       loginEnabled = panel.login_enabled;
-      defaultCredentials = panel.default_credentials;
       if (!loginEnabled) {
         // No login required; the panel serves requests as Admin.
         goto('/', { replaceState: true });
         return;
-      }
-      if (defaultCredentials) {
-        username = 'Admin';
-        password = '123456';
       }
     } catch { /* backend may still be starting */ }
   });
@@ -76,13 +70,11 @@
       </button>
     </form>
 
-    {#if defaultCredentials}
-      <div class="mt-5 pt-4 border-t border-deep-600/30">
-        <p class="text-[10px] text-yellow-400/90 uppercase tracking-wider leading-relaxed">
-          Default credentials are active (Admin / 123456) — they are prefilled above.
-          Change the password in Users after signing in.
-        </p>
-      </div>
-    {/if}
+    <div class="mt-5 pt-4 border-t border-deep-600/30">
+      <p class="text-[10px] text-deep-400 uppercase tracking-wider leading-relaxed">
+        First run? Sign in with the credentials printed in the server log at
+        first boot (default Admin / 123456) and change the password in Users.
+      </p>
+    </div>
   </div>
 </div>

@@ -48,6 +48,14 @@
 # docker_image_vanilla  = "omnibedrock-vanilla:latest"
 # docker_image_endstone = "omnibedrock-endstone:latest"
 
+# ── privileged capabilities (both default to false) ────────────────────────
+# Docker bind mounts are arbitrary host filesystem access; when enabled only
+# the panel owner may configure them.
+# docker_allow_host_mounts = false
+# Backup pre/post `command` hooks run arbitrary shell as the panel user;
+# send/wait/comment hooks work without this.
+# backup_hooks_enabled = false
+
 # ── tuning ─────────────────────────────────────────────────────────────────
 # debug = false
 # ws_heartbeat_interval = 30

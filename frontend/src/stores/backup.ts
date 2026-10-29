@@ -1,6 +1,6 @@
 import { writable, derived } from 'svelte/store';
 import type { BackupEvent, BackupSettings } from '$types/index';
-import { getToken } from '$lib/api/client';
+import { getInstance } from '$lib/api/client';
 import { wsManager } from '$lib/websocket';
 
 export const backupEvents = writable<BackupEvent[]>([]);
@@ -9,8 +9,11 @@ export const backupRunning = writable<boolean>(false);
 export const latestBackupEvent = writable<BackupEvent | null>(null);
 
 function getBackupWsUrl(): string {
-  const token = getToken();
-  return `/api/v1/backups/ws${token ? `?token=${token}` : ''}`;
+  // The WebSocket manager appends the short-lived download token; the
+  // instance scope must be explicit here or the stream follows the default
+  // instance after a switch.
+  const instance = getInstance() || 'default';
+  return `/api/v1/backups/ws?instance=${encodeURIComponent(instance)}`;
 }
 
 let disconnectWs: (() => void) | null = null;

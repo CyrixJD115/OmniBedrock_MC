@@ -2,9 +2,47 @@
 //! creation permission gating; independent concurrent instances; scoped
 //! access roles on shared instances; and resource limits as a granular
 //! permission.
-use crate::harness::{FAKE, call, call_instance, call_text, state};
+use crate::harness::{FAKE, call, call_instance, call_text, state, state_with_config};
 use axum::http::StatusCode;
 use serde_json::json;
+
+#[tokio::test]
+async fn docker_extra_mounts_are_opt_in() {
+    // Production default: bind mounts are refused outright, even for the
+    // panel owner — a mount is arbitrary host filesystem access.
+    let (_dir, _s, app, token) = state_with_config(|c| c.docker_allow_host_mounts = false).await;
+    let (code, body) = call(
+        &app,
+        "POST",
+        "/api/v1/instances",
+        Some(&token),
+        json!({
+            "name": "Mounts",
+            "backend": "vanilla",
+            "deployment": "docker",
+            "docker": {"extra_mounts": ["/:/host:rw"]}
+        }),
+    )
+    .await;
+    assert_eq!(code, StatusCode::FORBIDDEN, "{body}");
+    assert!(
+        body["detail"]
+            .as_str()
+            .unwrap()
+            .contains("DOCKER_ALLOW_HOST_MOUNTS"),
+        "{body}"
+    );
+    // The update path is gated by the same check.
+    let (code, body) = call(
+        &app,
+        "PUT",
+        "/api/v1/instances/default",
+        Some(&token),
+        json!({"docker": {"extra_mounts": ["/etc:/etc:ro"]}}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::FORBIDDEN, "{body}");
+}
 
 #[tokio::test]
 async fn instances_lifecycle_quotas_and_access() {

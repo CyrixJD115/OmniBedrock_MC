@@ -24,6 +24,7 @@ mod roles;
 mod seed;
 mod settings;
 mod store;
+mod throttle;
 mod token;
 mod types;
 

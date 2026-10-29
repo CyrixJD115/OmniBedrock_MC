@@ -15,7 +15,7 @@ use super::{
     },
     types::{Deployment, InstanceRecord, ResourcePolicy},
 };
-use crate::server::Status;
+use crate::server::{Backend, Status};
 use anyhow::{Context, bail};
 use omnibedrock_core::{config::Config, files::atomic_write};
 use std::{collections::BTreeMap, sync::Arc};
@@ -220,11 +220,14 @@ impl InstanceManager {
         19132
     }
 
-    /// Create an instance. `quota_check` runs while the write lock is held so
-    /// concurrent creates cannot both pass the same quota.
+    /// Create an instance. `backend` seeds the NetherNet-aware defaults in
+    /// server.properties (the per-instance settings file is written by the
+    /// API only after this returns). `quota_check` runs while the write lock
+    /// is held so concurrent creates cannot both pass the same quota.
     pub async fn create(
         &self,
         mut record: InstanceRecord,
+        backend: Backend,
         quota_check: impl FnOnce(&[InstanceRecord]) -> anyhow::Result<()>,
     ) -> anyhow::Result<Arc<Instance>> {
         record.resources.validate()?;
@@ -260,7 +263,7 @@ impl InstanceManager {
         quota_check(&snapshot)?;
         self.ensure_port_free(port, None, &snapshot).await?;
         let instance = build_instance(&self.config, record.clone()).await?;
-        seed_server_properties(&instance.config, port).await;
+        seed_server_properties(&instance.config, port, backend).await;
         instances.insert(record.id.clone(), instance.clone());
         drop(instances);
         self.save().await?;
@@ -301,15 +304,12 @@ impl InstanceManager {
         if next.deployment == Deployment::Docker && self.capabilities.docker.is_none() {
             bail!("Docker is not available on this host");
         }
-        if next.port != current.port {
-            let snapshot = self.records().await;
-            self.ensure_port_free(next.port, Some(id), &snapshot)
-                .await?;
-        }
         {
             let instances = self.instances.write().await;
-            // Quota check against the projected post-change record set; the
-            // stored record is only touched once it passes.
+            // Quota and port checks run under the write lock against the
+            // projected post-change record set (the same discipline as
+            // `create`), so two concurrent edits cannot both pass with the
+            // same port; the stored record is only touched once they pass.
             let projected: Vec<InstanceRecord> = instances
                 .values()
                 .map(|i| {
@@ -322,13 +322,18 @@ impl InstanceManager {
                 })
                 .collect();
             quota_check(&projected)?;
+            if next.port != current.port {
+                self.ensure_port_free(next.port, Some(id), &projected)
+                    .await?;
+            }
             *instance.record.write().expect("instance record lock") = next.clone();
             instance.server.set_launch(launch_context(&next));
             instance
                 .broadcaster
                 .set_docker(broadcaster_docker_spec(&next, &self.config));
             if next.port != current.port {
-                enforce_instance_port(&instance.config, next.port).await;
+                let backend = instance.server.settings.borrow().backend;
+                enforce_instance_port(&instance.config, next.port, backend).await;
             }
         }
         self.save().await?;

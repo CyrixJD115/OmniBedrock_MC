@@ -59,7 +59,19 @@ pub async fn spawn(
         "configuration loaded"
     );
     let state = crate::api::AppState::new(config, shutdown.clone()).await?;
-    let address = SocketAddr::new(state.config.host, state.config.port);
+    // Until first-run setup completes (the seeded default password is still
+    // active), a wildcard bind would expose Admin/<default> to the whole
+    // network; pin the listener to loopback and tell the operator how to get
+    // the configured address back.
+    let mut host = state.config.host;
+    if state.auth.default_credentials_active() && host.is_unspecified() {
+        host = std::net::IpAddr::from(std::net::Ipv4Addr::LOCALHOST);
+        tracing::warn!(
+            configured_host = %state.config.host,
+            "Default admin credentials are still active — binding the panel to              {host} instead of the configured address. Change the default              password (or set ADMIN_PASSWORD before first boot) to listen on it."
+        );
+    }
+    let address = SocketAddr::new(host, state.config.port);
     let listener = tokio::net::TcpListener::bind(address)
         .await
         .with_context(|| format!("bind API listener on {address}"))?;
@@ -75,9 +87,12 @@ pub async fn spawn(
     let stopping = state.clone();
     let handle = tokio::spawn(async move {
         let boot = boot;
-        if let Err(e) = axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal(shutdown))
-            .await
+        if let Err(e) = axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(shutdown_signal(shutdown))
+        .await
         {
             tracing::error!(%e, "HTTP server failed");
         }

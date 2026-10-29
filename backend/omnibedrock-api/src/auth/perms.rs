@@ -114,6 +114,10 @@ impl Auth {
     pub async fn me(&self, user: &User) -> Value {
         let mut v = user.safe();
         v["permissions"] = json!(self.permissions(user).await);
+        // Authenticated-only: the seeded default password being active is a
+        // first-run state the panel should warn about, but it must not be
+        // public pre-login (it would confirm the default pair works).
+        v["default_credentials"] = json!(self.default_credentials_active());
         v
     }
 }

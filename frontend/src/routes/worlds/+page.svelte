@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import { api } from '$lib/api/client';
   import { addToast } from '$stores/toast';
   import { formatBytes } from '$lib/utils';
+  import { activeInstance } from '$stores/instances';
   import { Globe } from '@lucide/svelte';
 
   let worlds = $state<string[]>([]);
@@ -10,12 +10,29 @@
   let info: any = $state(null);
   let loading = $state(true);
 
-  onMount(async () => {
-    try {
-      worlds = await api.listWorldsInfo();
-      if (worlds.length) { selected = worlds[0]; info = await api.getWorldInfo(selected); }
-    } catch (e: any) { addToast(`Failed: ${e.message}`, 'error'); }
-    loading = false;
+  // Worlds live inside the active instance; reload on switch and drop
+  // stale responses via the epoch guard.
+  let epoch = 0;
+  $effect(() => {
+    $activeInstance?.id;
+    const mine = ++epoch;
+    void (async () => {
+      try {
+        const w = await api.listWorldsInfo();
+        if (mine !== epoch) return;
+        worlds = w;
+        if (w.length) {
+          selected = w[0];
+          const i = await api.getWorldInfo(selected);
+          if (mine !== epoch) return;
+          info = i;
+        } else {
+          selected = '';
+          info = null;
+        }
+      } catch (e: any) { if (mine === epoch) addToast(`Failed: ${e.message}`, 'error'); }
+      if (mine === epoch) loading = false;
+    })();
   });
 
   async function select(name: string) {

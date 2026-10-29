@@ -1,7 +1,7 @@
 //! Console pipeline tests: high-volume reliable replay, oversized and
 //! EOF-truncated lines, disk retention gaps, level/TPS/error statistics, and
 //! the console WebSocket history, replay, command, and shutdown path.
-use crate::harness::{manager, setup, state, wait_line, wait_status};
+use crate::harness::{download_token, manager, setup, state, wait_line, wait_status};
 use futures_util::{SinkExt, StreamExt};
 use omnibedrock_server::server::{Console, ServerSettings, Status, detect_level};
 use serde_json::{Value, json};
@@ -126,6 +126,8 @@ async fn websocket_history_replay_command_permissions_and_shutdown() {
     wait_line(&s.server, "ready").await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
+    // Minted before `app` moves into the serving task.
+    let dt = download_token(&app, &token).await;
     let shutdown = s.shutdown.clone();
     let serving = tokio::spawn(async move {
         axum::serve(listener, app)
@@ -134,7 +136,7 @@ async fn websocket_history_replay_command_permissions_and_shutdown() {
             .unwrap();
     });
     let (mut ws, _) =
-        tokio_tungstenite::connect_async(format!("ws://{address}/api/v1/console/ws?token={token}"))
+        tokio_tungstenite::connect_async(format!("ws://{address}/api/v1/console/ws?dt={dt}"))
             .await
             .unwrap();
     let mut sequence = 0;
@@ -157,8 +159,9 @@ async fn websocket_history_replay_command_permissions_and_shutdown() {
     ws.close(None).await.unwrap();
     s.server.send_command("offline-command").await.unwrap();
     wait_line(&s.server, "offline-command").await;
+    // The first token is still well inside its validity window.
     let (mut ws, _) = tokio_tungstenite::connect_async(format!(
-        "ws://{address}/api/v1/console/ws?token={token}&after={sequence}&stream_id={stream}"
+        "ws://{address}/api/v1/console/ws?dt={dt}&after={sequence}&stream_id={stream}"
     ))
     .await
     .unwrap();

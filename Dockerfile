@@ -27,6 +27,9 @@ RUN mkdir -p backend/omnibedrock-core/src backend/omnibedrock-server/src backend
 COPY backend/omnibedrock-core/src backend/omnibedrock-core/src
 COPY backend/omnibedrock-server/src backend/omnibedrock-server/src
 COPY backend/omnibedrock-api/src backend/omnibedrock-api/src
+# openapi.json is include_str!'d from api/router.rs, so it must exist for the
+# build even though src/ above is replaced by dummies in the deps stage.
+COPY backend/omnibedrock-api/openapi.json backend/omnibedrock-api/openapi.json
 # The build script lives at the crate root, outside src/, so it needs its own
 # COPY (touching it would create an empty file and fail cargo's auto-detect).
 COPY backend/omnibedrock-api/build.rs backend/omnibedrock-api/build.rs

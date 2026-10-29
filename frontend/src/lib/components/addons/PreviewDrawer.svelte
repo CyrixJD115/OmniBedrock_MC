@@ -4,6 +4,7 @@
   import {
     Package, X, Edit, Hash, FolderOpen, Shuffle, AlertTriangle, Trash2, Power, PowerOff,
   } from '@lucide/svelte';
+  import { authsrc } from '$lib/api/client';
   import { structuredHtml, versionStr } from '$lib/addons/display';
   import ActivePill from './ActivePill.svelte';
   import SourceBadge from './SourceBadge.svelte';
@@ -57,7 +58,8 @@
   <!-- drawer header -->
   <div class="flex items-center justify-between p-4 border-b border-deep-700/50 shrink-0">
     {#if icon}
-      <img src={icon} alt="" class="pack-icon w-10 h-10 rounded object-cover bg-deep-800 mr-3 shrink-0 border border-deep-700/60"
+      <img use:authsrc={{ url: icon, onerror: oniconbroken }} alt=""
+           class="pack-icon w-10 h-10 rounded object-cover bg-deep-800 mr-3 shrink-0 border border-deep-700/60"
            onerror={oniconbroken} />
     {:else}
       <div class="w-10 h-10 rounded bg-deep-800/80 flex items-center justify-center mr-3 shrink-0">

@@ -1,21 +1,28 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import { api } from '$lib/api/client';
   import { addToast } from '$stores/toast';
   import { userPermissions } from '$stores/auth';
+  import { activeInstance } from '$stores/instances';
   import { Users, Ban, Shield, ShieldOff } from '@lucide/svelte';
 
   let players = $state<{ name: string }[]>([]);
   let count = $state(0);
   let loading = $state(true);
 
-  onMount(async () => {
-    try {
-      const r = await api.listPlayers();
-      players = r.players || [];
-      count = r.count || 0;
-    } catch (e: any) { addToast(`Failed: ${e.message}`, 'error'); }
-    loading = false;
+  // Player data comes from the active instance's world; reload on switch.
+  let epoch = 0;
+  $effect(() => {
+    $activeInstance?.id;
+    const mine = ++epoch;
+    void (async () => {
+      try {
+        const r = await api.listPlayers();
+        if (mine !== epoch) return;
+        players = r.players || [];
+        count = r.count || 0;
+      } catch (e: any) { if (mine === epoch) addToast(`Failed: ${e.message}`, 'error'); }
+      if (mine === epoch) loading = false;
+    })();
   });
 
   async function act(action: string, target: string) {

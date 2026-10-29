@@ -259,7 +259,7 @@ mod docker_args_tests {
             [
                 "sh",
                 "-c",
-                "exec python -m endstone --no-confirm -s /data <> /data/stdin.fifo"
+                "exec 'python' '-m' 'endstone' '--no-confirm' '-s' '/data' <> '/data/stdin.fifo'"
             ]
         );
     }

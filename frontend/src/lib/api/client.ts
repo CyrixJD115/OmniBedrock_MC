@@ -17,10 +17,109 @@ if (typeof localStorage !== 'undefined') {
 
 export function setToken(token: string) {
   authToken = token;
+  // Any credential change invalidates a cached download token.
+  downloadToken = '';
+  downloadTokenExpiresAt = 0;
 }
 
 export function getToken(): string {
   return authToken;
+}
+
+// ─── Short-lived download tokens ────────────────────────────────────────────
+// Browser flows that cannot set the Authorization header (file downloads,
+// WebSocket upgrades) mint a purpose-bound token that expires in minutes, so
+// a URL that leaks into a browser cache or an intermediary's access log is
+// worthless quickly — instead of carrying the 7-day login bearer. Images go
+// one step further: they are fetched with the normal header and turned into
+// blob object URLs, so no credential ever lands in an <img src>.
+let downloadToken = '';
+let downloadTokenExpiresAt = 0;
+
+export async function getDownloadToken(force = false): Promise<string> {
+  if (!force && downloadToken && Date.now() < downloadTokenExpiresAt) return downloadToken;
+  const res = await fetch(`${API_BASE}/auth/download-token`, {
+    method: 'POST',
+    headers: rawHeaders({ 'Content-Type': 'application/json' }),
+  });
+  if (!res.ok) throw new Error(`API Error ${res.status}: ${await res.text()}`);
+  const body = (await res.json()) as { token: string; expires_in: number };
+  downloadToken = body.token;
+  // Refresh a minute early so in-flight URL builds never use a stale token.
+  downloadTokenExpiresAt = Date.now() + Math.max(30, (body.expires_in - 60) * 1000);
+  return downloadToken;
+}
+
+const blobUrlCache = new Map<string, string>();
+const blobUrlPending = new Map<string, Promise<string>>();
+
+export async function authorizedBlobUrl(url: string): Promise<string> {
+  const cached = blobUrlCache.get(url);
+  if (cached) return cached;
+  const pending = blobUrlPending.get(url);
+  if (pending) return pending;
+  const task = (async () => {
+    const res = await fetch(url, { headers: rawHeaders() });
+    if (!res.ok) throw new Error(`API Error ${res.status}`);
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    blobUrlCache.set(url, objectUrl);
+    return objectUrl;
+  })();
+  blobUrlPending.set(url, task);
+  try {
+    return await task;
+  } finally {
+    blobUrlPending.delete(url);
+  }
+}
+
+/**
+ * Svelte action: fetch an authorized image URL with auth headers and set the
+ * result as the element's src. Fires `params.onerror` on failure so callers
+ * can fall back to a placeholder without leaking tokens into the DOM.
+ */
+export function authsrc(
+  node: HTMLImageElement,
+  params: { url: string | null; onerror?: () => void },
+): { update: (next: { url: string | null; onerror?: () => void }) => void; destroy: () => void } {
+  let current = params.url;
+  let alive = true;
+  async function load(url: string | null, onerror?: () => void) {
+    current = url;
+    node.removeAttribute('src');
+    if (!url) return;
+    try {
+      const src = await authorizedBlobUrl(url);
+      if (alive && current === url) node.src = src;
+    } catch {
+      if (alive) onerror?.();
+    }
+  }
+  void load(params.url, params.onerror);
+  return {
+    update(next) {
+      if (next.url !== current) void load(next.url, next.onerror);
+    },
+    destroy() {
+      alive = false;
+    },
+  };
+}
+
+/** Session expired server-side: drop local credentials; the layout's guard
+ * sends an anonymous visitor to the login page. */
+function handleSessionExpired() {
+  authToken = '';
+  downloadToken = '';
+  downloadTokenExpiresAt = 0;
+  if (typeof localStorage !== 'undefined') {
+    localStorage.removeItem('omb_token');
+    localStorage.removeItem('omb_user');
+  }
+  if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+    window.location.assign('/login');
+  }
 }
 
 /** Scope every request (and instance-aware WS URLs) to one instance. */
@@ -33,7 +132,7 @@ export function getInstance(): string {
 }
 
 /** Headers for raw (non-JSON) fetches: auth + active-instance scoping. */
-function rawHeaders(extra: Record<string, string> = {}): Record<string, string> {
+export function rawHeaders(extra: Record<string, string> = {}): Record<string, string> {
   const headers: Record<string, string> = { ...extra };
   if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
   if (activeInstance) headers['X-Instance'] = activeInstance;
@@ -61,6 +160,11 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   if (!res.ok) {
     const text = await res.text();
+    // An expired/rotated token on an authenticated call means the session is
+    // over; login failures (the /auth/ paths) are ordinary user errors.
+    if (res.status === 401 && authToken && !path.startsWith('/auth/')) {
+      handleSessionExpired();
+    }
     throw new Error(`API Error ${res.status}: ${text}`);
   }
 
@@ -227,8 +331,9 @@ export const api = {
   restoreBackup: (world: string, filename: string) =>
     request<{ success: boolean }>(`/backups/restore/${world}/${filename}`, { method: 'POST' }),
   listTrash: (world?: string) => request<Array<any>>(`/backups/trash${world ? `?world=${world}` : ''}`),
-  downloadBackup: (world: string, filename: string) => {
-    const url = `${API_BASE}/backups/${encodeURIComponent(world)}/${encodeURIComponent(filename)}/download?token=${authToken}&instance=${encodeURIComponent(activeInstance || 'default')}`;
+  downloadBackup: async (world: string, filename: string) => {
+    const dt = await getDownloadToken();
+    const url = `${API_BASE}/backups/${encodeURIComponent(world)}/${encodeURIComponent(filename)}/download?dt=${encodeURIComponent(dt)}&instance=${encodeURIComponent(activeInstance || 'default')}`;
     const a = document.createElement('a');
     a.href = url;
     a.download = filename;
@@ -280,8 +385,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ path }),
     }),
+  // Token-free URL: rendered through the `authsrc` action, which fetches it
+  // with the Authorization header and swaps in a blob object URL.
   addonIconUrl: (path: string, version?: string) =>
-    `${API_BASE}/addons/icon?path=${encodeURIComponent(path)}&token=${authToken}&instance=${encodeURIComponent(activeInstance || 'default')}${version ? `&v=${encodeURIComponent(version)}` : ''}`,
+    `${API_BASE}/addons/icon?path=${encodeURIComponent(path)}&instance=${encodeURIComponent(activeInstance || 'default')}${version ? `&v=${encodeURIComponent(version)}` : ''}`,
   getManifest: (path: string) => request<Record<string, unknown>>(`/addons/manifest?path=${encodeURIComponent(path)}`),
   updateManifest: (path: string, manifest: Record<string, unknown>) =>
     request<{ success: boolean }>('/addons/manifest', {
@@ -331,8 +438,9 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  // Token-free URL: rendered through the `authsrc` action (see addonIconUrl).
   storeImageUrl: (url: string) =>
-    `${API_BASE}/store/image?url=${encodeURIComponent(url)}&token=${authToken}`,
+    `${API_BASE}/store/image?url=${encodeURIComponent(url)}`,
 
   // Players
   listPlayers: () => request<{ players: Player[]; count: number }>('/players/'),
@@ -377,8 +485,8 @@ export const api = {
 
   // Settings
   getSettings: () => request<Record<string, unknown>>('/settings/'),
-  getPanelSettings: () => request<{ login_enabled: boolean; default_credentials: boolean }>('/settings/panel'),
-  updatePanelSettings: (data: { login_enabled: boolean }) =>
+  getPanelSettings: () => request<{ login_enabled: boolean }>('/settings/panel'),
+  updatePanelSettings: (data: { login_enabled: boolean; confirm?: true }) =>
     request<{ success: boolean; message: string }>('/settings/panel', {
       method: 'PUT',
       body: JSON.stringify(data),

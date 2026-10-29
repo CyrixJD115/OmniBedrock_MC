@@ -5,6 +5,7 @@ use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Request},
     http::{Method, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{any, get},
 };
@@ -13,6 +14,33 @@ use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLay
 
 use super::dispatch::dispatch;
 use super::state::AppState;
+
+/// Baseline security headers on every response, API and embedded UI alike.
+/// The SPA is fully same-origin (external scripts, Svelte inline styles,
+/// data:/blob: images), so the policy needs no relaxation; the sandboxed
+/// srcdoc iframe on the Store page inherits it and blocks scripts anyway.
+async fn security_headers(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        header::HeaderValue::from_static(
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
+             img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; \
+             frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; \
+             frame-ancestors 'self'",
+        ),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        header::HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        header::REFERRER_POLICY,
+        header::HeaderValue::from_static("no-referrer"),
+    );
+    response
+}
 
 pub fn router(state: AppState) -> anyhow::Result<Router> {
     let origins = state
@@ -47,6 +75,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         // Everything that is not the API serves the embedded panel UI.
         .fallback(crate::bundle::serve)
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
+        .layer(middleware::from_fn(security_headers))
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http().make_span_with(|request: &Request| tracing::info_span!("http", method=%request.method(), path=request.uri().path())))
         .layer(

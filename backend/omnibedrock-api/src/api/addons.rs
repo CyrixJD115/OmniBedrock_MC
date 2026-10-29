@@ -33,8 +33,11 @@ pub(super) async fn addons(
 ) -> Result<Response> {
     let read = m == Method::GET;
     let create = m == Method::POST;
-    s.auth
-        .require(u, if read { "ADDONS_VIEW" } else { "ADDONS_MANAGE" })
+    // Packs live inside a specific instance's world dirs, so the gate is
+    // instance-scoped: on shared instances an access entry can carry it,
+    // mirroring console/backups/properties. The default instance keeps the
+    // legacy global-permission model.
+    s.require_for(u, if read { "ADDONS_VIEW" } else { "ADDONS_MANAGE" }, svc)
         .await?;
     let root = svc.config.bedrock_server_dir.join("worlds");
     let _lock = if read {
@@ -277,9 +280,10 @@ pub(super) async fn addons(
             .await?;
             if read {
                 match tokio::fs::read_to_string(path).await {
-                    Ok(text) => {
-                        serde_json::from_str(&text).map_err(|e| ApiError::bad(e.to_string()))?
-                    }
+                    Ok(text) => serde_json::from_str(&text).map_err(|e| {
+                        tracing::debug!(%e, "malformed world pack-order file");
+                        ApiError::bad("World pack order file is not valid JSON")
+                    })?,
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!([]),
                     Err(e) => return Err(e.into()),
                 }
@@ -333,7 +337,10 @@ pub(super) async fn addons(
 async fn read_manifest(path: &FsPath) -> Result<Value> {
     let path = safe_path(path, FsPath::new("manifest.json")).await?;
     let text = tokio::fs::read_to_string(path).await?;
-    let v: Value = serde_json::from_str(&text).map_err(|e| ApiError::bad(e.to_string()))?;
+    let v: Value = serde_json::from_str(&text).map_err(|e| {
+        tracing::debug!(%e, "malformed manifest.json");
+        ApiError::bad("Manifest is not valid JSON")
+    })?;
     if !v.is_object() {
         return Err(ApiError::bad("Manifest must be an object"));
     }

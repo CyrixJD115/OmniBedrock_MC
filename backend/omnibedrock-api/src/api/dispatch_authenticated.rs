@@ -48,6 +48,9 @@ pub(super) async fn dispatch_authenticated(
     let delete = m == Method::DELETE;
     let data = match p {
         ["auth", "me"] if read => s.auth.me(u).await,
+        // Short-lived token for browser flows that cannot set the
+        // Authorization header (downloads, images, WebSocket upgrades).
+        ["auth", "download-token"] if create => s.auth.issue_download_token(u).await?,
         ["auth", "users"] if read => {
             s.auth.require(u, "USERS_VIEW").await?;
             s.auth.users().await
@@ -274,7 +277,29 @@ pub(super) async fn dispatch_authenticated(
             let enabled = b["login_enabled"]
                 .as_bool()
                 .ok_or_else(|| ApiError::bad("'login_enabled' must be a boolean"))?;
+            if !enabled {
+                // Disabling login serves EVERY visitor as the owner account —
+                // effectively un-authenticating the panel — so it is
+                // owner-only and needs an explicit typed confirmation.
+                if !s.auth.is_owner(u).await {
+                    return Err(ApiError::forbidden(
+                        "Only the panel owner may disable login",
+                    ));
+                }
+                if b["confirm"] != Value::Bool(true) {
+                    return Err(ApiError::bad(
+                        "Pass \"confirm\": true — with login disabled every visitor is served as the owner account",
+                    ));
+                }
+            }
             s.auth.set_login_enabled(enabled).await?;
+            s.audit(
+                u,
+                "settings.login_toggle",
+                if enabled { "on" } else { "off" },
+                "settings",
+            )
+            .await?;
             success(if enabled {
                 "Login required"
             } else {
@@ -326,8 +351,12 @@ pub(super) async fn dispatch_authenticated(
                     v[key] = val.clone();
                 }
             }
-            let options: ServerSettings =
-                serde_json::from_value(v).map_err(|e| ApiError::bad(e.to_string()))?;
+            let options: ServerSettings = serde_json::from_value(v).map_err(|e| {
+                // Serde details name internal fields/types; keep them in the
+                // log and give the client a stable message.
+                tracing::debug!(%e, "invalid server settings payload");
+                ApiError::bad("Invalid server settings payload")
+            })?;
             options
                 .validate()
                 .map_err(|e| ApiError::bad(e.to_string()))?;
@@ -546,7 +575,7 @@ pub(super) async fn dispatch_authenticated(
             .map_err(anyhow::Error::from)??
         }
         ["worlds", world, "contents"] if read => {
-            s.auth.require(u, "SERVER_VIEW").await?;
+            s.require_for(u, "SERVER_VIEW", svc).await?;
             component(world)?;
             let path = safe_path(
                 &svc.config.bedrock_server_dir.join("worlds"),

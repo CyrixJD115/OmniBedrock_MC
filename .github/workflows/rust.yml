@@ -28,3 +28,13 @@ jobs:
         with:
           name: omnibedrock-linux
           path: target/release/omnibedrock
+
+  # The image build is compile-checked here because it copies files the Rust
+  # build `include_str!`s (openapi.json) and layers the UI build; drift between
+  # the Dockerfile and the tree used to go unnoticed until a release attempt.
+  docker-image:
+    runs-on: ubuntu-latest
+    needs: verify
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t omnibedrock:ci .

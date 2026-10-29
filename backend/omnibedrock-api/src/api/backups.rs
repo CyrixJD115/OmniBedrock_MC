@@ -49,8 +49,10 @@ pub(super) async fn backups(
         }
         ["backups", "create"] if create => {
             s.require_for(u, "BACKUPS_CREATE", svc).await?;
-            let r: BackupRequest =
-                serde_json::from_value(b.clone()).map_err(|e| ApiError::bad(e.to_string()))?;
+            let r: BackupRequest = serde_json::from_value(b.clone()).map_err(|e| {
+                tracing::debug!(%e, "invalid backup request body");
+                ApiError::bad("Invalid backup request: check world, tag, compression and flags")
+            })?;
             let lock = svc.operations.clone().try_lock_owned().map_err(|_| {
                 ApiError::conflict(
                     "A server operation or backup is already running on this instance",
@@ -144,8 +146,10 @@ pub(super) async fn backups(
         }
         ["backups", "test-command"] if create => {
             s.require_for(u, "BACKUPS_CREATE", svc).await?;
-            let h: Hook = serde_json::from_value(b["entry"].clone())
-                .map_err(|e| ApiError::bad(e.to_string()))?;
+            let h: Hook = serde_json::from_value(b["entry"].clone()).map_err(|e| {
+                tracing::debug!(%e, "invalid hook entry body");
+                ApiError::bad("Invalid hook entry: { type, value } expected")
+            })?;
             Hooks {
                 before: vec![h.clone()],
                 after: vec![],

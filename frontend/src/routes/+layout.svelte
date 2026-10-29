@@ -97,7 +97,7 @@
     const finish = () => { checkingAuth = false; mounted = true; };
 
     // Public endpoint: tells us whether a login is even required.
-    let panel: { login_enabled: boolean; default_credentials: boolean } | null = null;
+    let panel: { login_enabled: boolean } | null = null;
     try { panel = await api.getPanelSettings(); } catch { /* backend still starting */ }
     loginDisabled = panel?.login_enabled === false;
 
@@ -168,9 +168,9 @@
       const status = await api.getServerStatus();
       serverStatus.set(status);
     } catch { /* instance might not be reachable yet */ }
-    const token = getToken();
+    // The WebSocket manager appends a fresh short-lived download token.
     const instance = $activeInstanceId || 'default';
-    const query = `${token ? `token=${token}&` : ''}instance=${encodeURIComponent(instance)}`;
+    const query = `instance=${encodeURIComponent(instance)}`;
     if ($userPermissions.includes('CONSOLE_VIEW')) unsubs.push(wsManager.connect(`/api/v1/console/ws?${query}`, onConsoleMessage));
     if ($userPermissions.includes('SERVER_VIEW')) unsubs.push(wsManager.connect(`/api/v1/performance/ws?${query}`, onMetricsMessage));
   }

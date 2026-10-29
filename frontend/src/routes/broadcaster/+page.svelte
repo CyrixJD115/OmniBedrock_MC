@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { api, getToken } from '$lib/api/client';
+  import { api, rawHeaders } from '$lib/api/client';
   import { wsManager } from '$lib/websocket';
   import { addToast } from '$stores/toast';
   import { userPermissions } from '$stores/auth';
@@ -135,9 +135,9 @@
     for (const unsub of unsubs.splice(0)) unsub();
     feed.clear();
     stick = true;
-    const token = getToken();
+    // The WebSocket manager appends a fresh short-lived download token.
     const instance = $activeInstance?.id || 'default';
-    const query = `${token ? `token=${encodeURIComponent(token)}&` : ''}instance=${encodeURIComponent(instance)}`;
+    const query = `instance=${encodeURIComponent(instance)}`;
     unsubs.push(wsManager.connect(`/api/v1/broadcaster/ws?${query}`, (data) => {
       if (data.type === 'hello' && data.resumed === false) feed.clear();
       else if (data.type === 'console') {
@@ -179,7 +179,10 @@
 
   async function loadPreview(account: string) {
     try {
-      const r = await fetch(`/api/v1/broadcaster/screenshot?account=${encodeURIComponent(account)}&token=${getToken()}&instance=${encodeURIComponent($activeInstance?.id || 'default')}`);
+      const r = await fetch(
+        `/api/v1/broadcaster/screenshot?account=${encodeURIComponent(account)}&instance=${encodeURIComponent($activeInstance?.id || 'default')}`,
+        { headers: rawHeaders() },
+      );
       if (!r.ok) throw new Error(String(r.status));
       const blob = await r.blob();
       const url = URL.createObjectURL(blob);

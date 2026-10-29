@@ -1,4 +1,4 @@
-import { getToken } from '$lib/api/client';
+import { getDownloadToken } from '$lib/api/client';
 
 type MessageHandler = (data: Record<string, unknown>) => void;
 interface Connection {
@@ -35,11 +35,28 @@ class WebSocketManager {
 
   private open(key: string, entry: Connection) {
     if (entry.closed || this.connections.get(key) !== entry) return;
+    // A fresh short-lived download token per attempt: a reconnect hours
+    // later works, and the long-lived login bearer never touches a URL.
+    void getDownloadToken()
+      .catch(() => '')
+      .then(token => this.openWithToken(key, entry, token));
+  }
+
+  private openWithToken(key: string, entry: Connection, token: string) {
+    if (entry.closed || this.connections.get(key) !== entry) return;
     const base = typeof location === 'undefined' ? 'http://localhost:17754' : location.origin;
     const url = new URL(entry.path, base);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-    const token = getToken();
-    if (token) url.searchParams.set('token', token);
+    if (token) url.searchParams.set('dt', token);
+    else {
+      // Token mint failed (backend booting or signed out): retry on the
+      // normal backoff instead of opening a socket that 401s immediately.
+      entry.reconnectTimer = setTimeout(() => {
+        entry.reconnectTimer = undefined;
+        this.open(key, entry);
+      }, 1000 + Math.random() * 500);
+      return;
+    }
     if (entry.sequence !== undefined && entry.streamId) {
       url.searchParams.set('after', String(entry.sequence));
       url.searchParams.set('stream_id', entry.streamId);

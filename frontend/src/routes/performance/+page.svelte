@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { metrics } from '$stores/index';
-  import { getToken, getInstance } from '$lib/api/client';
+  import { getInstance } from '$lib/api/client';
   import { wsManager } from '$lib/websocket';
   import { activeInstance, hostInfo } from '$stores/instances';
   import { Cpu, HardDrive, Activity, ShieldCheck, ShieldAlert } from '@lucide/svelte';
@@ -9,9 +9,8 @@
   let history = $state<{ time: string; cpu: number; mem: number; tps: number }[]>([]);
 
   onMount(() => {
-    const token = getToken();
     const instance = getInstance() || 'default';
-    const wsToken = `?${token ? `token=${token}&` : ''}instance=${encodeURIComponent(instance)}`;
+    const wsToken = `?instance=${encodeURIComponent(instance)}`;
     return wsManager.connect(`/api/v1/performance/ws${wsToken}`, (data: any) => {
       if (data.type !== 'metrics') return;
       metrics.set(data.data);

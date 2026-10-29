@@ -3,6 +3,7 @@
   import { api } from '$lib/api/client';
   import { addToast } from '$stores/toast';
   import { formatBytes } from '$lib/utils';
+  import { activeInstance } from '$stores/instances';
   import {
     backupEvents, backupRunning, latestBackupEvent, backupSettings,
     connectBackupWs, disconnectBackupWs
@@ -52,15 +53,30 @@
   let cmdBefore = $state<CommandEntry[]>([]);
   let cmdAfter = $state<CommandEntry[]>([]);
 
-  onMount(async () => {
+  // Everything on this page is instance-scoped: worlds, backups, trash,
+  // scheduler and the event stream follow the active instance. The epoch
+  // guard discards responses that arrive after an instance switch already
+  // moved on (and reconnects the stream, whose URL carries the instance).
+  let epoch = 0;
+  $effect(() => {
+    const instanceId = $activeInstance?.id ?? 'default';
+    const mine = ++epoch;
+    void loadAll(mine, instanceId);
+  });
+
+  async function loadAll(mine: number, _instanceId: string) {
     try {
-      worlds = await api.listWorlds();
-      if (worlds.length) { selWorld = worlds[0]; selBkWorld = worlds[0]; }
+      const w = await api.listWorlds();
+      if (mine !== epoch) return;
+      worlds = w;
+      if (w.length) { selWorld = w[0]; selBkWorld = w[0]; }
       const s = await api.getBackupSettings();
+      if (mine !== epoch) return;
       backupSettings.set(s);
       cmdBefore = s.pre_post?.before ?? [];
       cmdAfter = s.pre_post?.after ?? [];
       const sched = await api.getSchedulerConfig();
+      if (mine !== epoch) return;
       schedEnabled = sched.enabled;
       schedInterval = sched.interval_minutes ?? 30;
       schedKeep = sched.keep_count ?? 10;
@@ -68,10 +84,13 @@
       schedCompression = sched.compression === '7z' ? '7z' : 'zip';
       schedWorlds = sched.worlds ?? [];
       await loadBackups();
-    } catch (e: any) { addToast(`Failed to load backups: ${e.message}`, 'error'); }
+    } catch (e: any) {
+      if (mine === epoch) addToast(`Failed to load backups: ${e.message}`, 'error');
+    }
+    if (mine !== epoch) return;
     loading = false;
     connectBackupWs();
-  });
+  }
 
   onDestroy(() => {
     disconnectBackupWs();

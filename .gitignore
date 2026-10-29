@@ -17,7 +17,9 @@ build/
 .svelte-kit/
 .worktrees/
 vite.config.ts
-docs/
+.pytest_cache/
+.ruff_cache/
 
 /target/
 .data/
+backend/omnibedrock-api/backend/

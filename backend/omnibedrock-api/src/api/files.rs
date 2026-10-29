@@ -11,6 +11,9 @@ use super::state::AppState;
 
 pub(super) async fn config_file_path(s: &AppState, name: &str) -> Result<PathBuf> {
     component(name)?;
+    // Files with dedicated APIs (auth, roles, instance registry, settings)
+    // must never be reachable through the generic editor: several of them
+    // hold secrets or authority the generic FILES_EDIT gate does not carry.
     if [
         "users.yaml",
         "roles.yaml",
@@ -18,6 +21,13 @@ pub(super) async fn config_file_path(s: &AppState, name: &str) -> Result<PathBuf
         "console_lock_state.yaml",
         "backup_settings.yaml",
         "server_settings.yaml",
+        "instances.yaml",
+        "panel_settings.yaml",
+        "bds_version.json",
+        "endstone_toolchain.json",
+        "omnibedrock.db",
+        "omnibedrock.db-wal",
+        "omnibedrock.db-shm",
     ]
     .contains(&name)
     {

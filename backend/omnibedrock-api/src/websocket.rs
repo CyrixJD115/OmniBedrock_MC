@@ -19,8 +19,12 @@ use uuid::Uuid;
 
 #[derive(Deserialize, Clone)]
 pub struct WsQuery {
+    /// Short-lived download token (`POST /auth/download-token`), not the
+    /// long-lived login bearer: socket URLs leak into logs, so the URL token
+    /// must be worthless within minutes. Permissions are re-checked from the
+    /// store per action/heartbeat regardless.
     #[serde(default)]
-    pub token: String,
+    pub dt: String,
     pub after: Option<u64>,
     pub stream_id: Option<Uuid>,
     /// Instance scoping, mirroring the X-Instance header on the REST side.
@@ -31,7 +35,7 @@ pub struct WsQuery {
 /// global permission: instance reachability is decided by resolve_instance and
 /// each action revalidates its permission against the instance record.
 async fn user(state: &AppState, q: &WsQuery) -> Result<User> {
-    state.auth.resolve_user(Some(&q.token)).await
+    state.auth.resolve_download_user(&q.dt).await
 }
 /// Resolve + global permission check for panel-level sockets (audit,
 /// broadcaster). Instance sockets use resolve_instance + require_for instead.
@@ -58,7 +62,7 @@ pub async fn console_upgrade(
     resolve_instance(&state, &q, &user).await?;
     Ok(ws
         .max_message_size(16 * 1024)
-        .on_upgrade(move |ws| console_socket(state, q, ws)))
+        .on_upgrade(move |ws| console_socket(state, q, user, ws)))
 }
 pub async fn metrics_upgrade(
     State(state): State<AppState>,
@@ -74,7 +78,7 @@ pub async fn metrics_upgrade(
     resolve_instance(&state, &q, &user).await?;
     Ok(ws
         .max_message_size(16 * 1024)
-        .on_upgrade(move |ws| metrics_socket(state, q, ws)))
+        .on_upgrade(move |ws| metrics_socket(state, q, user, ws)))
 }
 pub async fn backups_upgrade(
     State(state): State<AppState>,
@@ -90,17 +94,17 @@ pub async fn backups_upgrade(
     resolve_instance(&state, &q, &user).await?;
     Ok(ws
         .max_message_size(16 * 1024)
-        .on_upgrade(move |ws| backup_socket(state, q, ws)))
+        .on_upgrade(move |ws| backup_socket(state, q, user, ws)))
 }
 pub async fn logs_upgrade(
     State(state): State<AppState>,
     Query(q): Query<WsQuery>,
     ws: WebSocketUpgrade,
 ) -> Result<Response> {
-    user_perm(&state, &q, "AUDIT_VIEW").await?;
+    let user = user_perm(&state, &q, "AUDIT_VIEW").await?;
     Ok(ws
         .max_message_size(16 * 1024)
-        .on_upgrade(move |ws| logs_socket(state, q, ws)))
+        .on_upgrade(move |ws| logs_socket(state, q, user, ws)))
 }
 pub async fn broadcaster_upgrade(
     State(state): State<AppState>,
@@ -118,7 +122,7 @@ pub async fn broadcaster_upgrade(
     resolve_instance(&state, &q, &user).await?;
     Ok(ws
         .max_message_size(16 * 1024)
-        .on_upgrade(move |ws| broadcaster_socket(state, q, ws)))
+        .on_upgrade(move |ws| broadcaster_socket(state, q, user, ws)))
 }
 type Writer = futures_util::stream::SplitSink<WebSocket, Message>;
 async fn send(writer: &mut Writer, value: &impl serde::Serialize) -> anyhow::Result<()> {
@@ -148,12 +152,8 @@ async fn replay(
     }
     Ok(cursor.is_some_and(|n| n < batch.latest))
 }
-async fn console_socket(state: AppState, q: WsQuery, ws: WebSocket) {
+async fn console_socket(state: AppState, q: WsQuery, account: User, ws: WebSocket) {
     let (mut writer, mut reader) = ws.split();
-    let account = match state.auth.resolve_user(Some(&q.token)).await {
-        Ok(account) => account,
-        Err(_) => return,
-    };
     let instance = match state
         .resolve_instance(q.instance.as_deref(), &account)
         .await
@@ -212,7 +212,7 @@ async fn console_socket(state: AppState, q: WsQuery, ws: WebSocket) {
                     Some(Ok(Message::Text(text)))=>{
                         match serde_json::from_str::<Value>(&text) {
                             Ok(v) if v["command"].is_string()=>{
-                                let outcome=async {let u=user(&state,&q).await?; let inst=resolve_instance(&state,&q,&u).await?; let record=inst.record(); if state.require_for(&u,"CONSOLE_SEND",&inst).await.is_err() { return Err(ApiError::forbidden("You can view this console but not send commands")); } let cmd=v["command"].as_str().unwrap_or_default(); inst.server.send_command(cmd).await.map_err(|e|ApiError::bad(e.to_string()))?; state.audit_instance(&u,"console.command",cmd,"console",&record.id).await?; Ok::<_,ApiError>(())}.await;
+                                let outcome=async {let u=state.auth.refresh_user(&account).await?; let inst=resolve_instance(&state,&q,&u).await?; let record=inst.record(); if state.require_for(&u,"CONSOLE_SEND",&inst).await.is_err() { return Err(ApiError::forbidden("You can view this console but not send commands")); } let cmd=v["command"].as_str().unwrap_or_default(); inst.server.send_command(cmd).await.map_err(|e|ApiError::bad(e.to_string()))?; state.audit_instance(&u,"console.command",cmd,"console",&record.id).await?; Ok::<_,ApiError>(())}.await;
                                 if let Err(e)=outcome&& send(&mut writer,&json!({"type":"error","message":e.message})).await.is_err(){break;}
                             }, Ok(_)=>{}, Err(_)=>{if send(&mut writer,&json!({"type":"error","message":"Invalid JSON message"})).await.is_err(){break;}}
                         }
@@ -234,19 +234,15 @@ async fn console_socket(state: AppState, q: WsQuery, ws: WebSocket) {
                 if send(&mut writer,&json!({"type":"error_stats","errors":console.errors()})).await.is_err(){break;}
             }
             _=heartbeat.tick()=>{
-                if async{let u=user(&state,&q).await?; let i=resolve_instance(&state,&q,&u).await?; state.require_for(&u,"CONSOLE_VIEW",&i).await?; Ok::<_,ApiError>(())}.await.is_err(){let _=writer.send(Message::Close(Some(CloseFrame{code:1008,reason:"Authentication or permission expired".into()}))).await;break;}
+                if async{let u=state.auth.refresh_user(&account).await?; let i=resolve_instance(&state,&q,&u).await?; state.require_for(&u,"CONSOLE_VIEW",&i).await?; Ok::<_,ApiError>(())}.await.is_err(){let _=writer.send(Message::Close(Some(CloseFrame{code:1008,reason:"Authentication or permission expired".into()}))).await;break;}
                 if send(&mut writer,&json!({"type":"ping"})).await.is_err(){break;}
             }
         }
     }
     let _ = tokio::time::timeout(Duration::from_secs(1), writer.close()).await;
 }
-async fn metrics_socket(state: AppState, q: WsQuery, ws: WebSocket) {
+async fn metrics_socket(state: AppState, q: WsQuery, account: User, ws: WebSocket) {
     let (mut writer, mut reader) = ws.split();
-    let account = match state.auth.resolve_user(Some(&q.token)).await {
-        Ok(account) => account,
-        Err(_) => return,
-    };
     let instance = match state
         .resolve_instance(q.instance.as_deref(), &account)
         .await
@@ -270,16 +266,12 @@ async fn metrics_socket(state: AppState, q: WsQuery, ws: WebSocket) {
             _=state.shutdown.cancelled()=>break,
             incoming=reader.next()=>{match incoming{Some(Ok(Message::Ping(v)))=>{if writer.send(Message::Pong(v)).await.is_err(){break;}},Some(Ok(Message::Text(_)|Message::Pong(_)))=>{},_=>break}},
             change=metrics.changed()=>{if change.is_err(){break;}metrics.borrow_and_update();let data=state.instance_metrics(&instance_id);if send(&mut writer,&json!({"type":"metrics","data":data})).await.is_err(){break;}},
-            _=heartbeat.tick()=>{if async{let u=user(&state,&q).await?; let i=resolve_instance(&state,&q,&u).await?; state.require_for(&u,"SERVER_VIEW",&i).await?; Ok::<_,ApiError>(())}.await.is_err()  || send(&mut writer,&json!({"type":"ping"})).await.is_err(){break;}}
+            _=heartbeat.tick()=>{if async{let u=state.auth.refresh_user(&account).await?; let i=resolve_instance(&state,&q,&u).await?; state.require_for(&u,"SERVER_VIEW",&i).await?; Ok::<_,ApiError>(())}.await.is_err()  || send(&mut writer,&json!({"type":"ping"})).await.is_err(){break;}}
         }
     }
 }
-async fn backup_socket(state: AppState, q: WsQuery, ws: WebSocket) {
+async fn backup_socket(state: AppState, q: WsQuery, account: User, ws: WebSocket) {
     let (mut writer, mut reader) = ws.split();
-    let account = match state.auth.resolve_user(Some(&q.token)).await {
-        Ok(account) => account,
-        Err(_) => return,
-    };
     let instance = match state
         .resolve_instance(q.instance.as_deref(), &account)
         .await
@@ -304,11 +296,11 @@ async fn backup_socket(state: AppState, q: WsQuery, ws: WebSocket) {
             _=state.shutdown.cancelled()=>break,
             incoming=reader.next()=>{match incoming{Some(Ok(Message::Ping(v)))=>{if writer.send(Message::Pong(v)).await.is_err(){break;}},Some(Ok(Message::Text(_)|Message::Pong(_)))=>{},_=>break}},
             event=events.recv()=>{match event{Ok(v)=>{if send(&mut writer,&v).await.is_err(){break;}},Err(broadcast::error::RecvError::Lagged(n))=>{if send(&mut writer,&json!({"type":"gap","missed":n,"active":state.backups.active()})).await.is_err(){break;}},Err(_)=>break}},
-            _=heartbeat.tick()=>{if async{let u=user(&state,&q).await?; let i=resolve_instance(&state,&q,&u).await?; state.require_for(&u,"BACKUPS_VIEW",&i).await?; Ok::<_,ApiError>(())}.await.is_err()  || send(&mut writer,&json!({"type":"ping"})).await.is_err(){break;}}
+            _=heartbeat.tick()=>{if async{let u=state.auth.refresh_user(&account).await?; let i=resolve_instance(&state,&q,&u).await?; state.require_for(&u,"BACKUPS_VIEW",&i).await?; Ok::<_,ApiError>(())}.await.is_err()  || send(&mut writer,&json!({"type":"ping"})).await.is_err(){break;}}
         }
     }
 }
-async fn logs_socket(state: AppState, q: WsQuery, ws: WebSocket) {
+async fn logs_socket(state: AppState, _q: WsQuery, account: User, ws: WebSocket) {
     use tokio::io::{AsyncReadExt, AsyncSeekExt};
     let (mut writer, mut reader) = ws.split();
     let path = state.config.logs_dir.join("omnibedrock.log");
@@ -326,7 +318,7 @@ async fn logs_socket(state: AppState, q: WsQuery, ws: WebSocket) {
             _=state.shutdown.cancelled()=>break,
             incoming=reader.next()=>{match incoming{Some(Ok(Message::Ping(v)))=>{if writer.send(Message::Pong(v)).await.is_err(){break;}},Some(Ok(Message::Text(_)|Message::Pong(_)))=>{},_=>break}},
             _=ticker.tick()=>{
-                if last_auth.elapsed()>Duration::from_secs(state.config.ws_heartbeat_interval){if user_perm(&state,&q,"AUDIT_VIEW").await.is_err() || send(&mut writer,&json!({"type":"ping"})).await.is_err(){break;}last_auth=tokio::time::Instant::now();}
+                if last_auth.elapsed()>Duration::from_secs(state.config.ws_heartbeat_interval){if async{let u=state.auth.refresh_user(&account).await?; state.auth.require(&u,"AUDIT_VIEW").await?; Ok::<_,ApiError>(())}.await.is_err() || send(&mut writer,&json!({"type":"ping"})).await.is_err(){break;}last_auth=tokio::time::Instant::now();}
                 let Ok(metadata)=file.metadata().await else{break;};
                 if metadata.len()<position{let _=file.seek(std::io::SeekFrom::Start(0)).await;position=0;pending.clear();}
                 let mut bytes=[0u8;8192];let Ok(n)=file.read(&mut bytes).await else{break;};position+=n as u64;pending.push_str(&String::from_utf8_lossy(&bytes[..n]));
@@ -340,12 +332,8 @@ async fn logs_socket(state: AppState, q: WsQuery, ws: WebSocket) {
 /// Broadcaster stream: console replay plus status and device-code events,
 /// scoped to the query's instance. Commands require BROADCASTER_MANAGE on
 /// that instance and are revalidated on each send.
-async fn broadcaster_socket(state: AppState, q: WsQuery, ws: WebSocket) {
+async fn broadcaster_socket(state: AppState, q: WsQuery, account: User, ws: WebSocket) {
     let (mut writer, mut reader) = ws.split();
-    let account = match state.auth.resolve_user(Some(&q.token)).await {
-        Ok(account) => account,
-        Err(_) => return,
-    };
     let instance = match state
         .resolve_instance(q.instance.as_deref(), &account)
         .await
@@ -404,7 +392,7 @@ async fn broadcaster_socket(state: AppState, q: WsQuery, ws: WebSocket) {
                     Some(Ok(Message::Text(text)))=>{
                         match serde_json::from_str::<Value>(&text) {
                             Ok(v) if v["command"].is_string()=>{
-                                let outcome=async {let u=state.auth.resolve_user(Some(&q.token)).await?; let cmd=v["command"].as_str().unwrap_or_default(); state.require_for(&u,"BROADCASTER_MANAGE",&instance).await?; instance.broadcaster.send_command(cmd).await.map_err(|e|ApiError::bad(e.to_string()))?; state.audit_instance(&u,"broadcaster.command",cmd,"broadcaster",&instance.record().id).await?; Ok::<_,ApiError>(())}.await;
+                                let outcome=async {let u=state.auth.refresh_user(&account).await?; let cmd=v["command"].as_str().unwrap_or_default(); state.require_for(&u,"BROADCASTER_MANAGE",&instance).await?; instance.broadcaster.send_command(cmd).await.map_err(|e|ApiError::bad(e.to_string()))?; state.audit_instance(&u,"broadcaster.command",cmd,"broadcaster",&instance.record().id).await?; Ok::<_,ApiError>(())}.await;
                                 if let Err(e)=outcome&& send(&mut writer,&json!({"type":"error","message":e.message})).await.is_err(){break;}
                             }, Ok(_)=>{}, Err(_)=>{if send(&mut writer,&json!({"type":"error","message":"Invalid JSON message"})).await.is_err(){break;}}
                         }
@@ -427,7 +415,7 @@ async fn broadcaster_socket(state: AppState, q: WsQuery, ws: WebSocket) {
                 if send(&mut writer,&json!({"type":"device_codes","codes":instance.broadcaster.device_codes()})).await.is_err(){break;}
             }
             _=heartbeat.tick()=>{
-                if async {let u=state.auth.resolve_user(Some(&q.token)).await?; state.require_for(&u,"BROADCASTER_VIEW",&instance).await}.await.is_err(){let _=writer.send(Message::Close(Some(CloseFrame{code:1008,reason:"Authentication or permission expired".into()}))).await;break;}
+                if async {let u=state.auth.refresh_user(&account).await?; state.require_for(&u,"BROADCASTER_VIEW",&instance).await}.await.is_err(){let _=writer.send(Message::Close(Some(CloseFrame{code:1008,reason:"Authentication or permission expired".into()}))).await;break;}
                 if send(&mut writer,&json!({"type":"ping"})).await.is_err(){break;}
             }
         }

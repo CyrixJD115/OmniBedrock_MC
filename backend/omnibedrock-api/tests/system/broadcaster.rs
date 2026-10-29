@@ -2,8 +2,8 @@
 //! accounts, and screenshots; the WebSocket status/device-code/console
 //! stream; and per-instance broadcaster isolation.
 use crate::harness::{
-    FAKE_JAVA, call, call_bytes, call_instance, call_text, call_text_instance, config, login_owner,
-    setup,
+    FAKE_JAVA, call, call_bytes, call_instance, call_text, call_text_instance, config,
+    download_token, login_owner, setup,
 };
 use axum::{
     body::Body,
@@ -268,6 +268,8 @@ async fn broadcaster_socket_streams_status_codes_and_commands() {
         .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
+    // Minted before `app` moves into the serving task.
+    let dt = download_token(&app, &token).await;
     let shutdown = s.shutdown.clone();
     tokio::spawn(async move {
         axum::serve(listener, app)
@@ -275,11 +277,10 @@ async fn broadcaster_socket_streams_status_codes_and_commands() {
             .await
             .unwrap();
     });
-    let (mut ws, _) = tokio_tungstenite::connect_async(format!(
-        "ws://{address}/api/v1/broadcaster/ws?token={token}"
-    ))
-    .await
-    .unwrap();
+    let (mut ws, _) =
+        tokio_tungstenite::connect_async(format!("ws://{address}/api/v1/broadcaster/ws?dt={dt}"))
+            .await
+            .unwrap();
     let mut saw_status = false;
     let mut saw_code = false;
     let mut saw_line = false;

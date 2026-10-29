@@ -365,8 +365,7 @@ impl CurseForge {
     /// are served straight from cache.
     pub async fn fetch_image(&self, url: &str) -> anyhow::Result<(Vec<u8>, String)> {
         let parsed = reqwest::Url::parse(url).context("invalid image URL")?;
-        let host = parsed.host_str().unwrap_or_default();
-        if parsed.scheme() != "https" || !host.ends_with("forgecdn.net") {
+        if !is_allowed_image_url(&parsed) {
             anyhow::bail!("only forgecdn.net images may be proxied");
         }
         let cache_path = self
@@ -530,9 +529,31 @@ fn version_key(version: &str) -> Vec<u64> {
         .collect()
 }
 
+/// Exact-host allowlist for the image proxy. A bare suffix match would admit
+/// attacker-registered lookalikes (`evil-forgecdn.net`), so only the CDN
+/// apex and its direct subdomains pass.
+fn is_allowed_image_url(url: &reqwest::Url) -> bool {
+    url.scheme() == "https"
+        && url
+            .host_str()
+            .is_some_and(|host| host == "forgecdn.net" || host.ends_with(".forgecdn.net"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_proxy_host_allowlist_is_exact() {
+        let ok = |u: &str| is_allowed_image_url(&reqwest::Url::parse(u).unwrap());
+        assert!(ok("https://media.forgecdn.net/files/x.png"));
+        assert!(ok("https://forgecdn.net/a.png"));
+        // Lookalike hosts must not slip through a suffix match.
+        assert!(!ok("https://evil-forgecdn.net/a.png"));
+        assert!(!ok("https://notforgecdn.net/a.png"));
+        assert!(!ok("http://media.forgecdn.net/a.png"));
+        assert!(!ok("https://example.com/a.png"));
+    }
 
     #[test]
     fn versions_sort_newest_first() {

@@ -19,7 +19,7 @@
   let selectedEndstone = $state('latest');
   let busy = $state('');
   let serverSettings = $state<Record<string, unknown>>({});
-  let panel = $state<{ login_enabled: boolean; default_credentials: boolean } | null>(null);
+  let panel = $state<{ login_enabled: boolean } | null>(null);
   let accessBusy = $state(false);
   let cfSettings = $state<{ configured: boolean; key_hint: string | null; source: 'settings' | 'env' } | null>(null);
   let cfKeyInput = $state('');
@@ -143,9 +143,17 @@
   }
   async function toggleLogin(event: Event) {
     const enabled = (event.target as HTMLInputElement).checked;
+    // Disabling login serves EVERY visitor as the owner account, so the
+    // backend demands an explicit confirmation before accepting it.
+    if (!enabled && !window.confirm('Disable login? Everyone opening the panel will act as the owner account (Admin).')) {
+      (event.target as HTMLInputElement).checked = true;
+      return;
+    }
     accessBusy = true;
     try {
-      const r = await api.updatePanelSettings({ login_enabled: enabled });
+      const r = await api.updatePanelSettings(
+        enabled ? { login_enabled: true } : { login_enabled: false, confirm: true },
+      );
       addToast(r.message || 'Saved', 'success');
       if (panel) panel = { ...panel, login_enabled: enabled };
       if (enabled) {
@@ -472,7 +480,7 @@
         <input type="checkbox" checked={panel?.login_enabled ?? true} disabled={accessBusy || !canEditSettings}
                onchange={toggleLogin} class="accent-bedrock-500 w-4 h-4" />
       </label>
-      {#if panel?.default_credentials}
+      {#if $currentUser?.default_credentials}
         <p class="text-[10px] text-yellow-400/90 uppercase tracking-wider">
           <LockOpen size={10} class="inline mr-1" />
           Default credentials (Admin / 123456) are still active — change the password in Users.

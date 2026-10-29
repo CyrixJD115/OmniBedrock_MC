@@ -1,7 +1,7 @@
 //! Addon management tests: .mcpack/.mcaddon upload with icons and duplicate
 //! name suffixing, ordering pins, delete cleanup, and traversal or
 //! non-archive upload rejection.
-use crate::harness::{call, state};
+use crate::harness::{call, download_token, state};
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -115,14 +115,15 @@ async fn addon_upload_icon_delete_round_trip() {
     assert!(first["size_bytes"].as_u64().unwrap() > 0);
     assert!(first["modified"].as_u64().unwrap() > 0);
 
-    // Icon endpoint serves the embedded PNG via query token.
+    // Icon endpoint serves the embedded PNG via a short-lived download token.
+    let dt = download_token(&app, &token).await;
     let icon_response = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("GET")
                 .uri(format!(
-                    "/api/v1/addons/icon?path={}&token={token}",
+                    "/api/v1/addons/icon?path={}&dt={dt}",
                     urlencode(&first["path"].as_str().unwrap().replace('\\', "/")),
                 ))
                 .body(Body::empty())

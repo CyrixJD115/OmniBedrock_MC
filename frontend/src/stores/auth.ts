@@ -7,6 +7,8 @@ export interface UserInfo {
   created_at: string;
   last_login: string;
   permissions: string[];
+  /** True while the seeded default password is still active (first run). */
+  default_credentials?: boolean;
 }
 
 export const currentUser = writable<UserInfo | null>(null);

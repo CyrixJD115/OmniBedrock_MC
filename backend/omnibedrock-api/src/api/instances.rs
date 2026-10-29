@@ -23,7 +23,11 @@ pub(super) fn usage_json(metrics: &Value) -> Value {
 
 /// The optional per-instance Docker options from a request body. Absent or
 /// null clears them (the config defaults then apply at launch).
-fn docker_from_body(b: &Value) -> Result<Option<DockerConfig>> {
+///
+/// `extra_mounts` are arbitrary host bind mounts — `-v /:/host:rw` reads the
+/// panel's own data dir from inside the container — so they require BOTH the
+/// operator opt-in (`DOCKER_ALLOW_HOST_MOUNTS`) and the panel-owner role.
+async fn docker_from_body(s: &AppState, u: &User, b: &Value) -> Result<Option<DockerConfig>> {
     match b.get("docker") {
         None | Some(Value::Null) => Ok(None),
         Some(v) => {
@@ -44,6 +48,19 @@ fn docker_from_body(b: &Value) -> Result<Option<DockerConfig>> {
                     })
                     .unwrap_or_default(),
             };
+            if !config.extra_mounts.is_empty() {
+                if !s.config.docker_allow_host_mounts {
+                    return Err(ApiError::forbidden(
+                        "Docker bind mounts are disabled on this host; set \
+                         DOCKER_ALLOW_HOST_MOUNTS=true to allow them",
+                    ));
+                }
+                if !s.auth.is_owner(u).await {
+                    return Err(ApiError::forbidden(
+                        "Only the panel owner may configure Docker bind mounts",
+                    ));
+                }
+            }
             config
                 .validate()
                 .map_err(|e| ApiError::bad(e.to_string()))?;
@@ -89,7 +106,7 @@ pub(super) async fn create_instance(s: &AppState, u: &User, b: &Value) -> Result
         created_at: chrono::Utc::now().to_rfc3339(),
         port,
         deployment,
-        docker: docker_from_body(b)?,
+        docker: docker_from_body(s, u, b).await?,
         resources,
         access: vec![],
         autostart: b["autostart"].as_bool().unwrap_or(false),
@@ -101,7 +118,7 @@ pub(super) async fn create_instance(s: &AppState, u: &User, b: &Value) -> Result
     let extra = record.resources;
     let instance = s
         .instances
-        .create(record, move |records| {
+        .create(record, backend, move |records| {
             if is_owner_role {
                 return Ok(());
             }
@@ -192,7 +209,7 @@ pub(super) async fn update_instance(
     if b.get("docker").is_some() {
         // Replace the whole object (or clear it with null); partial patches
         // would silently keep stale mounts around.
-        next.docker = docker_from_body(b)?;
+        next.docker = docker_from_body(s, u, b).await?;
     }
     if let Some(autostart) = b["autostart"].as_bool() {
         if autostart && next.deployment != Deployment::Systemd {

@@ -148,6 +148,7 @@ pub async fn advise_transport(
     let mut transport = String::from("nethernet");
     let mut port: u16 = 19132;
     let mut max_players: u16 = 10;
+    let mut udp_ports = String::new();
     for line in text.lines() {
         let line = line.trim();
         if let Some(v) = line.strip_prefix("transport=") {
@@ -163,8 +164,16 @@ pub async fn advise_transport(
             && let Ok(m) = v.trim().parse()
         {
             max_players = m;
+        } else if let Some(v) = line.strip_prefix("server-udp-ports=") {
+            udp_ports = v.trim().to_string();
         }
     }
+    // An `ip:external:internal` entry (two or more colon groups) names the
+    // public side of the mapping; `external:internal` alone only works on
+    // the LAN where the server's own address is routable.
+    let ip_mapped = udp_ports
+        .split(',')
+        .any(|e| e.trim().match_indices(':').count() >= 2);
     let message = if transport.eq_ignore_ascii_case("raknet") {
         format!(
             "transport=raknet: fully updated Bedrock clients (1.26.60+) removed RakNet and \
@@ -173,11 +182,29 @@ pub async fn advise_transport(
         )
     } else if transport.eq_ignore_ascii_case("nethernet") {
         match backend {
-            Backend::Endstone if endstone_version.is_some_and(endstone_has_multiplexer) => format!(
-                "NetherNet single-port mode (Endstone {}): forward ONE port on the router — \
-                 TCP AND UDP on {port} (server-port). No per-player ports needed.",
-                endstone_version.unwrap_or(NETHERNET_MULTIPLEXER_VERSION),
-            ),
+            Backend::Endstone if endstone_version.is_some_and(endstone_has_multiplexer) => {
+                let base = format!(
+                    "NetherNet single-port mode (Endstone {}): forward ONE port on the router — \
+                     TCP AND UDP on {port} (server-port). No per-player ports needed.",
+                    endstone_version.unwrap_or(NETHERNET_MULTIPLEXER_VERSION),
+                );
+                if udp_ports.is_empty() {
+                    format!(
+                        "{base} server-udp-ports is MISSING, and without it remote Bedrock \
+                         joins fail even with the port forwarded — add \
+                         server-udp-ports=<your-public-ip>:{port}:{port} in the Properties \
+                         editor"
+                    )
+                } else if !ip_mapped {
+                    format!(
+                        "{base} server-udp-ports={udp_ports} has no public IP prefix; \
+                         off-LAN joins need one — \
+                         server-udp-ports=<your-public-ip>:{port}:{port}"
+                    )
+                } else {
+                    base
+                }
+            }
             Backend::Endstone => format!(
                 "transport=nethernet on Endstone {}: this toolchain has no NetherNet \
                  multiplexer, so game traffic needs one UDP port per player slot from \
@@ -259,6 +286,45 @@ mod tests {
             "{}",
             tail[2].line
         );
+        // Endstone 0.11.15 + nethernet + no udp-ports key: the missing line
+        // is called out as the remote-join breaker.
+        advise_transport(&config, &console, Backend::Endstone, Some("0.11.15")).await;
+        let tail = console.tail(10);
+        assert_eq!(tail.len(), 4, "{:?}", tail);
+        assert!(
+            tail[3].line.contains("server-udp-ports is MISSING"),
+            "{}",
+            tail[3].line
+        );
+        // A mapping without an ip prefix works on the LAN but not from
+        // outside: the advisor asks for the public-ip form.
+        std::fs::write(
+            config.bedrock_server_dir.join("server.properties"),
+            "transport=nethernet\nserver-port=24474\nserver-udp-ports=24474:24474\n",
+        )
+        .unwrap();
+        advise_transport(&config, &console, Backend::Endstone, Some("0.11.15")).await;
+        let tail = console.tail(10);
+        assert_eq!(tail.len(), 5, "{:?}", tail);
+        assert!(
+            tail[4].line.contains("no public IP prefix"),
+            "{}",
+            tail[4].line
+        );
+        // With the ip-prefixed mapping in place the advice is quiet again.
+        std::fs::write(
+            config.bedrock_server_dir.join("server.properties"),
+            "transport=nethernet\nserver-port=24474\nserver-udp-ports=98.30.36.191:24474:24474\n",
+        )
+        .unwrap();
+        advise_transport(&config, &console, Backend::Endstone, Some("0.11.15")).await;
+        let tail = console.tail(10);
+        assert_eq!(tail.len(), 6, "{:?}", tail);
+        assert!(
+            !tail[5].line.contains("public IP") && tail[5].line.contains("single-port"),
+            "{}",
+            tail[5].line
+        );
         // Vanilla + nethernet: per-player ports warning with the max count.
         std::fs::write(
             config.bedrock_server_dir.join("server.properties"),
@@ -267,11 +333,11 @@ mod tests {
         .unwrap();
         advise_transport(&config, &console, Backend::Vanilla, Some("0.11.15")).await;
         let tail = console.tail(10);
-        assert_eq!(tail.len(), 4, "{:?}", tail);
+        assert_eq!(tail.len(), 7, "{:?}", tail);
         assert!(
-            tail[3].line.contains("signaling ONLY") && tail[3].line.contains("12"),
+            tail[6].line.contains("signaling ONLY") && tail[6].line.contains("12"),
             "{}",
-            tail[3].line
+            tail[6].line
         );
         // An unknown transport value is called out, never silently accepted.
         std::fs::write(
@@ -281,8 +347,8 @@ mod tests {
         .unwrap();
         advise_transport(&config, &console, Backend::Endstone, Some("0.11.15")).await;
         let tail = console.tail(10);
-        assert_eq!(tail.len(), 5, "{:?}", tail);
-        assert!(tail[4].line.contains("transport=wat"), "{}", tail[4].line);
+        assert_eq!(tail.len(), 8, "{:?}", tail);
+        assert!(tail[7].line.contains("transport=wat"), "{}", tail[7].line);
     }
 
     #[test]

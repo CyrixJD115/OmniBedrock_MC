@@ -31,9 +31,9 @@ The release build embeds the web UI (the build script runs `npm run build` in `f
 
 A desktop window mode is available too: rebuild with `cargo build --release --locked --features desktop` (Linux needs the `webkit2gtk-4.1` library installed) and run `./target/release/omnibedrock --desktop`. The same single-process server starts and the panel opens in a native WebKit window; closing the window shuts everything down cleanly. Without the feature the flag prints a clear rebuild hint.
 
-When there are no users, startup creates an `Admin` account with owner role using the default password `123456`, prints it once to stderr, and warns you to change it (the login page also shows a hint and prefills while the default is active). Set `ADMIN_PASSWORD` to use a supplied initial password (6+ characters) instead; changing the password anywhere flips the default-credentials flag off. Leave `SECRET_KEY` blank to generate a private persisted key, or supply a random secret of at least 32 characters. Bootstrap credentials are not written to the backend log.
+When there are no users, startup creates an `Admin` account with owner role using the default password `123456`, prints it once to stderr, and warns you to change it (the panel shows a first-run hint after you sign in). Until the default password is changed, the listener is pinned to loopback even when `OMNI_HOST` is a wildcard address. Set `ADMIN_PASSWORD` to use a supplied initial password (6+ characters) instead; changing the password anywhere flips the default-credentials flag off and releases the configured bind address. Leave `SECRET_KEY` blank to generate a private persisted key, or supply a random secret of at least 32 characters. Bootstrap credentials are not written to the backend log.
 
-Login can be turned off entirely from Settings → Access (or `PUT /api/v1/settings/panel`): with login disabled the panel serves every request — REST and WebSockets — as the owner account, and the login page redirects straight in. The choice persists in `data/panel_settings.yaml` and survives restarts. Startup logs each phase (directories, auth store, services) with elapsed milliseconds so slow boots are visible.
+Login can be turned off entirely from Settings → Access (or `PUT /api/v1/settings/panel`): with login disabled the panel serves every request — REST and WebSockets — as the owner account, and the login page redirects straight in. Because that removes all authentication, the toggle is panel-owner-only and requires an explicit `{confirm: true}`. The choice persists in `data/panel_settings.yaml` and survives restarts. Startup logs each phase (directories, auth store, services) with elapsed milliseconds so slow boots are visible.
 
 ```bash
 cd frontend
@@ -62,11 +62,11 @@ Open **http://localhost:17755**. Compose builds the Rust API and Node frontend, 
 The multi-stage root Dockerfile has two runtime targets:
 
 - `runtime`: binary and C runtime, for an externally provided standalone Endstone executable.
-- `endstone` (default): includes Endstone 0.11.0 in its own Python environment plus a headless JRE for the optional MCXboxBroadcast integration — drop `MCXboxBroadcastStandalone.jar` into the `broadcaster` volume. Compose pins this version; set `ENDSTONE_VERSION` deliberately to upgrade. Endstone may download Bedrock on first server start; alternatively install vanilla BDS from Settings → Server backend.
+- `endstone` (default): includes Endstone 0.11.14 in its own Python environment plus a headless JRE for the optional MCXboxBroadcast integration — drop `MCXboxBroadcastStandalone.jar` into the `broadcaster` volume. Compose pins this version; set `ENDSTONE_VERSION` deliberately to upgrade. Endstone may download Bedrock on first server start; alternatively install vanilla BDS from Settings → Server backend.
 
 ```bash
 docker build --target runtime -t omnibedrock-api .
-docker build --target endstone --build-arg ENDSTONE_VERSION=0.11.0 -t omnibedrock .
+docker build --target endstone --build-arg ENDSTONE_VERSION=0.11.14 -t omnibedrock .
 ```
 
 The Endstone image targets `linux/amd64`. Named volumes are initialized for UID 1000; if replacing them with bind mounts, give that UID write access. The health check tests the panel API, so the panel remains healthy while the game server is stopped.
@@ -140,6 +140,8 @@ Paths containing spaces are fully supported; the Endstone toolchain relocates to
 | `CONSOLE_JOURNAL_BYTES` | `268435456` | Disk replay budget; minimum 4 MiB |
 | `COMMAND_QUEUE_CAPACITY` | `256` | Bounded stdin queue |
 | `WS_HEARTBEAT_INTERVAL` | `30` | Heartbeat and permission revalidation interval |
+| `DOCKER_ALLOW_HOST_MOUNTS` | `false` | Allow per-instance Docker bind mounts (owner-only even when enabled) |
+| `BACKUP_HOOKS_ENABLED` | `false` | Allow backup `command` hooks (arbitrary shell); send/wait/comment unaffected |
 | `DEBUG`, `RUST_LOG` | `false`, info | Tracing filter; HTTP query tokens are excluded |
 
 The startup log reports the resolved configuration: data mode (default / global-data-dir / portable), config source, every effective path, and the detected Endstone/BDS toolchain versions — facts read from the on-disk markers, not assumptions. Example:
@@ -211,14 +213,14 @@ Commands use `{"command":"list"}` on the console socket or `POST /api/v1/console
 
 ## API
 
-All protected REST routes use `Authorization: Bearer <JWT>`. WebSockets and direct ZIP downloads also accept `?token=`. `/health` and `GET /api/v1/openapi.json` are public — the latter is a machine-readable inventory of every endpoint family with its permission gate and request-body keys. Endpoints for a non-default instance are scoped with the `X-Instance: <id>` header (or `?instance=<id>` for browser downloads). Main endpoint families under `/api/v1`:
+All protected REST routes use `Authorization: Bearer <JWT>`. Browser flows that cannot set headers (downloads, images, WebSocket upgrades) instead carry a short-lived, purpose-bound token minted via `POST /auth/download-token` (15-minute TTL) — never the login bearer. `/health` and `GET /api/v1/openapi.json` are public — the latter is a machine-readable inventory of every endpoint family with its permission gate and request-body keys. Endpoints for a non-default instance are scoped with the `X-Instance: <id>` header (or `?instance=<id>` for browser downloads). Main endpoint families under `/api/v1`:
 
 | Family | Endpoints |
 | --- | --- |
 | auth | `POST /auth/login`, `GET /auth/me`, `GET/POST /auth/users`, `PUT/DELETE /auth/users/{username}` |
 | roles | `GET/POST /roles/`, `GET/PUT/DELETE /roles/{name}` |
 | server/console | `GET /server/status`, `POST /server/action`, `POST /console/command`, `GET /console/tail`, `WS /console/ws` |
-| server backend | `GET /server/backend`, `GET /server/backend/versions`, `POST /server/backend/install`, `POST /server/backend/switch` |
+| server backend | `GET /server/backend`, `GET /server/backend/versions`, `GET /server/backend/endstone/versions`, `POST /server/backend/endstone/install`, `POST /server/backend/install`, `POST /server/backend/switch` |
 | properties | `GET /properties/`, `GET/PUT /properties/raw`, `PUT /properties/{key}` |
 | players/worlds | `GET /players/`, `POST /players/action`, `GET /worlds/`, `GET /worlds/{world}`, `GET /worlds/{world}/contents` |
 | addons | `GET /addons/`, `GET/PUT /addons/manifest`, `GET/PUT /addons/order/{world}/{pack_type}`, `PUT /addons/rename`, `POST /addons/randomize-uuid`, `PUT /addons/change-uuid` |
@@ -228,6 +230,7 @@ All protected REST routes use `Authorization: Bearer <JWT>`. WebSockets and dire
 | files/settings/audit | `GET /files/`, `GET/PUT/DELETE /files/{filename}`, `GET /settings/`, `GET/PUT /settings/server`, `GET /audit/` |
 | performance/logs | `GET /performance/metrics`, `WS /performance/ws`, `WS /logs/ws` |
 | broadcaster | `GET /broadcaster/status`, `POST /broadcaster/action`, `POST /broadcaster/command`, `GET/PUT /broadcaster/config`, `GET/POST /broadcaster/accounts`, `GET /broadcaster/device-code`, `GET/PUT /broadcaster/screenshot`, `WS /broadcaster/ws` |
+| store | `GET /store/meta`, `GET /store/search`, `GET /store/project/{id}`, `GET /store/project/{id}/description`, `GET /store/project/{id}/files`, `POST /store/install`, `GET /store/image` |
 | instances | `GET/POST /instances`, `GET/PUT/DELETE /instances/{id}`, `POST /instances/{id}/action`, `GET /host` |
 
 `GET /console/tail?lines=200` returns the last N console lines as JSON (`{"instance","latest","events":[…]}`, same event shape as the socket) without holding a WebSocket open; add `&format=text` for one line per row, handy for `curl … | tail` health checks. The live feed stays on `WS /console/ws`.
@@ -275,7 +278,7 @@ cd frontend && npm run check && npm run build
 
 On a fresh clone, `cargo build` runs `npm ci && npm run build` in `frontend/` itself (and rebuilds the UI whenever `frontend/src` changes); if that build fails, the cargo build fails too rather than silently bundling a placeholder UI. Set `OMNI_SKIP_FRONTEND_BUILD=1` to skip npm and accept the placeholder explicitly. CI and the Dockerfile build the UI in their own steps, so they are unaffected.
 
-Integration tests use temporary stores, a fake Endstone executable, and loopback sockets. They do not touch your live server. A real Endstone/Bedrock installation and container startup should also be smoke-tested before switching production. The API's Windows build path uses Tokio child termination, but Unix process-group descendant cleanup is the tested behavior; Windows descendant cleanup is not covered. OpenAPI/Swagger generation from FastAPI is not retained.
+Integration tests use temporary stores, a fake Endstone executable, and loopback sockets. They do not touch your live server. A real Endstone/Bedrock installation and container startup should also be smoke-tested before switching production. The API's Windows build path uses Tokio child termination, but Unix process-group descendant cleanup is the tested behavior; Windows descendant cleanup is not covered.
 
 ```
 backend/

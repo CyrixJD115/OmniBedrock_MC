@@ -9,9 +9,23 @@ ansi.use_classes = false;
 const LEVEL_RE = /\[(ERROR|WARN(?:ING)?|INFO|DEBUG|LOCAL)\]/i;
 const ERROR_KEYWORDS = /(?:error|exception|traceback|fatal)/i;
 const TAG_RE = /(<[^>]*>)|([^<]+)/g;
+const ANCHOR_RE = /<a href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/g;
 
 export function parseAnsi(text: string): string {
   return ansi.ansi_to_html(text);
+}
+
+/**
+ * ansi_up converts ANSI OSC-8 hyperlink sequences into live anchors. Console
+ * text is attacker-influenced (player chat, addon install output), so only
+ * http(s) targets survive; anything else is unwrapped to inert text.
+ */
+export function sanitizeConsoleHtml(html: string): string {
+  return html.replace(ANCHOR_RE, (whole, href: string, text: string) => {
+    const target = href.trim().toLowerCase();
+    if (target.startsWith('http://') || target.startsWith('https://')) return whole;
+    return `<span>${text}</span>`;
+  });
 }
 
 export function detectLevel(text: string): 'error' | 'warn' | 'info' | 'debug' | 'local' {

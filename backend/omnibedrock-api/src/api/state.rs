@@ -218,8 +218,22 @@ impl AppState {
         category: &str,
         instance: &str,
     ) -> Result<()> {
+        self.audit_raw(&user.username, action, detail, category, instance, "")
+            .await
+    }
+    /// Audit entry with the client address, for request paths (login, the
+    /// generic mutation trail) that actually observed one.
+    pub async fn audit_raw(
+        &self,
+        username: &str,
+        action: &str,
+        detail: &str,
+        category: &str,
+        instance: &str,
+        ip: &str,
+    ) -> Result<()> {
         use tokio::io::AsyncWriteExt;
-        let entry = json!({"timestamp":chrono::Utc::now().to_rfc3339(),"username":user.username,"action":action,"detail":detail,"category":category,"instance":instance,"ip":""});
+        let entry = json!({"timestamp":chrono::Utc::now().to_rfc3339(),"username":username,"action":action,"detail":detail,"category":category,"instance":instance,"ip":ip});
         let mut entries = self.audit_entries.lock().await;
         let path = self.config.logs_dir.join("audit.jsonl");
         let mut text = serde_json::to_vec(&entry).map_err(anyhow::Error::from)?;

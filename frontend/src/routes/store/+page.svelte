@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api } from '$lib/api/client';
+  import { api, authsrc } from '$lib/api/client';
   import { addToast } from '$stores/toast';
   import { userPermissions } from '$stores/auth';
+  import { activeInstance } from '$stores/instances';
   import { formatBytes } from '$lib/utils';
   import { savedWorld, saveWorld } from '$lib/worldSync';
   import { theme, activeMode } from '$lib/theme';
@@ -289,6 +290,13 @@
     // at once instead of serially awaiting the world list first.
     loadMeta();
     load();
+  });
+
+  // The world list is instance-scoped (installs land in that instance's
+  // worlds); reload it on instance switch. Search results and metadata are
+  // CurseForge-global and stay as they are.
+  $effect(() => {
+    $activeInstance?.id;
     api.listWorlds()
       .then((list) => {
         worlds = list;
@@ -418,9 +426,11 @@
                 onclick={() => openDetail(p)}>
           <div class="flex gap-3">
             {#if thumbUrl(p) && !brokenThumbs.has(p.id)}
-              <img src={thumbUrl(p) ?? ''} alt="" loading="lazy" decoding="async"
-                   class="w-14 h-14 rounded-sm object-cover bg-deep-900 border border-deep-700/50 shrink-0"
-                   onerror={() => brokenThumbs = new Set([...brokenThumbs, p.id])} />
+              <!-- Thumbnails load via the authsrc action: header-authenticated
+                   fetch, blob object URL — no token in the image URL. -->
+              <img use:authsrc={{ url: thumbUrl(p), onerror: () => brokenThumbs = new Set([...brokenThumbs, p.id]) }}
+                   alt="" loading="lazy" decoding="async"
+                   class="w-14 h-14 rounded-sm object-cover bg-deep-900 border border-deep-700/50 shrink-0" />
             {:else}
               <div class="w-14 h-14 rounded-sm bg-deep-900 border border-deep-700/50 shrink-0 flex items-center justify-center">
                 <Package size={20} class="text-deep-400" />
@@ -476,9 +486,9 @@
       <!-- header -->
       <div class="flex items-start gap-3 border-b border-deep-700/50 pb-3 shrink-0">
         {#if thumbUrl(detail) && !brokenThumbs.has(detail.id)}
-          <img src={thumbUrl(detail) ?? ''} alt="" decoding="async"
-               class="w-16 h-16 rounded object-cover bg-deep-800 border border-deep-700/50 shrink-0"
-               onerror={() => brokenThumbs = new Set([...brokenThumbs, detail!.id])} />
+          <img use:authsrc={{ url: thumbUrl(detail), onerror: () => brokenThumbs = new Set([...brokenThumbs, detail!.id]) }}
+               alt="" decoding="async"
+               class="w-16 h-16 rounded object-cover bg-deep-800 border border-deep-700/50 shrink-0" />
         {:else}
           <div class="w-16 h-16 rounded bg-deep-800 border border-deep-700/50 flex items-center justify-center shrink-0">
             <Package size={24} class="text-deep-400" />

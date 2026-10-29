@@ -43,8 +43,44 @@ pub(crate) fn config(dir: &TempDir) -> Config {
         console_max_line_bytes: 1024,
         console_max_bytes: 256 * 1024,
         ws_heartbeat_interval: 1,
+        // The fixture suite deliberately exercises backup command hooks and
+        // Docker options, which ship disabled in production configs.
+        backup_hooks_enabled: true,
+        docker_allow_host_mounts: true,
         ..Config::default()
     }
+}
+
+/// `state()` with a mutated config, for tests that exercise the disabled
+/// defaults of a capability flag.
+pub(crate) async fn state_with_config(
+    mutate: impl FnOnce(&mut Config),
+) -> (TempDir, AppState, Router, String) {
+    let (dir, mut c) = setup().await;
+    mutate(&mut c);
+    let state = AppState::new(c, CancellationToken::new()).await.unwrap();
+    let app = router(state.clone()).unwrap();
+    state
+        .auth
+        .mutate_user(
+            &owner(),
+            "test-owner",
+            Some(json!({"password":"test-password","role":"owner"})),
+            true,
+        )
+        .await
+        .unwrap();
+    let (status, login) = call(
+        &app,
+        "POST",
+        "/api/v1/auth/login",
+        None,
+        json!({"username":"test-owner","password":"test-password"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let token = login["token"].as_str().unwrap().to_owned();
+    (dir, state, app, token)
 }
 pub(crate) async fn setup() -> (TempDir, Config) {
     use std::os::unix::fs::PermissionsExt;
@@ -212,6 +248,21 @@ pub(crate) async fn call_bytes(
         .unwrap();
     (status, bytes.to_vec())
 }
+/// Mint a short-lived download token for the browser-style flows that
+/// cannot set headers (WebSocket upgrades, images, downloads).
+pub(crate) async fn download_token(app: &Router, token: &str) -> String {
+    let (status, body) = call(
+        app,
+        "POST",
+        "/api/v1/auth/download-token",
+        Some(token),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    body["token"].as_str().unwrap().to_owned()
+}
+
 pub(crate) async fn login_owner(app: &Router, s: &AppState) -> String {
     s.auth
         .mutate_user(

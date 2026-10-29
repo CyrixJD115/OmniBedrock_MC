@@ -26,6 +26,8 @@ pub struct Auth {
     pub(super) default_credentials: Arc<std::sync::atomic::AtomicBool>,
     /// CurseForge API key saved from the Settings page; overrides the .env value.
     pub(super) curseforge_key: Arc<std::sync::RwLock<Option<String>>>,
+    /// Per-account+source login backoff (see `throttle`).
+    pub(super) throttle: Arc<super::throttle::LoginThrottle>,
 }
 
 async fn load_yaml<T: serde::de::DeserializeOwned + Default>(
@@ -150,6 +152,7 @@ impl Auth {
             login_enabled: Arc::new(std::sync::atomic::AtomicBool::new(login_enabled)),
             default_credentials: Arc::new(std::sync::atomic::AtomicBool::new(default_credentials)),
             curseforge_key: Arc::new(std::sync::RwLock::new(curseforge_key)),
+            throttle: Arc::new(super::throttle::LoginThrottle::default()),
         };
         {
             let store = auth.store.lock().await;

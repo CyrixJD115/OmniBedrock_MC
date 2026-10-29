@@ -178,3 +178,77 @@ pub fn world_tree(root: &Path) -> anyhow::Result<Value> {
     }
     tree(root, &mut 100_000, 0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn component_accepts_plain_names_only() {
+        assert!(component("world").is_ok());
+        assert!(component("a.b-c_d").is_ok());
+        for bad in ["", ".", "..", "a/b", "a\\b", "a\0b", "/abs", "C:\\x"] {
+            assert!(component(bad).is_err(), "{bad:?} must be rejected");
+        }
+    }
+
+    #[tokio::test]
+    async fn safe_path_rejects_traversal_and_absolute() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        // Absolute paths and lexical escapes never resolve. A leading `./`
+        // survives as a CurDir component and is rejected; interior `.` is
+        // normalized away by std and resolves harmlessly inside the root.
+        assert!(safe_path(&root, Path::new("/etc/passwd")).await.is_err());
+        assert!(safe_path(&root, Path::new("..")).await.is_err());
+        assert!(
+            safe_path(&root, Path::new("world/../../etc"))
+                .await
+                .is_err()
+        );
+        assert!(safe_path(&root, Path::new("./x")).await.is_err());
+        assert!(safe_path(&root, Path::new("a/./b")).await.is_ok());
+        // Dots inside a name are an ordinary component, not traversal.
+        assert!(safe_path(&root, Path::new("a..b")).await.is_ok());
+        // A missing file under an existing root resolves inside the root.
+        let resolved = safe_path(&root, Path::new("worlds/demo/level.dat"))
+            .await
+            .unwrap();
+        assert!(resolved.starts_with(&root));
+        // An empty relative path IS the root (callers gate names via
+        // `component`); pin the behavior so it cannot change silently.
+        assert_eq!(safe_path(&root, Path::new("")).await.unwrap(), root);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn safe_path_rejects_symlinks_at_every_level() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        tokio::fs::create_dir_all(root.join("worlds/real"))
+            .await
+            .unwrap();
+        let outside = dir.path().join("outside");
+        tokio::fs::create_dir_all(&outside).await.unwrap();
+        // A symlinked directory mid-path must not become a bridge out of the
+        // root, and a symlinked final component must not be followed.
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, root.join("worlds/link")).unwrap();
+        assert!(
+            safe_path(&root, Path::new("worlds/link/file"))
+                .await
+                .is_err()
+        );
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, root.join("worlds/real/jump")).unwrap();
+        assert!(
+            safe_path(&root, Path::new("worlds/real/jump"))
+                .await
+                .is_err()
+        );
+        // The real directory below the same path stays reachable.
+        assert!(safe_path(&root, Path::new("worlds/real")).await.is_ok());
+    }
+}

@@ -2,7 +2,7 @@
 //! failed hook commands still resuming saves; traversal-safe world restore;
 //! scheduled retention; live save-readiness confirmation; and overlap
 //! rejection under request cancellation.
-use crate::harness::{call, state, wait_line};
+use crate::harness::{call, state, state_with_config, wait_line};
 use axum::http::StatusCode;
 use omnibedrock_server::backups::BackupRequest;
 use omnibedrock_server::server::ServerSettings;
@@ -237,6 +237,33 @@ async fn backup_survives_request_cancellation_and_rejects_overlap() {
             .len(),
         1
     );
+    s.shutdown.cancel();
+    s.server.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn command_hooks_require_the_operator_opt_in() {
+    // Production default: `command` hooks (arbitrary shell as the panel user)
+    // are disabled; send/wait/comment hooks keep working.
+    let (_dir, s, _app, _token) = state_with_config(|c| c.backup_hooks_enabled = false).await;
+    s.backups
+        .update_settings(json!({"pre_post":{"before":[{"type":"send","value":"save hold"},{"type":"command","value":"touch /tmp/should-not-run"}],"after":[{"type":"send","value":"save resume"}]}}))
+        .await
+        .unwrap();
+    s.server.action("start").await.unwrap();
+    let result = s
+        .backups
+        .run(BackupRequest {
+            world: "Fixture".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(result["success"], false);
+    let message = result["message"].as_str().unwrap_or_default();
+    assert!(message.contains("BACKUP_HOOKS_ENABLED"), "{result}");
+    // The save was still resumed: a refused hook never strands the server.
+    wait_line(&s.server, "command=save resume").await;
     s.shutdown.cancel();
     s.server.shutdown().await.unwrap();
 }

@@ -25,10 +25,42 @@ struct Claims {
     exp: u64,
 }
 
+/// Short-lived, purpose-bound token for browser flows that cannot set
+/// headers (file downloads, images, WebSocket upgrades). The required
+/// `purpose` claim and the missing `role` field make these tokens and login
+/// bearer JWTs mutually unacceptable to each other's verifiers.
+const DOWNLOAD_TOKEN_TTL: u64 = 900;
+
+#[derive(Serialize, Deserialize)]
+struct DownloadClaims {
+    sub: String,
+    ver: u64,
+    purpose: String,
+    iat: u64,
+    exp: u64,
+}
+
 impl Auth {
-    pub async fn authenticate(&self, username: String, password: String) -> Result<Value> {
+    pub async fn authenticate(
+        &self,
+        username: String,
+        password: String,
+        ip: &str,
+    ) -> Result<Value> {
         if password.len() > 1024 || username.len() > 128 {
             return Err(ApiError::bad("Credentials too long"));
+        }
+        // Exponential backoff per username+source after repeated failures;
+        // keyed together so one attacker cannot lock out another source.
+        let throttle_key = format!("{username}\0{ip}");
+        if let Err(wait) = self.throttle.check(&throttle_key) {
+            return Err(ApiError::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                format!(
+                    "Too many failed attempts; try again in {}s",
+                    wait.as_secs().max(1)
+                ),
+            ));
         }
         let permit =
             self.work.clone().try_acquire_owned().map_err(|_| {
@@ -52,9 +84,16 @@ impl Auth {
         })
         .await
         .map_err(anyhow::Error::from)?;
-        let mut user = user.filter(|_| valid).ok_or_else(|| {
-            ApiError::new(StatusCode::UNAUTHORIZED, "Invalid username or password")
-        })?;
+        let mut user = match user.filter(|_| valid) {
+            Some(user) => user,
+            None => {
+                self.throttle.record_failure(&throttle_key);
+                return Err(ApiError::new(
+                    StatusCode::UNAUTHORIZED,
+                    "Invalid username or password",
+                ));
+            }
+        };
         let mut store = self.store.lock().await;
         let current = store
             .users
@@ -68,6 +107,7 @@ impl Auth {
             user.password_hash = hash?;
         }
         user.last_login = timestamp();
+        self.throttle.clear(&throttle_key);
         let mut next = store.clone();
         next.users.insert(username, user.clone());
         self.save_users(&next).await?;
@@ -107,6 +147,75 @@ impl Auth {
             .cloned()
             .ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "User not found"))
     }
+    /// Mint a short-lived download token for browser flows that cannot set
+    /// headers. Fifteen minutes, one purpose, revocable via token_version.
+    pub async fn issue_download_token(&self, user: &User) -> Result<Value> {
+        let now = chrono::Utc::now().timestamp() as u64;
+        let claims = DownloadClaims {
+            sub: user.username.clone(),
+            ver: user.token_version,
+            purpose: "download".into(),
+            iat: now,
+            exp: now + DOWNLOAD_TOKEN_TTL,
+        };
+        let key = Sha256::digest(self.key.expose_secret().as_bytes());
+        let token = jsonwebtoken::encode(
+            &Header::new(Algorithm::HS256),
+            &claims,
+            &EncodingKey::from_secret(&key),
+        )
+        .map_err(anyhow::Error::from)?;
+        Ok(json!({"token": token, "expires_in": DOWNLOAD_TOKEN_TTL}))
+    }
+
+    /// Verify a download token and resolve its user. Login-disabled mode
+    /// serves the owner without any token, matching `resolve_user`.
+    pub async fn resolve_download_user(&self, token: &str) -> Result<User> {
+        if !self.login_enabled() {
+            return self.resolve_user(None).await;
+        }
+        let token = token.trim();
+        if token.is_empty() {
+            return Err(ApiError::new(StatusCode::UNAUTHORIZED, "Not authenticated"));
+        }
+        let key = Sha256::digest(self.key.expose_secret().as_bytes());
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.leeway = 0;
+        let claims = jsonwebtoken::decode::<DownloadClaims>(
+            token,
+            &DecodingKey::from_secret(&key),
+            &validation,
+        )
+        .map_err(|_| ApiError::new(StatusCode::UNAUTHORIZED, "Invalid or expired token"))?
+        .claims;
+        if claims.purpose != "download" {
+            return Err(ApiError::new(
+                StatusCode::UNAUTHORIZED,
+                "Invalid or expired token",
+            ));
+        }
+        self.store
+            .lock()
+            .await
+            .users
+            .get(&claims.sub)
+            .filter(|u| u.token_version == claims.ver)
+            .cloned()
+            .ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "User not found"))
+    }
+
+    /// Re-resolve a user by name so long-lived sockets pick up role changes
+    /// and revocations without re-verifying their short-lived attach token.
+    pub async fn refresh_user(&self, user: &User) -> Result<User> {
+        self.store
+            .lock()
+            .await
+            .users
+            .get(&user.username)
+            .cloned()
+            .ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "User not found"))
+    }
+
     /// Resolve the acting user. With login disabled every request is served as
     /// the owner account, token or not; with it enabled a valid token is required.
     pub async fn resolve_user(&self, token: Option<&str>) -> Result<User> {

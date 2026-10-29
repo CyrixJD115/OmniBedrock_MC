@@ -158,6 +158,16 @@ impl Config {
         setting!("CONSOLE_MAX_LINE_BYTES", console_max_line_bytes);
         setting!("CONSOLE_JOURNAL_BYTES", console_journal_bytes);
         setting!("COMMAND_QUEUE_CAPACITY", command_queue_capacity);
+        fn env_flag(name: &str) -> anyhow::Result<bool> {
+            match std::env::var(name).map(|v| v.trim().to_ascii_lowercase()) {
+                Ok(v) if matches!(v.as_str(), "1" | "true" | "yes" | "on") => Ok(true),
+                Ok(v) if matches!(v.as_str(), "0" | "false" | "no" | "off" | "") => Ok(false),
+                Ok(v) => anyhow::bail!("{name} must be a boolean (got '{v}')"),
+                Err(_) => Ok(false),
+            }
+        }
+        c.docker_allow_host_mounts = env_flag("DOCKER_ALLOW_HOST_MOUNTS")?;
+        c.backup_hooks_enabled = env_flag("BACKUP_HOOKS_ENABLED")?;
         if let Ok(v) = std::env::var("CORS_ORIGINS") {
             c.cors_origins = if v.starts_with('[') {
                 serde_json::from_str(&v)?

@@ -412,6 +412,15 @@ impl Backups {
         phase: &str,
         timeout_secs: u64,
     ) -> anyhow::Result<(i32, String)> {
+        // `command` hooks run arbitrary shell as the panel user, so they sit
+        // behind an explicit operator opt-in; send/wait/comment hooks are
+        // unaffected. This gates both scheduled runs and the test endpoint,
+        // because both funnel through here.
+        anyhow::ensure!(
+            self.config.backup_hooks_enabled,
+            "Backup command hooks are disabled on this host (BACKUP_HOOKS_ENABLED=false); \
+             send/wait/comment hooks keep working"
+        );
         let mut cmd = if cfg!(windows) {
             let mut c = Command::new("cmd");
             c.args(["/C", command]);

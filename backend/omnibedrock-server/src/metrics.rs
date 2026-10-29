@@ -210,8 +210,13 @@ impl Metrics {
                         all_tx.send_replace(data);
                     }
                     Err(e) => {
-                        tracing::error!(%e, "metrics task failed");
-                        break;
+                        // One failed sample (docker CLI hiccup, sysinfo
+                        // transient) must not end metrics collection for the
+                        // rest of the process lifetime. The sampler closure
+                        // owns `system`, so a join failure loses it — rebuild
+                        // a fresh one and keep going.
+                        tracing::error!(%e, "metrics sample failed; continuing");
+                        system = System::new_with_specifics(RefreshKind::nothing());
                     }
                 }
             }

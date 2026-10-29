@@ -22,7 +22,7 @@ async fn legacy_password_and_jwt_migrate() {
     .unwrap();
     let auth = Auth::new(Arc::new(c.clone())).await.unwrap();
     let login = auth
-        .authenticate("legacy".into(), "legacy-password".into())
+        .authenticate("legacy".into(), "legacy-password".into(), "")
         .await
         .unwrap();
     assert_eq!(
@@ -51,12 +51,12 @@ async fn legacy_password_and_jwt_migrate() {
     .unwrap();
     assert!(auth.verify(&token).await.is_ok());
     assert!(
-        auth.authenticate("legacy".into(), "incorrect".into())
+        auth.authenticate("legacy".into(), "incorrect".into(), "")
             .await
             .is_err()
     );
     assert!(
-        auth.authenticate("unknown".into(), "incorrect".into())
+        auth.authenticate("unknown".into(), "incorrect".into(), "")
             .await
             .is_err()
     );
@@ -76,7 +76,7 @@ async fn password_change_and_recreated_user_revoke_old_tokens() {
         .unwrap();
     let login = s
         .auth
-        .authenticate("account".into(), "old-password".into())
+        .authenticate("account".into(), "old-password".into(), "")
         .await
         .unwrap();
     let token = login["token"].as_str().unwrap();
@@ -92,7 +92,7 @@ async fn password_change_and_recreated_user_revoke_old_tokens() {
     assert!(s.auth.verify(token).await.is_err());
     let login = s
         .auth
-        .authenticate("account".into(), "new-password".into())
+        .authenticate("account".into(), "new-password".into(), "")
         .await
         .unwrap();
     let token = login["token"].as_str().unwrap();
@@ -122,7 +122,8 @@ async fn default_credentials_and_login_toggle() {
     let (status, panel) = call(&app, "GET", "/api/v1/settings/panel", None, json!({})).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(panel["login_enabled"], true);
-    assert_eq!(panel["default_credentials"], true);
+    // The public endpoint must not advertise that the default pair works.
+    assert!(panel.get("default_credentials").is_none());
 
     let (status, login) = call(
         &app,
@@ -136,13 +137,23 @@ async fn default_credentials_and_login_toggle() {
     let token = login["token"].as_str().unwrap().to_owned();
     assert_eq!(login["user"]["username"], "Admin");
     assert_eq!(login["user"]["role"], "owner");
+    assert_eq!(login["user"]["default_credentials"], true);
 
     // With login enabled, no token means no access.
     let (status, _) = call(&app, "GET", "/api/v1/server/status", None, json!({})).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 
-    // Disable login; the same token-less request now serves as the owner.
+    // Disabling login is owner-only AND needs the typed confirmation.
     let (status, body) = call(
+        &app,
+        "PUT",
+        "/api/v1/settings/panel",
+        Some(&token),
+        json!({"login_enabled": false, "confirm": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _) = call(
         &app,
         "PUT",
         "/api/v1/settings/panel",
@@ -150,7 +161,7 @@ async fn default_credentials_and_login_toggle() {
         json!({"login_enabled": false}),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     let (status, me) = call(&app, "GET", "/api/v1/auth/me", None, json!({})).await;
     assert_eq!(status, StatusCode::OK, "{me}");
     assert_eq!(me["role"], "owner");
@@ -184,8 +195,6 @@ async fn default_credentials_and_login_toggle() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let (_, panel) = call(&app, "GET", "/api/v1/settings/panel", None, json!({})).await;
-    assert_eq!(panel["default_credentials"], false);
     let (status, _) = call(
         &app,
         "POST",
@@ -207,6 +216,7 @@ async fn default_credentials_and_login_toggle() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let token = relogin["token"].as_str().unwrap().to_owned();
+    assert_eq!(relogin["user"]["default_credentials"], false);
 
     // The toggle persists to panel_settings.yaml for the next start.
     let (status, _) = call(
@@ -214,7 +224,7 @@ async fn default_credentials_and_login_toggle() {
         "PUT",
         "/api/v1/settings/panel",
         Some(&token),
-        json!({"login_enabled": false}),
+        json!({"login_enabled": false, "confirm": true}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -223,4 +233,41 @@ async fn default_credentials_and_login_toggle() {
         .unwrap();
     assert!(persisted.contains("login_enabled: false"), "{persisted}");
     let _ = s;
+}
+
+#[tokio::test]
+async fn repeated_failures_throttle_login() {
+    let (_dir, _s, app, _token) = state().await;
+    for _ in 0..5 {
+        let (status, _) = call(
+            &app,
+            "POST",
+            "/api/v1/auth/login",
+            None,
+            json!({"username":"Admin","password":"wrong"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+    // The sixth attempt inside the backoff window is rate limited, not just
+    // rejected.
+    let (status, body) = call(
+        &app,
+        "POST",
+        "/api/v1/auth/login",
+        None,
+        json!({"username":"Admin","password":"wrong"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    // A successful login for another account is unaffected (per-key throttle).
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/api/v1/auth/login",
+        None,
+        json!({"username":"Nobody","password":"whatever"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }

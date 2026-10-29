@@ -31,6 +31,13 @@ pub(super) async fn dispatch(
             "Panel is shutting down",
         ));
     }
+    // The client address feeds login throttling and the audit trail; absent
+    // in the in-process test harness (no connection info in `oneshot`).
+    let ip = request
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|c| c.0.ip().to_string())
+        .unwrap_or_default();
     let method = request.method().clone();
     let path = path.trim_matches('/');
     let segments = path.split('/').collect::<Vec<_>>();
@@ -54,10 +61,11 @@ pub(super) async fn dispatch(
     // uploads never sit whole in memory.
     if path == "addons/upload" && method == Method::POST {
         let user = state.auth.resolve_user(header_token.as_deref()).await?;
-        state.auth.require(&user, "ADDONS_MANAGE").await?;
         let svc = state
             .resolve_instance(instance_id.as_deref(), &user)
             .await?;
+        // Instance-scoped like every other addons route (see api/addons.rs).
+        state.require_for(&user, "ADDONS_MANAGE", &svc).await?;
         return upload_addons(state, svc, user, query, request.into_body()).await;
     }
     let bytes = to_bytes(request.into_body(), 2 * 1024 * 1024)
@@ -86,12 +94,13 @@ pub(super) async fn dispatch(
         }
         atomic_write(&destination, &bytes).await?;
         state
-            .audit_instance(
-                &user,
+            .audit_raw(
+                &user.username,
                 "broadcaster.screenshot_update",
                 account,
                 "broadcaster",
                 &svc.record().id,
+                &ip,
             )
             .await
             .ok();
@@ -105,15 +114,41 @@ pub(super) async fn dispatch(
         serde_json::from_slice(&bytes).map_err(|e| ApiError::bad(format!("Invalid JSON: {e}")))?
     };
     if path == "auth/login" && method == Method::POST {
-        return Ok(data_response(
-            state
-                .auth
-                .authenticate(
-                    value_string(&body, "username")?.into(),
-                    value_string(&body, "password")?.into(),
-                )
-                .await?,
-        ));
+        let username = value_string(&body, "username")?;
+        let password = value_string(&body, "password")?;
+        let result = state
+            .auth
+            .authenticate(username.to_owned(), password.to_owned(), &ip)
+            .await;
+        // Login attempts are audited with the source address: success marks
+        // the session, failures are the forensic trail for brute force.
+        match &result {
+            Ok(payload) => {
+                let _ = state
+                    .audit_raw(
+                        payload["user"]["username"].as_str().unwrap_or(username),
+                        "auth.login",
+                        "login succeeded",
+                        "auth",
+                        "",
+                        &ip,
+                    )
+                    .await;
+            }
+            Err(_) => {
+                let _ = state
+                    .audit_raw(
+                        username,
+                        "auth.login_failed",
+                        "login failed",
+                        "auth",
+                        "",
+                        &ip,
+                    )
+                    .await;
+            }
+        }
+        return Ok(data_response(result?));
     }
     // Public, unauthenticated: the login screen needs this before it can render.
     if path == "settings/panel" && method == Method::GET {
@@ -124,14 +159,16 @@ pub(super) async fn dispatch(
             || path == "broadcaster/screenshot"
             || path == "addons/icon"
             || path == "store/image");
-    let token = header_token.or_else(|| {
-        if query_allowed {
-            query.get("token").cloned()
-        } else {
-            None
-        }
-    });
-    let user = state.auth.resolve_user(token.as_deref()).await?;
+    // Browser-driven GETs (downloads, images) and WebSocket upgrades cannot
+    // set headers; they carry a short-lived, purpose-bound download token
+    // instead of the long-lived login bearer, so a URL that leaks into a
+    // browser cache or an intermediary's access log is worthless within
+    // minutes.
+    let user = if query_allowed && let Some(dt) = query.get("dt").filter(|t| !t.trim().is_empty()) {
+        state.auth.resolve_download_user(dt).await?
+    } else {
+        state.auth.resolve_user(header_token.as_deref()).await?
+    };
     let svc = state
         .resolve_instance(instance_id.as_deref(), &user)
         .await?;
@@ -141,12 +178,13 @@ pub(super) async fn dispatch(
     if method != Method::GET && result.status().is_success() {
         let (action, detail, category) = audit_action(&segments, &method, &body);
         if let Err(e) = state
-            .audit_instance(
-                &user,
+            .audit_raw(
+                &user.username,
                 &action,
                 &detail,
                 category,
                 instance_id.as_deref().unwrap_or_default(),
+                &ip,
             )
             .await
         {

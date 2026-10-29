@@ -14,5 +14,5 @@ else
 fi
 mkdir -p dist/omnibedrock
 cp target/release/omnibedrock README.md LICENSE .env.example dist/omnibedrock/
-cp deploy/config.example.yaml deploy/omnibedrock.service dist/omnibedrock/
+cp deploy/config.example.toml deploy/omnibedrock.service dist/omnibedrock/
 tar -czf dist/omnibedrock-linux.tar.gz -C dist omnibedrock

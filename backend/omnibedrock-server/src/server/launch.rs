@@ -76,10 +76,10 @@ pub(super) async fn launch(
     // publish both through the host port mappings.
     match ctx.deployment {
         Deployment::Docker if !cfg!(target_os = "linux") => {
-            crate::instances::enforce_instance_port(config, 19132).await;
+            crate::instances::enforce_instance_port(config, 19132, settings.backend).await;
         }
         _ => {
-            crate::instances::enforce_instance_port(config, ctx.port).await;
+            crate::instances::enforce_instance_port(config, ctx.port, settings.backend).await;
         }
     }
     // Backend-aware NetherNet/port guidance replaces the old blanket

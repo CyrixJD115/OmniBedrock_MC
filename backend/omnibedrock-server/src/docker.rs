@@ -135,21 +135,25 @@ pub fn logs_argv(container: &str, tail: u64) -> Vec<std::ffi::OsString> {
 /// EOF between commands.
 pub const CONTAINER_STDIN_FIFO: &str = "/data/stdin.fifo";
 
+/// POSIX-quote one word for `sh -c`: wrap in `'…'` and escape embedded
+/// quotes the shell-approved way (`'\''`). Quoting every element means a
+/// path with spaces or metacharacters survives verbatim instead of reshaping
+/// the command — there is no guard to forget in release builds.
+fn sh_quote(word: &str) -> String {
+    format!("'{}'", word.replace('\'', r"'\''"))
+}
+
 /// The command override appended after the image: wraps the runtime command
 /// in `sh -c 'exec … <> <fifo>'` so PID 1 IS the server (signals reach it)
 /// and its stdin is the command FIFO.
 pub fn command_override(server_argv: &[std::ffi::OsString]) -> Vec<std::ffi::OsString> {
     let mut inner = String::from("exec");
     for arg in server_argv {
-        let arg = arg.to_string_lossy();
-        // The composed command only ever contains panel-known paths (no
-        // user text), so simple shell metacharacters are guarded, not parsed.
-        debug_assert!(!arg.contains(['"', '\'', '$', '`', '\\']));
         inner.push(' ');
-        inner.push_str(&arg);
+        inner.push_str(&sh_quote(&arg.to_string_lossy()));
     }
     inner.push_str(" <> ");
-    inner.push_str(CONTAINER_STDIN_FIFO);
+    inner.push_str(&sh_quote(CONTAINER_STDIN_FIFO));
     vec!["sh".into(), "-c".into(), inner.into()]
 }
 
@@ -282,6 +286,41 @@ pub async fn ensure_image(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn sh_quote_survives_the_shell_verbatim() {
+        // Round-trip through a real sh: quoted words must come back byte for
+        // byte, whatever metacharacters they carry.
+        let words = [
+            "plain",
+            "with space",
+            "it's",
+            "$HOME",
+            "`id`",
+            "a\"b",
+            "back\\slash",
+            "*",
+            "$(reboot)",
+        ];
+        let composed = format!(
+            "printf '%s\\n' {}",
+            words
+                .iter()
+                .map(|w| sh_quote(w))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&composed)
+            .output()
+            .expect("sh available");
+        assert!(output.status.success(), "{composed}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let echoed: Vec<&str> = stdout.lines().collect();
+        assert_eq!(echoed, words, "composed: {composed}");
+    }
+
     use super::*;
 
     #[test]
@@ -304,7 +343,7 @@ mod tests {
             .collect();
         assert_eq!(
             argv,
-            ["sh", "-c", "exec ./bedrock_server <> /data/stdin.fifo"]
+            ["sh", "-c", "exec './bedrock_server' <> '/data/stdin.fifo'"]
         );
         let fifo = host_stdin_fifo(std::path::Path::new("/srv/instances/x/server"));
         assert_eq!(

@@ -40,6 +40,14 @@ pub struct Config {
     pub docker_image_endstone: String,
     /// Docker image for the broadcaster sidecar container.
     pub docker_image_broadcaster: String,
+    /// Master switch for user-supplied Docker bind mounts (`extra_mounts`).
+    /// Off by default: a bind mount is arbitrary host filesystem access, so
+    /// only opt-in deployments (and, separately, panel owners) may use them.
+    pub docker_allow_host_mounts: bool,
+    /// Master switch for backup pre/post `command` hooks, which run arbitrary
+    /// shell as the panel user. Off by default; `send`/`wait`/`comment` hooks
+    /// keep working without it.
+    pub backup_hooks_enabled: bool,
     /// Headroom reserved for the OS/panel when judging overcommit (MiB).
     pub host_reserve_mb: u64,
     pub ws_heartbeat_interval: u64,
@@ -95,6 +103,8 @@ impl Config {
             docker_image_vanilla: "omnibedrock-vanilla:latest".into(),
             docker_image_endstone: "omnibedrock-endstone:latest".into(),
             docker_image_broadcaster: "omnibedrock-broadcaster:latest".into(),
+            docker_allow_host_mounts: false,
+            backup_hooks_enabled: false,
             host_reserve_mb: 1024,
             ws_heartbeat_interval: 30,
             console_max_lines: 2000,

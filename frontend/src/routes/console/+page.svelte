@@ -6,7 +6,7 @@
   import { userPermissions } from '$stores/auth';
   import { activeInstance } from '$stores/instances';
   import { Send, Trash2, Filter, AlertTriangle, ArrowUp, ArrowDown, Binary, Download, Play, Square, RotateCw } from '@lucide/svelte';
-  import { parseAnsi, highlightMatches, matchesQuery, nearBottom, stickToBottom } from '$lib/console';
+  import { parseAnsi, sanitizeConsoleHtml, highlightMatches, matchesQuery, nearBottom, stickToBottom } from '$lib/console';
   import type { FeedLine } from '$lib/console';
   import type { ErrorStat } from '$types/index';
 
@@ -207,10 +207,24 @@
     }
   }
 
+  // Rendered HTML is memoized per (line text, filter, regex mode): typing in
+  // the filter re-derives the list on every keystroke, and without the cache
+  // that rebuilt up to 2000 ANSI parses + {@html} strings each time. The key
+  // embeds the filter, so stale entries are never reused — the map is just
+  // bounded memory, cleared wholesale when full.
+  const renderCache = new Map<string, string>();
   function renderLine(text: string): string {
-    let html = parseAnsi(text);
-    if (filterText) {
-      html = highlightMatches(html, filterText, useRegex);
+    const key = `${useRegex ? 'R' : 'S'}\u0000${filterText}\u0000${text}`;
+    let html = renderCache.get(key);
+    if (html === undefined) {
+      // Sanitize AFTER the ANSI parse: ansi_up emits real <a href> for
+      // OSC-8 sequences, and console text is attacker-influenced.
+      html = sanitizeConsoleHtml(parseAnsi(text));
+      if (filterText) {
+        html = highlightMatches(html, filterText, useRegex);
+      }
+      if (renderCache.size >= 4000) renderCache.clear();
+      renderCache.set(key, html);
     }
     return html;
   }

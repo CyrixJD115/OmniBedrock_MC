@@ -74,12 +74,18 @@ impl Auth {
         )
         .await
     }
-    /// Public login-page info: whether the login form is used, and whether the
-    /// seeded default password is still in place.
+    /// True while the seeded default password is still in place. Used to pin
+    /// the listener to loopback until first-run setup is complete and to warn
+    /// inside the panel; deliberately NOT part of the public login-page
+    /// payload, where it would advertise the working default pair.
+    pub fn default_credentials_active(&self) -> bool {
+        self.default_credentials
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+    /// Public login-page info: whether the login form is used at all.
     pub fn panel_info(&self) -> Value {
         json!({
             "login_enabled": self.login_enabled(),
-            "default_credentials": self.default_credentials.load(std::sync::atomic::Ordering::Relaxed),
         })
     }
 }
