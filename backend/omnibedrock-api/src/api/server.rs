@@ -141,8 +141,9 @@ pub(super) async fn ensure_vanilla_installed(svc: &Arc<Instance>) -> Result<()> 
         Ok(Ok(message)) => {
             // The installer may have written its own default properties;
             // re-pin the instance's registered port (both stacks) plus the
-            // vanilla transport defaults (raknet — the file now belongs to
-            // a vanilla BDS install).
+            // transport defaults (nethernet — BDS 1.26.60+ clients removed
+            // RakNet, so a fresh install must be joinable by current
+            // clients).
             omnibedrock_server::instances::enforce_instance_port(
                 &svc.config,
                 svc.record().port,

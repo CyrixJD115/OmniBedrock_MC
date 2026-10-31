@@ -126,9 +126,12 @@ async fn properties_writes_are_instance_scoped() {
     let id = created["id"].as_str().unwrap().to_owned();
 
     // The scoped read sees the instance's seeded file, not the global one.
+    // Fresh instances seed NetherNet on both backends (clients 1.26.60+
+    // removed RakNet).
     let (_, text) =
         call_text_instance(&app, "GET", "/api/v1/properties/raw", &token, Some(&id)).await;
-    assert!(text.contains("transport=raknet"), "{text}");
+    assert!(text.contains("transport=nethernet"), "{text}");
+    assert!(text.contains("server-udp-ports="), "{text}");
     assert!(!text.contains("motd=global-file"), "{text}");
 
     // A key the seeded file lacks is appended into the instance file.

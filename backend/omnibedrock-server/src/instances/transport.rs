@@ -192,14 +192,16 @@ pub async fn advise_transport(
                     format!(
                         "{base} server-udp-ports is MISSING, and without it remote Bedrock \
                          joins fail even with the port forwarded — add \
-                         server-udp-ports=<your-public-ip>:{port}:{port} in the Properties \
-                         editor"
+                         server-udp-ports=<an-ip-your-players-can-reach>:{port}:{port} in \
+                         the Properties editor (your public IP, or the tailnet IP when \
+                         friends join over Tailscale)"
                     )
                 } else if !ip_mapped {
                     format!(
-                        "{base} server-udp-ports={udp_ports} has no public IP prefix; \
-                         off-LAN joins need one — \
-                         server-udp-ports=<your-public-ip>:{port}:{port}"
+                        "{base} server-udp-ports={udp_ports} has no IP prefix, so off-LAN \
+                         clients get an address they cannot reach — \
+                         server-udp-ports=<an-ip-your-players-can-reach>:{port}:{port} \
+                         (public IP, or tailnet IP for Tailscale joins)"
                     )
                 } else {
                     base
@@ -297,7 +299,7 @@ mod tests {
             tail[3].line
         );
         // A mapping without an ip prefix works on the LAN but not from
-        // outside: the advisor asks for the public-ip form.
+        // outside: the advisor asks for the reachable-ip form.
         std::fs::write(
             config.bedrock_server_dir.join("server.properties"),
             "transport=nethernet\nserver-port=24474\nserver-udp-ports=24474:24474\n",
@@ -307,7 +309,8 @@ mod tests {
         let tail = console.tail(10);
         assert_eq!(tail.len(), 5, "{:?}", tail);
         assert!(
-            tail[4].line.contains("no public IP prefix"),
+            tail[4].line.contains("no IP prefix")
+                && tail[4].line.contains("your-players-can-reach"),
             "{}",
             tail[4].line
         );
@@ -321,7 +324,7 @@ mod tests {
         let tail = console.tail(10);
         assert_eq!(tail.len(), 6, "{:?}", tail);
         assert!(
-            !tail[5].line.contains("public IP") && tail[5].line.contains("single-port"),
+            !tail[5].line.contains("IP prefix") && tail[5].line.contains("single-port"),
             "{}",
             tail[5].line
         );

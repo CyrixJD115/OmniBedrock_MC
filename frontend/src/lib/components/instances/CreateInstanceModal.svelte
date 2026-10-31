@@ -26,7 +26,7 @@
     <div class="space-y-3">
       <div>
         <label class="text-[10px] uppercase tracking-wider text-deep-400">Name</label>
-        <input bind:value={form.name} placeholder="Dad's Survival Server" class="input w-full text-xs mt-1" />
+        <input bind:value={form.name} placeholder="My Bedrock Server" class="input w-full text-xs mt-1" />
       </div>
       <div class="grid grid-cols-2 gap-3">
         <div>
