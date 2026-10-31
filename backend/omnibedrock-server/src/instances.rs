@@ -35,8 +35,8 @@ pub use consts::DEFAULT_INSTANCE;
 pub use helpers::{container_name, overcommit_status, slug, valid_id};
 pub use instance::Instance;
 pub use manager::InstanceManager;
-pub(crate) use ports::port_bindable;
 pub use ports::{default_properties_text, enforce_instance_port, enforce_port_in_text};
+pub(crate) use ports::{port_bindable, tcp_port_bindable};
 pub use transport::{
     NETHERNET_MULTIPLEXER_VERSION, advise_transport, endstone_has_multiplexer,
     validate_udp_ports_value,

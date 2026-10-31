@@ -81,10 +81,12 @@ pub(super) async fn read_pipe_advised<R: AsyncRead + Unpin>(
                 let hint = match advice.backend {
                     Backend::Endstone => format!(
                         "Boot blocked: TCP port {port} is held by another process — the \
-                         Endstone launcher claims server-port BEFORE the server starts, then \
-                         exits with code 1. Free the port (the usual holder is this \
-                         instance's broadcaster, which must be started AFTER the server) or \
-                         change server-port in Properties, then start again."
+                         Endstone launcher claims server-port (TCP) BEFORE the server \
+                         starts, then exits. The usual holder is the previous server \
+                         process still releasing the port: give it a few seconds and \
+                         start again (on Linux, `ss -tlnp sport = :{port}` names whoever \
+                         holds it). If the broadcaster or another instance was started \
+                         first, stop it and start the server first."
                     ),
                     Backend::Vanilla => format!(
                         "Boot blocked: TCP port {port} is held by another process. Free it or \

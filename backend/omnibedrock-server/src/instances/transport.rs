@@ -228,9 +228,9 @@ pub async fn advise_transport(
              will fall back to its default and clients may not reach it"
         )
     };
-    console
-        .publish(format!("NOTE: {message}"), "panel", false)
-        .await;
+    // The NOTE reprints on every boot attempt; identical consecutive notes
+    // are skipped so a restart or retry loop does not spam the same advice.
+    console.publish_note(format!("NOTE: {message}")).await;
 }
 
 #[cfg(test)]
@@ -352,6 +352,19 @@ mod tests {
         let tail = console.tail(10);
         assert_eq!(tail.len(), 8, "{:?}", tail);
         assert!(tail[7].line.contains("transport=wat"), "{}", tail[7].line);
+        // An unchanged NOTE is not reprinted on the next boot attempt (the
+        // retry-loop dedupe); changing the advice publishes again.
+        advise_transport(&config, &console, Backend::Endstone, Some("0.11.15")).await;
+        assert_eq!(console.tail(10).len(), 8, "{:?}", console.tail(10));
+        std::fs::write(
+            config.bedrock_server_dir.join("server.properties"),
+            "transport=nethernet\nserver-port=24474\nserver-udp-ports=24474:24474\n",
+        )
+        .unwrap();
+        advise_transport(&config, &console, Backend::Endstone, Some("0.11.15")).await;
+        let tail = console.tail(10);
+        assert_eq!(tail.len(), 9, "{:?}", tail);
+        assert!(tail[8].line.contains("single-port"), "{}", tail[8].line);
     }
 
     #[test]

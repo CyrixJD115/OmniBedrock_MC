@@ -16,21 +16,17 @@ use super::dispatch::dispatch;
 use super::state::AppState;
 
 /// Baseline security headers on every response, API and embedded UI alike.
-/// The SPA is fully same-origin (external scripts, Svelte inline styles,
-/// data:/blob: images), so the policy needs no relaxation; the sandboxed
-/// srcdoc iframe on the Store page inherits it and blocks scripts anyway.
+/// The SPA is same-origin (external scripts, Svelte inline styles,
+/// data:/blob: images). SvelteKit ships a few INLINE scripts (theme
+/// pre-paint + kit bootstrap), so script-src allows those by content hash —
+/// build.rs computes the hashes from the embedded index.html and a changed
+/// UI forces a recompile — keeping 'unsafe-inline' out of the policy; the
+/// sandboxed srcdoc iframe on the Store page inherits it and blocks scripts
+/// anyway.
 async fn security_headers(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
-    headers.insert(
-        header::CONTENT_SECURITY_POLICY,
-        header::HeaderValue::from_static(
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
-             img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; \
-             frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; \
-             frame-ancestors 'self'",
-        ),
-    );
+    headers.insert(header::CONTENT_SECURITY_POLICY, csp_header());
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         header::HeaderValue::from_static("nosniff"),
@@ -40,6 +36,35 @@ async fn security_headers(request: Request, next: Next) -> Response {
         header::HeaderValue::from_static("no-referrer"),
     );
     response
+}
+
+/// The embedded UI's inline-script content hashes, space-separated
+/// `'sha256-…'` sources; empty when the tree carries no inline scripts (the
+/// placeholder UI) or was built with `OMNI_SKIP_FRONTEND_BUILD=1`.
+pub(crate) fn content_security_policy() -> String {
+    let hashes = option_env!("OMNI_INLINE_SCRIPT_HASHES")
+        .unwrap_or("")
+        .trim();
+    let script_src = if hashes.is_empty() {
+        "script-src 'self'".to_owned()
+    } else {
+        format!("script-src 'self' {hashes}")
+    };
+    format!(
+        "default-src 'self'; {script_src}; style-src 'self' 'unsafe-inline'; \
+         img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; \
+         frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; \
+         frame-ancestors 'self'"
+    )
+}
+
+static CSP_HEADER: std::sync::LazyLock<header::HeaderValue> = std::sync::LazyLock::new(|| {
+    header::HeaderValue::from_str(&content_security_policy()).unwrap_or_else(|_| {
+        header::HeaderValue::from_static("default-src 'self'; script-src 'self'")
+    })
+});
+fn csp_header() -> header::HeaderValue {
+    CSP_HEADER.clone()
 }
 
 pub fn router(state: AppState) -> anyhow::Result<Router> {

@@ -232,6 +232,24 @@ pub(crate) async fn port_bindable(port: u16) -> bool {
     }
 }
 
+/// Same dual-stack verdict for the game port's TCP listener: NetherNet's
+/// signaling leg listens on TCP server-port, and the Endstone launcher
+/// refuses to start while anything holds it. A dying previous process keeps
+/// the UDP pair free for a moment longer than TCP — or the reverse — so the
+/// pre-launch wait must cover both transports.
+pub(crate) async fn tcp_port_bindable(port: u16) -> bool {
+    if tokio::net::TcpListener::bind(("0.0.0.0", port))
+        .await
+        .is_err()
+    {
+        return false;
+    }
+    match tokio::net::TcpListener::bind(("::", port)).await {
+        Ok(_) => true,
+        Err(_) => tokio::net::TcpListener::bind(("::1", 0u16)).await.is_err(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

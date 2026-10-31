@@ -269,10 +269,14 @@ pub(super) async fn launch(
     }
 }
 
-/// Wait (bounded) for the instance's UDP port pair to become bindable before
-/// launching. Starting into a port the previous process is still releasing
-/// makes the fresh server die at bind — and the instance report a false
-/// "crashed" even though a manual start seconds later works fine.
+/// Wait (bounded) for the instance's ports to become bindable before
+/// launching: the UDP pair (P v4/P+1 v6) AND TCP P — NetherNet's signaling
+/// leg listens on TCP server-port, and the Endstone launcher refuses to boot
+/// while anything holds it. Starting into a port the previous process is
+/// still releasing makes the fresh server die at bind — and the instance
+/// report a false "crashed" even though a manual start seconds later works
+/// fine. A dying process can free UDP and TCP at different moments, so both
+/// transports are polled until all three ports are free.
 pub(super) async fn wait_ports_free(port: u16, console: &Console) -> anyhow::Result<()> {
     const BUDGET: Duration = Duration::from_secs(10);
     let deadline = Instant::now() + BUDGET;
@@ -280,6 +284,7 @@ pub(super) async fn wait_ports_free(port: u16, console: &Console) -> anyhow::Res
     loop {
         if crate::instances::port_bindable(port).await
             && crate::instances::port_bindable(port + 1).await
+            && crate::instances::tcp_port_bindable(port).await
         {
             return Ok(());
         }
@@ -287,7 +292,8 @@ pub(super) async fn wait_ports_free(port: u16, console: &Console) -> anyhow::Res
             console
                 .publish(
                     format!(
-                        "[LOCAL] Waiting for ports {port}/{} to be released before starting...",
+                        "[LOCAL] Waiting for UDP {port}/{} and TCP {port} to be released \
+                         before starting...",
                         port + 1
                     ),
                     "panel",
@@ -298,8 +304,8 @@ pub(super) async fn wait_ports_free(port: u16, console: &Console) -> anyhow::Res
         }
         if Instant::now() >= deadline {
             bail!(
-                "UDP ports {port}/{} are still in use after {}s — stop whatever holds them \
-                 (or pick another port) and start again",
+                "UDP ports {port}/{} or TCP {port} are still in use after {}s — stop \
+                 whatever holds them (or pick another port) and start again",
                 port + 1,
                 BUDGET.as_secs()
             );

@@ -26,6 +26,9 @@ struct ConsoleState {
     sequence: u64,
     errors: BTreeMap<String, ErrorStat>,
     tps: Option<f64>,
+    /// The last panel advisory published via [`Console::publish_note`], so a
+    /// boot retry loop does not re-print an unchanged NOTE on every attempt.
+    last_note: Option<String>,
 }
 #[derive(Clone)]
 pub struct Console {
@@ -71,6 +74,7 @@ impl Console {
                 sequence: 0,
                 errors: BTreeMap::new(),
                 tps: None,
+                last_note: None,
             })),
             stream_id,
             changed: watch::channel(0).0,
@@ -89,6 +93,20 @@ impl Console {
         if level == "error" {
             self.errors_changed.send_replace(sequence);
         }
+    }
+    /// Publish a panel advisory that repeats every boot (the transport NOTE):
+    /// identical consecutive notes are skipped, so an auto-restart or retry
+    /// loop does not reprint the same line four times in a row. A changed
+    /// note — different transport, port, or mapping — always publishes.
+    pub async fn publish_note(&self, line: String) {
+        {
+            let mut s = self.inner.lock().expect("console mutex poisoned");
+            if s.last_note.as_deref() == Some(line.as_str()) {
+                return;
+            }
+            s.last_note = Some(line.clone());
+        }
+        self.publish(line, "panel", false).await;
     }
     fn insert(
         &self,

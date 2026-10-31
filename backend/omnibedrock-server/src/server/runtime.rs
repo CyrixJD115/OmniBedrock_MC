@@ -129,7 +129,9 @@ pub(super) async fn wait_running(r: &mut Running) -> String {
             }
         }
         RunKind::Process { child, .. } => match child.wait().await {
-            Ok(status) => format!("exit status {status}"),
+            // ExitStatus's own Display already reads "exit status: 1"; wrapping
+            // it again produced the "exit status exit status: 1" duplication.
+            Ok(status) => format!("{status}"),
             Err(e) => format!("wait failed: {e}"),
         },
         RunKind::Unit { exit, .. } => exit.await.unwrap_or_else(|_| "unit ended".into()),
