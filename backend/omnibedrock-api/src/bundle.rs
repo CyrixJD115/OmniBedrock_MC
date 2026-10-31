@@ -189,9 +189,11 @@ mod tests {
         );
         let csp = crate::api::content_security_policy();
         for hash in &hashes {
+            // CSP grammar quotes hash sources; unquoted `sha256-…` parses as
+            // a host and the browser would ignore it, blocking the script.
             assert!(
-                csp.contains(hash.as_str()),
-                "CSP `{csp}` is missing inline-script hash {hash}"
+                csp.contains(&format!("'{hash}'")),
+                "CSP `{csp}` is missing quoted inline-script hash '{hash}'"
             );
         }
         let script_src = csp

@@ -112,11 +112,17 @@ fn main() {
     // (theme pre-paint + SvelteKit bootstrap) only by content hash, so
     // 'unsafe-inline' is never needed. The hashes only change when
     // index.html does — the same rebuild trigger as the UI hash above.
+    // CSP grammar requires the quotes: an unquoted `sha256-…` parses as a
+    // host and the browser would ignore it, blocking the scripts anyway.
     let index_text = std::fs::read_to_string(&index).unwrap_or_default();
     let hashes = inline_script_hashes(&index_text);
     println!(
         "cargo:rustc-env=OMNI_INLINE_SCRIPT_HASHES={}",
-        hashes.join(" ")
+        hashes
+            .iter()
+            .map(|h| format!("'{h}'"))
+            .collect::<Vec<_>>()
+            .join(" ")
     );
 }
 
