@@ -51,9 +51,14 @@ impl Auth {
             return Err(ApiError::bad("Credentials too long"));
         }
         // Exponential backoff per username+source after repeated failures;
-        // keyed together so one attacker cannot lock out another source.
+        // keyed together so one attacker cannot lock out another source. The
+        // second key totals failures across ALL sources for the account, so
+        // rotating source IPs cannot buy unlimited fresh guesses at one
+        // username — the same curve arms on the account's 5th total failure.
         let throttle_key = format!("{username}\0{ip}");
-        if let Err(wait) = self.throttle.check(&throttle_key) {
+        let account_key = format!("{username}\0account");
+        let throttle_keys = [throttle_key.as_str(), account_key.as_str()];
+        if let Err(wait) = self.throttle.check(&throttle_keys) {
             return Err(ApiError::new(
                 StatusCode::TOO_MANY_REQUESTS,
                 format!(
@@ -87,7 +92,7 @@ impl Auth {
         let mut user = match user.filter(|_| valid) {
             Some(user) => user,
             None => {
-                self.throttle.record_failure(&throttle_key);
+                self.throttle.record_failure(&throttle_keys);
                 return Err(ApiError::new(
                     StatusCode::UNAUTHORIZED,
                     "Invalid username or password",
@@ -107,7 +112,7 @@ impl Auth {
             user.password_hash = hash?;
         }
         user.last_login = timestamp();
-        self.throttle.clear(&throttle_key);
+        self.throttle.clear(&throttle_keys);
         let mut next = store.clone();
         next.users.insert(username, user.clone());
         self.save_users(&next).await?;

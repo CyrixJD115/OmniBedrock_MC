@@ -17,8 +17,5 @@ mod state;
 mod store;
 mod upload;
 
-// Only the bundle.rs blank-page regression test calls the policy builder.
-#[cfg(test)]
-pub(crate) use router::content_security_policy;
 pub use router::router;
 pub use state::AppState;

@@ -107,55 +107,6 @@ fn main() {
     // the binary, the boot log, and /api/v1/build-id all carry the same hash.
     let ui_hash = hash_dir(&build_dir);
     println!("cargo:rustc-env=OMNI_UI_HASH={ui_hash}");
-
-    // The CSP keeps script-src strict by allowing the UI's inline scripts
-    // (theme pre-paint + SvelteKit bootstrap) only by content hash, so
-    // 'unsafe-inline' is never needed. The hashes only change when
-    // index.html does — the same rebuild trigger as the UI hash above.
-    // CSP grammar requires the quotes: an unquoted `sha256-…` parses as a
-    // host and the browser would ignore it, blocking the scripts anyway.
-    let index_text = std::fs::read_to_string(&index).unwrap_or_default();
-    let hashes = inline_script_hashes(&index_text);
-    println!(
-        "cargo:rustc-env=OMNI_INLINE_SCRIPT_HASHES={}",
-        hashes
-            .iter()
-            .map(|h| format!("'{h}'"))
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
-}
-
-/// SHA-256 content hashes of every inline `<script>` block in index.html.
-/// `src`-bearing tags are external (covered by `'self'`) and skipped; data
-/// blocks (`application/json`) are included because script-src gates them
-/// too. Mirrored by the bundle test in the api crate — if this scan and the
-/// test's copy ever disagree, the test fails instead of the page going blank.
-fn inline_script_hashes(html: &str) -> Vec<String> {
-    let lower = html.to_lowercase();
-    let bytes = html.as_bytes();
-    let mut hashes = Vec::new();
-    let mut cursor = 0;
-    while let Some(open_rel) = lower[cursor..].find("<script") {
-        let open = cursor + open_rel;
-        let Some(tag_end_rel) = lower[open..].find('>') else {
-            break;
-        };
-        let tag_end = open + tag_end_rel;
-        let body_start = tag_end + 1;
-        let Some(close_rel) = lower[body_start..].find("</script") else {
-            break;
-        };
-        let body_end = body_start + close_rel;
-        cursor = body_end;
-        if lower[open..tag_end].contains(" src=") {
-            continue;
-        }
-        let mut hasher = Sha256::new();
-        hasher.update(&bytes[body_start..body_end]);
-        hashes.push(format!("sha256-{}", hex::encode(hasher.finalize())));
-    }
-    hashes
 }
 
 /// SHA-256 over the embedded UI tree: every regular file's relative path and
