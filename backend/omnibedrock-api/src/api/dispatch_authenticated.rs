@@ -21,7 +21,7 @@ use super::backups::backups;
 use super::broadcaster::broadcaster;
 use super::files::{config_file_path, list_files};
 use super::helpers::{data_response, optional_string, success, value_string};
-use super::instances::{create_instance, update_instance, usage_json};
+use super::instances::{create_instance, instances_text, update_instance, usage_json};
 use super::players::list_players;
 use super::properties::properties_text;
 use super::server::{
@@ -632,6 +632,14 @@ pub(super) async fn dispatch_authenticated(
                 item["usage"] = usage_json(&s.instance_metrics(&record.id));
                 list.push(item);
             }
+            // Human mode: same endpoint, aligned plain-text table on request.
+            if q.get("format").map(String::as_str) == Some("text") {
+                return Ok((
+                    [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+                    instances_text(&list),
+                )
+                    .into_response());
+            }
             json!(list)
         }
         ["instances"] if create => {
@@ -689,6 +697,13 @@ pub(super) async fn dispatch_authenticated(
                     ""
                 }
             ))
+        }
+        // Single-request console command: one POST that returns the server's
+        // response lines, for scripts and agents (api/command.rs).
+        ["instances", id, "command"] if create => {
+            let instance = s.resolve_instance(Some(id), u).await?;
+            s.require_for(u, "CONSOLE_SEND", &instance).await?;
+            return super::command::run_command(&instance, b, q).await;
         }
         ["instances", id, "action"] if create => {
             let instance = s.resolve_instance(Some(id), u).await?;

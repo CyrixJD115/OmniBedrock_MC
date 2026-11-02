@@ -21,6 +21,55 @@ pub(super) fn usage_json(metrics: &Value) -> Value {
     })
 }
 
+/// Aligned plain-text table for `GET /instances?format=text` — the same data
+/// as the JSON array, readable straight from `curl`.
+pub(super) fn instances_text(list: &[Value]) -> String {
+    const HEADERS: [&str; 6] = ["ID", "NAME", "BACKEND", "STATUS", "PORT", "OWNER"];
+    let rows: Vec<[String; 6]> = list
+        .iter()
+        .map(|i| {
+            [
+                i["id"].as_str().unwrap_or_default().to_owned(),
+                i["name"].as_str().unwrap_or_default().to_owned(),
+                i["backend"].as_str().unwrap_or_default().to_owned(),
+                i["status"].as_str().unwrap_or_default().to_owned(),
+                i["port"].as_u64().map_or(String::new(), |p| p.to_string()),
+                i["owner"].as_str().unwrap_or_default().to_owned(),
+            ]
+        })
+        .collect();
+    let widths: Vec<usize> = (0..6)
+        .map(|col| {
+            rows.iter()
+                .map(|row| row[col].chars().count())
+                .chain(std::iter::once(HEADERS[col].len()))
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+    let line = |cells: &[String; 6]| {
+        cells
+            .iter()
+            .enumerate()
+            .map(|(col, cell)| format!("{cell:<width$}", width = widths[col]))
+            .collect::<Vec<_>>()
+            .join("  ")
+            .trim_end()
+            .to_owned()
+    };
+    let header_row: [String; 6] = HEADERS.map(str::to_owned);
+    let mut body = String::new();
+    body.push_str(&line(&header_row));
+    body.push('\n');
+    body.push_str(&"-".repeat(line(&header_row).chars().count()));
+    body.push('\n');
+    for row in &rows {
+        body.push_str(&line(row));
+        body.push('\n');
+    }
+    body
+}
+
 /// The optional per-instance Docker options from a request body. Absent or
 /// null clears them (the config defaults then apply at launch).
 ///

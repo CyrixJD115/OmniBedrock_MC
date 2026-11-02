@@ -122,6 +122,11 @@ pub(super) fn audit_action(
             detail,
             "instances",
         ),
+        ["instances", id, "command"] => (
+            format!("instance:{id}:command"),
+            optional_string(b, "command", "").into(),
+            "console",
+        ),
         ["instances", ..] => (
             format!(
                 "instance.{}",

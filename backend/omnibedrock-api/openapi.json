@@ -3,7 +3,7 @@
  "info": {
   "title": "OmniBedrock Panel API",
   "version": "1.0.0",
-  "description": "Machine-readable inventory of the OmniBedrock control-panel API. Every path below lives under the API prefix (default /api/v1). Authentication is a Bearer token from POST /auth/login. Endpoints marked 'any signed-in user' need a valid token but no specific permission; otherwise the permission shown in x-permission is required (globally, or scoped to the instance via the X-Instance header / ?instance= query for non-default instances). x-body lists the JSON request-body keys; entries with no x-body take an empty JSON object. Extensions: x-permission, x-body, x-query, x-public, x-websocket."
+  "description": "Machine-readable inventory of the OmniBedrock control-panel API. Every path below lives under the API prefix (default /api/v1). Authentication is a Bearer token from POST /auth/login. Endpoints marked 'any signed-in user' need a valid token but no specific permission; otherwise the permission shown in x-permission is required (globally, or scoped to the instance via the X-Instance header / ?instance= query for non-default instances). x-body lists the JSON request-body keys; entries with no x-body take an empty JSON object. Extensions: x-permission, x-body, x-query, x-public, x-websocket. Envelope: every JSON response carries an X-Request-Id header; JSON-object bodies additionally carry \"ok\" (true on 2xx, false otherwise) and errors add \"error\": {\"code\", \"message\"} plus \"request_id\" while keeping the legacy \"detail\" field. List endpoints stay bare JSON arrays. GET / (the prefix root) returns this API as a route list; the document itself is also served at the host root /openapi.json with a human page at /api-docs."
  },
  "servers": [
   {
@@ -25,6 +25,22 @@
   }
  },
  "paths": {
+  "/": {
+   "get": {
+    "tags": [
+     "system"
+    ],
+    "summary": "Machine-readable route list",
+    "description": "JSON array of {method, path, summary} derived from this document at runtime. ?format=text returns an aligned plain-text list.",
+    "x-public": true,
+    "security": [],
+    "responses": {
+     "200": {
+      "description": "Route list"
+     }
+    }
+   }
+  },
   "/health": {
    "get": {
     "tags": [
@@ -46,11 +62,28 @@
      "system"
     ],
     "summary": "This document",
+    "description": "OpenAPI 3.0 inventory of the API; the same document is also served at the host root /openapi.json (the prefix-independent URL), with a human-readable page at /api-docs linking it.",
     "x-public": true,
     "security": [],
     "responses": {
      "200": {
       "description": "OpenAPI 3.0 inventory of the API"
+     }
+    }
+   }
+  },
+  "/api-docs": {
+   "get": {
+    "tags": [
+     "system"
+    ],
+    "summary": "Human-readable API overview page",
+    "description": "HTML page at the host root linking /openapi.json and rendering the live route list from GET {prefix}. Public.",
+    "x-public": true,
+    "security": [],
+    "responses": {
+     "200": {
+      "description": "HTML page"
      }
     }
    }
@@ -1597,6 +1630,33 @@
     "responses": {
      "200": {
       "description": "{success, message}"
+     }
+    }
+   }
+  },
+  "/instances/{id}/command": {
+   "post": {
+    "tags": [
+     "instances"
+    ],
+    "summary": "Send one console command and receive the resulting console output in the same response",
+    "description": "Single-request alternative to the WebSocket console for automation: pipes one line to the server, collects the console lines it produced, and returns {ok, command, lines[], count, data}. Output collection stops after ~250 ms of silence or the wait budget; a server that prints nothing yields an empty lines array. ?format=text returns the lines as text/plain.",
+    "x-permission": "CONSOLE_SEND + instance access",
+    "requestBody": {
+     "x-body": {
+      "command": "string (single line, 1..8192 bytes)"
+     }
+    },
+    "x-query": {
+     "wait_ms": "int 100..5000, default 1500 — output collection window",
+     "format": "\"text\" returns text/plain lines; default JSON"
+    },
+    "responses": {
+     "200": {
+      "description": "{ok, command, lines[], count, data}"
+     },
+     "409": {
+      "description": "Server not running (error.code = conflict)"
      }
     }
    }

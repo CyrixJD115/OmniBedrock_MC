@@ -213,7 +213,7 @@ Commands use `{"command":"list"}` on the console socket or `POST /api/v1/console
 
 ## API
 
-All protected REST routes use `Authorization: Bearer <JWT>`. Browser flows that cannot set headers (downloads, images, WebSocket upgrades) instead carry a short-lived, purpose-bound token minted via `POST /auth/download-token` (15-minute TTL) — never the login bearer. `/health` and `GET /api/v1/openapi.json` are public — the latter is a machine-readable inventory of every endpoint family with its permission gate and request-body keys. Endpoints for a non-default instance are scoped with the `X-Instance: <id>` header (or `?instance=<id>` for browser downloads). Main endpoint families under `/api/v1`:
+All protected REST routes use `Authorization: Bearer <JWT>`. Browser flows that cannot set headers (downloads, images, WebSocket upgrades) instead carry a short-lived, purpose-bound token minted via `POST /auth/download-token` (15-minute TTL) — never the login bearer. Public, no-token discovery: `/health`, `GET /openapi.json` (host root; also at `GET /api/v1/openapi.json`) — an OpenAPI 3.0 inventory of every endpoint family with its permission gate and request-body keys — `GET /api/v1`, the same inventory flattened to a `[{method, path, summary}]` route list (`?format=text` for a plain-text table), and `/api-docs`, a human overview page linking both. Every response carries an `X-Request-Id` header (honor a caller-supplied one to correlate across systems); JSON-object bodies additionally carry `"ok"` (true on 2xx), and errors add `"error": {"code", "message"}` plus `"request_id"` while keeping the legacy `detail` field, so both old and new clients work unchanged. List endpoints stay bare JSON arrays. Endpoints for a non-default instance are scoped with the `X-Instance: <id>` header (or `?instance=<id>` for browser downloads). Main endpoint families under `/api/v1`:
 
 | Family | Endpoints |
 | --- | --- |
@@ -231,9 +231,30 @@ All protected REST routes use `Authorization: Bearer <JWT>`. Browser flows that 
 | performance/logs | `GET /performance/metrics`, `WS /performance/ws`, `WS /logs/ws` |
 | broadcaster | `GET /broadcaster/status`, `POST /broadcaster/action`, `POST /broadcaster/command`, `GET/PUT /broadcaster/config`, `GET/POST /broadcaster/accounts`, `GET /broadcaster/device-code`, `GET/PUT /broadcaster/screenshot`, `WS /broadcaster/ws` |
 | store | `GET /store/meta`, `GET /store/search`, `GET /store/project/{id}`, `GET /store/project/{id}/description`, `GET /store/project/{id}/files`, `POST /store/install`, `GET /store/image` |
-| instances | `GET/POST /instances`, `GET/PUT/DELETE /instances/{id}`, `POST /instances/{id}/action`, `GET /host` |
+| instances | `GET/POST /instances`, `GET/PUT/DELETE /instances/{id}`, `POST /instances/{id}/action`, `POST /instances/{id}/command`, `GET /host` |
 
 `GET /console/tail?lines=200` returns the last N console lines as JSON (`{"instance","latest","events":[…]}`, same event shape as the socket) without holding a WebSocket open; add `&format=text` for one line per row, handy for `curl … | tail` health checks. The live feed stays on `WS /console/ws`.
+
+### Single-request commands (automation-friendly)
+
+`POST /instances/{id}/command` pipes one console line to the server and returns the output it produced — no WebSocket or download-token dance for simple commands. Output collection stops after ~250 ms of silence or the `wait_ms` budget (default 1500, max 5000), capped at 200 lines; a server that prints nothing yields an empty `lines` array. `GET /instances` and `GET /api/v1` accept the same `?format=text` for aligned plain-text tables.
+
+```bash
+curl -s -X POST http://localhost:17754/api/v1/instances/default/command \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"command":"list"}' | jq -r '.lines[]'
+# [INFO] There are 2/20 players online: Alex, Steve
+```
+
+### obctl: the CLI for the same API
+
+`obctl` (a workspace member; `cargo build -p obctl` → `target/debug/obctl`) wraps the HTTP API for humans: `obctl login` mints a token, then `instances list|status|start|stop|restart|kill`, `obctl command [-i <id>] <command…>` prints the server's response lines, `obctl broadcaster status`, and `obctl routes` lists the API. Reads `--url/--token` or `$OB_URL`/`$OB_TOKEN`; add `--json` for raw responses.
+
+```bash
+export OB_TOKEN=$(obctl --url http://localhost:17754 login -u Admin -p … | head -1)
+obctl instances list
+obctl command default say hello
+```
 
 ### Instances and access control
 

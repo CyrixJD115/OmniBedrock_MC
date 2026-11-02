@@ -10,6 +10,7 @@ mod broadcaster;
 mod console;
 mod docker;
 mod harness;
+mod http;
 mod instances;
 mod process;
 mod properties;

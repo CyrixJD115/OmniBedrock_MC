@@ -13,6 +13,9 @@ use serde_json::json;
 use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
 
 use super::dispatch::dispatch;
+use super::docs;
+use super::middleware as envelope;
+use super::routes_list;
 use super::state::AppState;
 
 /// Baseline security headers on every response, API and embedded UI alike.
@@ -60,8 +63,10 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .map(|s| s.parse::<axum::http::HeaderValue>())
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let api = Router::new()
-        // Machine-readable endpoint inventory, public like /health so tools
-        // and agents can discover the API without a source dive.
+        // Machine-readable route inventory + endpoint document, public like
+        // /health so tools and agents can discover the API without a source
+        // dive. The inventory is derived from openapi.json at runtime.
+        .route("/", get(routes_list::route_list))
         .route("/openapi.json", get(|| async { openapi_doc() }))
         // Embedded-UI fingerprint (matches the boot log's "UI build:" line),
         // public so a stale open page can detect a new backend and reload.
@@ -81,13 +86,30 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
             "/health",
             get(|| async { Json(json!({"status":"ok","version":env!("CARGO_PKG_VERSION")})) }),
         )
+        // The OpenAPI document and the human /api-docs page live at the host
+        // root (outside the configurable prefix) at stable, linkable URLs.
+        .route("/openapi.json", get(|| async { openapi_doc() }))
+        .route("/api-docs", get(docs::api_docs))
         .nest(&prefix, api)
         // Everything that is not the API serves the embedded panel UI.
         .fallback(crate::bundle::serve)
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
         .layer(middleware::from_fn(security_headers))
+        // Envelope + X-Request-Id run inside the trace span (so the id lands
+        // in every request-scoped log line) and inside compression (so the
+        // envelope rewrites the raw JSON before it is compressed).
+        .layer(middleware::from_fn(envelope::request_context))
         .layer(CompressionLayer::new())
-        .layer(TraceLayer::new_for_http().make_span_with(|request: &Request| tracing::info_span!("http", method=%request.method(), path=request.uri().path())))
+        .layer(
+            TraceLayer::new_for_http().make_span_with(|request: &Request| {
+                tracing::info_span!(
+                    "http",
+                    method = %request.method(),
+                    path = request.uri().path(),
+                    request_id = tracing::field::Empty
+                )
+            }),
+        )
         .layer(
             CorsLayer::new()
                 .allow_origin(origins)

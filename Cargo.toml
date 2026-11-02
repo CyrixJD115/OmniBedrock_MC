@@ -3,6 +3,7 @@ members = [
     "backend/omnibedrock-core",
     "backend/omnibedrock-server",
     "backend/omnibedrock-api",
+    "backend/obctl",
 ]
 resolver = "2"
 
