@@ -11,6 +11,16 @@ pub fn component(name: &str) -> Result<&str> {
     }
     Ok(name)
 }
+/// Upload filename sanitization shared by every multipart upload route
+/// (Endstone plugins and the file explorer): only the final path segment
+/// survives, and it must be a plain, non-traversing name. Client-supplied
+/// names may carry directories (`dir/file.py`) or Windows separators — the
+/// basename is taken rather than trusted, while anything that is empty, a
+/// dot segment, or NUL-bearing is rejected outright.
+pub fn sanitize_filename(name: &str) -> Result<&str> {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or("");
+    component(base)
+}
 pub async fn safe_path(root: &Path, relative: &Path) -> Result<PathBuf> {
     if relative.is_absolute()
         || relative
@@ -190,6 +200,21 @@ mod tests {
         assert!(component("a.b-c_d").is_ok());
         for bad in ["", ".", "..", "a/b", "a\\b", "a\0b", "/abs", "C:\\x"] {
             assert!(component(bad).is_err(), "{bad:?} must be rejected");
+        }
+    }
+
+    #[test]
+    fn sanitize_filename_keeps_only_a_safe_basename() {
+        // Directories in client-supplied names are stripped, never trusted.
+        assert_eq!(sanitize_filename("plugins/evil.py").unwrap(), "evil.py");
+        assert_eq!(sanitize_filename("..\\evil.whl").unwrap(), "evil.whl");
+        assert_eq!(sanitize_filename("a/b/c.py").unwrap(), "c.py");
+        assert_eq!(sanitize_filename("plugin.py").unwrap(), "plugin.py");
+        // Dot segments, empties, and NULs are rejected, not normalized.
+        for bad in [
+            "", "..", ".", "a/b/..", "a/b/.", "..\\..", "../..", "dir/", "\\", "a\0b",
+        ] {
+            assert!(sanitize_filename(bad).is_err(), "{bad:?} must be rejected");
         }
     }
 

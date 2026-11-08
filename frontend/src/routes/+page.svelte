@@ -6,6 +6,7 @@
   import { userPermissions } from '$stores/auth';
   import { activeInstance } from '$stores/instances';
   import { Play, Square, RotateCw, Terminal, Users, HardDrive, Globe, Cpu, Clock, Activity, TriangleAlert, Radio } from '@lucide/svelte';
+  import PluginsCard from '$lib/components/plugins/PluginsCard.svelte';
   import type { BroadcasterStatus } from '$types/index';
 
   let loading = $state(true);
@@ -173,6 +174,12 @@
       </div>
     </div>
   </div>
+
+  <!-- Endstone plugin management: only meaningful on endstone-backends,
+       and PLUGIN_MANAGE is enforced server-side as well. -->
+  {#if $activeInstance?.backend === 'endstone' && $userPermissions.includes('PLUGIN_MANAGE')}
+    <PluginsCard instanceId={$activeInstance.id} />
+  {/if}
 
   <!-- Quick Actions -->
   <div class="card">

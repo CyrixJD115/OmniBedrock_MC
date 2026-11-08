@@ -18,7 +18,7 @@ omnibedrock-core = { path = "backend/omnibedrock-core" }
 omnibedrock-server = { path = "backend/omnibedrock-server" }
 anyhow = "1"
 argon2 = "0.5"
-axum = { version = "0.8", features = ["ws", "macros"] }
+axum = { version = "0.8", features = ["ws", "macros", "multipart"] }
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 dotenvy = "0.15"

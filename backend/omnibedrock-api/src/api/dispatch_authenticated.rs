@@ -19,10 +19,12 @@ use std::{collections::HashMap, path::Path as FsPath, sync::Arc};
 use super::addons::addons;
 use super::backups::backups;
 use super::broadcaster::broadcaster;
+use super::explorer;
 use super::files::{config_file_path, list_files};
 use super::helpers::{data_response, optional_string, success, value_string};
 use super::instances::{create_instance, instances_text, update_instance, usage_json};
 use super::players::list_players;
+use super::plugins;
 use super::properties::properties_text;
 use super::server::{
     backend_status, ensure_endstone_toolchain, ensure_vanilla_installed, install_bds,
@@ -697,6 +699,58 @@ pub(super) async fn dispatch_authenticated(
                     ""
                 }
             ))
+        }
+        // ---- Endstone plugins (id-in-path form, resolved like command/action) ----
+        ["instances", id, "plugins"] if read => {
+            let instance = s.resolve_instance(Some(id), u).await?;
+            s.require_for(u, "PLUGIN_MANAGE", &instance).await?;
+            plugins::list(&instance).await?
+        }
+        ["instances", id, "plugins", filename] if read => {
+            let instance = s.resolve_instance(Some(id), u).await?;
+            s.require_for(u, "PLUGIN_MANAGE", &instance).await?;
+            return plugins::download(&instance, filename).await;
+        }
+        ["instances", id, "plugins", filename] if delete => {
+            let instance = s.resolve_instance(Some(id), u).await?;
+            s.require_for(u, "PLUGIN_MANAGE", &instance).await?;
+            return plugins::delete_plugin(&instance, filename).await;
+        }
+        // ---- Instance file explorer (id-in-path form) ----
+        ["instances", id, "files"] if read => {
+            let instance = s.resolve_instance(Some(id), u).await?;
+            s.require_for(u, "FILES_VIEW", &instance).await?;
+            explorer::list(&instance, q).await?
+        }
+        ["instances", id, "files", "raw"] if read => {
+            let instance = s.resolve_instance(Some(id), u).await?;
+            s.require_for(u, "FILES_VIEW", &instance).await?;
+            return explorer::raw_download(&instance, q).await;
+        }
+        ["instances", id, "files", "raw"] if write => {
+            let instance = s.resolve_instance(Some(id), u).await?;
+            s.require_for(u, "FILES_WRITE", &instance).await?;
+            explorer::raw_save(s, &instance, q, b).await?
+        }
+        ["instances", _id, "files", "upload"] => {
+            // Multipart uploads are intercepted in dispatch() before the
+            // JSON body parse; reaching here means the body was not form data.
+            return Err(ApiError::bad("Uploads must be multipart form data"));
+        }
+        ["instances", id, "files", "mkdir"] if create => {
+            let instance = s.resolve_instance(Some(id), u).await?;
+            s.require_for(u, "FILES_WRITE", &instance).await?;
+            explorer::mkdir(s, &instance, q).await?
+        }
+        ["instances", id, "files", "rename"] if create => {
+            let instance = s.resolve_instance(Some(id), u).await?;
+            s.require_for(u, "FILES_WRITE", &instance).await?;
+            explorer::rename(s, &instance, b).await?
+        }
+        ["instances", id, "files"] if delete => {
+            let instance = s.resolve_instance(Some(id), u).await?;
+            s.require_for(u, "FILES_WRITE", &instance).await?;
+            explorer::delete(s, &instance, q).await?
         }
         // Single-request console command: one POST that returns the server's
         // response lines, for scripts and agents (api/command.rs).

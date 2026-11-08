@@ -127,6 +127,19 @@ pub(super) fn audit_action(
             optional_string(b, "command", "").into(),
             "console",
         ),
+        ["instances", _, "plugins", ..] => (
+            format!("plugins.{}", method.as_str().to_lowercase()),
+            detail,
+            "plugins",
+        ),
+        ["instances", _, "files", "raw"] => ("files_explorer.save".into(), detail, "files"),
+        ["instances", _, "files", "mkdir"] => ("files_explorer.mkdir".into(), detail, "files"),
+        ["instances", _, "files", "rename"] => ("files_explorer.rename".into(), detail, "files"),
+        ["instances", _, "files", ..] => (
+            format!("files_explorer.{}", method.as_str().to_lowercase()),
+            detail,
+            "files",
+        ),
         ["instances", ..] => (
             format!(
                 "instance.{}",

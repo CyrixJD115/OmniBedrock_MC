@@ -94,6 +94,27 @@ export interface IniFile {
   modified: number;
 }
 
+/** One Endstone plugin file in the instance's server/plugins directory. */
+export interface PluginFile {
+  filename: string;
+  size: number;
+  modified: number;
+}
+
+/** One entry of an explorer directory listing (symlinks are inert files). */
+export interface ExplorerEntry {
+  name: string;
+  is_dir: boolean;
+  size: number;
+  modified: number;
+}
+
+export interface ExplorerListing {
+  path: string;
+  entries: ExplorerEntry[];
+  truncated: boolean;
+}
+
 export interface WorldInfo {
   name: string;
   path: string;
@@ -166,11 +187,12 @@ export const ALL_PERMISSIONS = [
   'PLAYERS_VIEW', 'PLAYERS_KICK', 'PLAYERS_BAN', 'PLAYERS_OP',
   'PROPERTIES_VIEW', 'PROPERTIES_EDIT',
   'ADDONS_VIEW', 'ADDONS_MANAGE',
+  'PLUGIN_MANAGE',
   'STORE_VIEW', 'STORE_INSTALL',
   'BACKUPS_VIEW', 'BACKUPS_CREATE', 'BACKUPS_RESTORE', 'BACKUPS_DELETE',
   'USERS_VIEW', 'USERS_CREATE', 'USERS_EDIT', 'USERS_DELETE',
   'ROLES_MANAGE',
-  'FILES_VIEW', 'FILES_EDIT',
+  'FILES_VIEW', 'FILES_EDIT', 'FILES_WRITE',
   'AUDIT_VIEW',
   'SETTINGS_VIEW', 'SETTINGS_EDIT',
   'BROADCASTER_VIEW', 'BROADCASTER_MANAGE',
@@ -185,9 +207,10 @@ export const INSTANCE_PERMISSIONS = [
   'PLAYERS_VIEW', 'PLAYERS_KICK', 'PLAYERS_BAN', 'PLAYERS_OP',
   'PROPERTIES_VIEW', 'PROPERTIES_EDIT',
   'ADDONS_VIEW', 'ADDONS_MANAGE',
+  'PLUGIN_MANAGE',
   'STORE_VIEW', 'STORE_INSTALL',
   'BACKUPS_VIEW', 'BACKUPS_CREATE', 'BACKUPS_RESTORE', 'BACKUPS_DELETE',
-  'FILES_VIEW', 'FILES_EDIT',
+  'FILES_VIEW', 'FILES_EDIT', 'FILES_WRITE',
   'BROADCASTER_VIEW',
   'INSTANCES_SHARE', 'INSTANCES_DELETE', 'INSTANCES_LIMITS',
 ] as const;

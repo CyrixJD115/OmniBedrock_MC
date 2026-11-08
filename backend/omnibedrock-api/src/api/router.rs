@@ -93,7 +93,13 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .nest(&prefix, api)
         // Everything that is not the API serves the embedded panel UI.
         .fallback(crate::bundle::serve)
-        .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
+        // JSON endpoints re-cap their own bodies at 2 MiB inside dispatch;
+        // this router-level cap exists for the streaming multipart uploads
+        // (explorer 100 MiB, plugins 25 MiB), which enforce per-file caps in
+        // their handlers on top of the multipart overhead slack.
+        .layer(DefaultBodyLimit::max(
+            super::explorer::MAX_UPLOAD_BYTES as usize + 12 * 1024 * 1024,
+        ))
         .layer(middleware::from_fn(security_headers))
         // Envelope + X-Request-Id run inside the trace span (so the id lands
         // in every request-scoped log line) and inside compression (so the

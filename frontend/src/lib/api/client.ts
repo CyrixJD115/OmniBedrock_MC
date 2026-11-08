@@ -1,4 +1,4 @@
-import type { ServerStatus, ServerActionResponse, Backup, AddonList, Addon, Player, PropertyEntry, IniFile, WorldInfo, BackupSettings, SchedulerConfig, CommandEntry, IncludeItem, FolderEntry, BackendInfo, VersionRegistry, EndstoneRegistry, BroadcasterStatus, CfProject, StoreSearchResponse, StoreMeta, StoreFilesResponse, StoreInstallResponse, Instance, HostInfo } from '$types/index';
+import type { ServerStatus, ServerActionResponse, Backup, AddonList, Addon, Player, PropertyEntry, IniFile, WorldInfo, BackupSettings, SchedulerConfig, CommandEntry, IncludeItem, FolderEntry, BackendInfo, VersionRegistry, EndstoneRegistry, BroadcasterStatus, CfProject, StoreSearchResponse, StoreMeta, StoreFilesResponse, StoreInstallResponse, Instance, HostInfo, PluginFile, ExplorerListing } from '$types/index';
 
 const API_BASE = '/api/v1';
 let authToken = '';
@@ -105,6 +105,18 @@ export function authsrc(
       alive = false;
     },
   };
+}
+
+/** Trigger a browser download of an already-fetched blob under its name. */
+export function saveBlob(filename: string, blob: Blob) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 /** Session expired server-side: drop local credentials; the layout's guard
@@ -472,6 +484,96 @@ export const api = {
     }),
   deleteIniFile: (filename: string) =>
     request<{ success: boolean }>(`/files/${filename}`, { method: 'DELETE' }),
+
+  // Endstone plugins (instance id in the path; multipart form uploads)
+  listPlugins: (instanceId: string) =>
+    request<{ plugins: PluginFile[] }>(`/instances/${encodeURIComponent(instanceId)}/plugins`),
+  uploadPlugin: (instanceId: string, file: File, overwrite = false) => {
+    const id = encodeURIComponent(instanceId);
+    const form = new FormData();
+    form.append('file', file);
+    return fetch(`${API_BASE}/instances/${id}/plugins${overwrite ? '?overwrite=true' : ''}`, {
+      method: 'POST',
+      headers: rawHeaders(undefined, `/instances/${id}/plugins`),
+      body: form,
+    }).then(async r => {
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.detail ?? `Upload failed (${r.status})`);
+      return body as { success: boolean; message: string; filename: string; restart_required: boolean };
+    });
+  },
+  deletePlugin: (instanceId: string, filename: string) =>
+    request<{ success: boolean; message: string }>(
+      `/instances/${encodeURIComponent(instanceId)}/plugins/${encodeURIComponent(filename)}`,
+      { method: 'DELETE' },
+    ),
+  downloadPlugin: async (instanceId: string, filename: string) => {
+    const res = await fetch(
+      `${API_BASE}/instances/${encodeURIComponent(instanceId)}/plugins/${encodeURIComponent(filename)}`,
+      { headers: rawHeaders() },
+    );
+    if (!res.ok) throw new Error(`API Error ${res.status}`);
+    saveBlob(filename, await res.blob());
+  },
+
+  // Instance file explorer (instance id in the path)
+  listExplorer: (instanceId: string, path = '') =>
+    request<ExplorerListing>(
+      `/instances/${encodeURIComponent(instanceId)}/files${path ? `?path=${encodeURIComponent(path)}` : ''}`,
+    ),
+  readExplorerFile: async (instanceId: string, path: string) => {
+    const res = await fetch(
+      `${API_BASE}/instances/${encodeURIComponent(instanceId)}/files/raw?path=${encodeURIComponent(path)}`,
+      { headers: rawHeaders() },
+    );
+    if (!res.ok) throw new Error(`API Error ${res.status}: ${await res.text()}`);
+    return res.text();
+  },
+  writeExplorerFile: (instanceId: string, path: string, content: string) =>
+    request<{ success: boolean; message: string; restart_required?: boolean }>(
+      `/instances/${encodeURIComponent(instanceId)}/files/raw?path=${encodeURIComponent(path)}`,
+      { method: 'PUT', body: JSON.stringify({ content }) },
+    ),
+  uploadExplorerFile: (instanceId: string, dir: string, file: File, overwrite = false) => {
+    const id = encodeURIComponent(instanceId);
+    const usp = new URLSearchParams();
+    if (dir) usp.set('path', dir);
+    if (overwrite) usp.set('overwrite', 'true');
+    const form = new FormData();
+    form.append('file', file);
+    return fetch(`${API_BASE}/instances/${id}/files/upload?${usp.toString()}`, {
+      method: 'POST',
+      headers: rawHeaders(undefined, `/instances/${id}/files/upload`),
+      body: form,
+    }).then(async r => {
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.detail ?? `Upload failed (${r.status})`);
+      return body as { success: boolean; message: string; filename: string; restart_required: boolean };
+    });
+  },
+  mkdirExplorer: (instanceId: string, path: string) =>
+    request<{ success: boolean; message: string }>(
+      `/instances/${encodeURIComponent(instanceId)}/files/mkdir?path=${encodeURIComponent(path)}`,
+      { method: 'POST' },
+    ),
+  renameExplorer: (instanceId: string, from: string, to: string) =>
+    request<{ success: boolean; message: string; restart_required?: boolean }>(
+      `/instances/${encodeURIComponent(instanceId)}/files/rename`,
+      { method: 'POST', body: JSON.stringify({ from, to }) },
+    ),
+  deleteExplorer: (instanceId: string, path: string, recursive = false) =>
+    request<{ success: boolean; message: string; restart_required?: boolean }>(
+      `/instances/${encodeURIComponent(instanceId)}/files?path=${encodeURIComponent(path)}${recursive ? '&recursive=true&confirm=true' : ''}`,
+      { method: 'DELETE' },
+    ),
+  downloadExplorerFile: async (instanceId: string, path: string) => {
+    const res = await fetch(
+      `${API_BASE}/instances/${encodeURIComponent(instanceId)}/files/raw?path=${encodeURIComponent(path)}`,
+      { headers: rawHeaders() },
+    );
+    if (!res.ok) throw new Error(`API Error ${res.status}`);
+    saveBlob(path.split('/').pop() ?? 'download', await res.blob());
+  },
 
   // Roles
   listRoles: () => request<Array<Record<string, unknown>>>('/roles/'),

@@ -2,7 +2,7 @@
 //! and the pre-parse special cases (addon uploads, screenshots, login).
 use axum::{
     body::to_bytes,
-    extract::{Path, Query, Request, State},
+    extract::{FromRequest, Multipart, Path, Query, Request, State},
     http::{Method, StatusCode, header},
     response::Response,
 };
@@ -15,7 +15,9 @@ use std::collections::HashMap;
 
 use super::audit::audit_action;
 use super::dispatch_authenticated::dispatch_authenticated;
+use super::explorer;
 use super::helpers::{data_response, success, value_string};
+use super::plugins;
 use super::state::AppState;
 use super::upload::upload_addons;
 
@@ -96,6 +98,32 @@ pub(super) async fn dispatch(
         // Instance-scoped like every other addons route (see api/addons.rs).
         state.require_for(&user, "ADDONS_MANAGE", &svc).await?;
         return upload_addons(state, svc, user, query, request.into_body()).await;
+    }
+    // Multipart uploads (Endstone plugins, explorer files) bypass the JSON
+    // envelope parse: they are form bodies with their own byte caps. Their
+    // instance id lives in the path (the `/instances/{id}/...` form), so the
+    // target is resolved and the permission gated here before the body is
+    // consumed. Everything else in this branch returns before the generic
+    // JSON path below.
+    if method == Method::POST {
+        let upload = match segments.as_slice() {
+            ["instances", id, "plugins"] => Some(("PLUGIN_MANAGE", id)),
+            ["instances", id, "files", "upload"] => Some(("FILES_WRITE", id)),
+            _ => None,
+        };
+        if let Some((permission, id)) = upload {
+            let user = state.auth.resolve_user(header_token.as_deref()).await?;
+            let svc = state.resolve_instance(Some(id), &user).await?;
+            state.require_for(&user, permission, &svc).await?;
+            let multipart = Multipart::from_request(request, &())
+                .await
+                .map_err(|e| ApiError::bad(format!("Invalid multipart upload: {e}")))?;
+            return if permission == "PLUGIN_MANAGE" {
+                plugins::upload(&state, &svc, &user, &query, multipart).await
+            } else {
+                explorer::upload(&state, &svc, &user, &query, multipart).await
+            };
+        }
     }
     let bytes = to_bytes(request.into_body(), 2 * 1024 * 1024)
         .await

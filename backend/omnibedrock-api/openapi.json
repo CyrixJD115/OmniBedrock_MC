@@ -1648,7 +1648,7 @@
      }
     },
     "x-query": {
-     "wait_ms": "int 100..5000, default 1500 — output collection window",
+     "wait_ms": "int 100..5000, default 1500 \u2014 output collection window",
      "format": "\"text\" returns text/plain lines; default JSON"
     },
     "responses": {
@@ -1765,6 +1765,203 @@
     "responses": {
      "101": {
       "description": "WebSocket upgrade"
+     }
+    }
+   }
+  },
+  "/instances/{id}/plugins": {
+   "get": {
+    "tags": [
+     "plugins"
+    ],
+    "summary": "List Endstone plugins in the instance's server/plugins directory",
+    "x-permission": "PLUGIN_MANAGE + instance access",
+    "responses": {
+     "200": {
+      "description": "{plugins: [{filename, size, modified}]}"
+     }
+    }
+   },
+   "post": {
+    "tags": [
+     "plugins"
+    ],
+    "summary": "Upload one Endstone plugin (.py or .whl, 25 MiB cap, multipart)",
+    "x-permission": "PLUGIN_MANAGE + instance access",
+    "requestBody": {
+     "content": {
+      "multipart/form-data": {
+       "file": "binary"
+      }
+     },
+     "description": "Multipart form with a single `file` field"
+    },
+    "x-query": {
+     "overwrite": "\"true\" replaces an existing plugin of the same name"
+    },
+    "responses": {
+     "200": {
+      "description": "{success, message, filename, restart_required}"
+     }
+    }
+   }
+  },
+  "/instances/{id}/plugins/{filename}": {
+   "get": {
+    "tags": [
+     "plugins"
+    ],
+    "summary": "Download one plugin file",
+    "x-permission": "PLUGIN_MANAGE + instance access",
+    "responses": {
+     "200": {
+      "description": "binary file"
+     }
+    }
+   },
+   "delete": {
+    "tags": [
+     "plugins"
+    ],
+    "summary": "Delete one plugin file (directories are refused)",
+    "x-permission": "PLUGIN_MANAGE + instance access",
+    "responses": {
+     "200": {
+      "description": "{success, message}"
+     }
+    }
+   }
+  },
+  "/instances/{id}/files": {
+   "get": {
+    "tags": [
+     "files"
+    ],
+    "summary": "List one directory of the instance tree (dirs first, capped at 2000)",
+    "x-permission": "FILES_VIEW + instance access",
+    "x-query": {
+     "path": "directory relative to the instance root, default the root itself"
+    },
+    "responses": {
+     "200": {
+      "description": "{path, entries: [{name, is_dir, size, modified}], truncated}"
+     }
+    }
+   },
+   "delete": {
+    "tags": [
+     "files"
+    ],
+    "summary": "Delete one file or EMPTY directory; non-empty directories need recursive+confirm",
+    "x-permission": "FILES_WRITE + instance access",
+    "x-query": {
+     "path": "required",
+     "recursive": "\"true\" to delete a non-empty directory's contents",
+     "confirm": "\"true\" required alongside recursive"
+    },
+    "responses": {
+     "200": {
+      "description": "{success, message, restart_required}"
+     }
+    }
+   }
+  },
+  "/instances/{id}/files/raw": {
+   "get": {
+    "tags": [
+     "files"
+    ],
+    "summary": "Download one file (streamed)",
+    "x-permission": "FILES_VIEW + instance access",
+    "x-query": {
+     "path": "required"
+    },
+    "responses": {
+     "200": {
+      "description": "binary file"
+     }
+    }
+   },
+   "put": {
+    "tags": [
+     "files"
+    ],
+    "summary": "Save text content to one file (atomic write; refuses files the server holds open)",
+    "x-permission": "FILES_WRITE + instance access",
+    "requestBody": {
+     "x-body": {
+      "content": "string"
+     }
+    },
+    "x-query": {
+     "path": "required"
+    },
+    "responses": {
+     "200": {
+      "description": "{success, message, restart_required}"
+     }
+    }
+   }
+  },
+  "/instances/{id}/files/upload": {
+   "post": {
+    "tags": [
+     "files"
+    ],
+    "summary": "Upload one file into a directory (100 MiB cap, multipart, basename-only names)",
+    "x-permission": "FILES_WRITE + instance access",
+    "requestBody": {
+     "content": {
+      "multipart/form-data": {
+       "file": "binary"
+      }
+     },
+     "description": "Multipart form with a single `file` field"
+    },
+    "x-query": {
+     "path": "target directory, default the root",
+     "overwrite": "\"true\" replaces an existing file of the same name"
+    },
+    "responses": {
+     "200": {
+      "description": "{success, message, filename, restart_required}"
+     }
+    }
+   }
+  },
+  "/instances/{id}/files/mkdir": {
+   "post": {
+    "tags": [
+     "files"
+    ],
+    "summary": "Create a directory (parents included)",
+    "x-permission": "FILES_WRITE + instance access",
+    "x-query": {
+     "path": "required"
+    },
+    "responses": {
+     "200": {
+      "description": "{success, message}"
+     }
+    }
+   }
+  },
+  "/instances/{id}/files/rename": {
+   "post": {
+    "tags": [
+     "files"
+    ],
+    "summary": "Rename/move one path (destination must not exist)",
+    "x-permission": "FILES_WRITE + instance access",
+    "requestBody": {
+     "x-body": {
+      "from": "string",
+      "to": "string"
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "{success, message, restart_required}"
      }
     }
    }
