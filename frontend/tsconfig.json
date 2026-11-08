@@ -2,6 +2,10 @@
   "extends": "./.svelte-kit/tsconfig.json",
   "compilerOptions": {
     "allowJs": true,
+    // The node:test unit test imports its subject with an explicit .ts
+    // extension (required by Node's type stripping); noEmit is set by the
+    // generated SvelteKit tsconfig, so this stays type-check-only.
+    "allowImportingTsExtensions": true,
     "checkJs": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,

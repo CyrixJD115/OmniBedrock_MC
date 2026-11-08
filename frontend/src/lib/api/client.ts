@@ -40,7 +40,7 @@ export async function getDownloadToken(force = false): Promise<string> {
   if (!force && downloadToken && Date.now() < downloadTokenExpiresAt) return downloadToken;
   const res = await fetch(`${API_BASE}/auth/download-token`, {
     method: 'POST',
-    headers: rawHeaders({ 'Content-Type': 'application/json' }),
+    headers: rawHeaders({ 'Content-Type': 'application/json' }, '/auth/download-token'),
   });
   if (!res.ok) throw new Error(`API Error ${res.status}: ${await res.text()}`);
   const body = (await res.json()) as { token: string; expires_in: number };
@@ -122,6 +122,13 @@ function handleSessionExpired() {
   }
 }
 
+/** Panel-level endpoints that must never carry the X-Instance scope: a stale
+ * id (instance renamed or deleted elsewhere) used to 404 the session check
+ * itself and logout-loop every browser that held it. */
+function isUnscoped(path: string): boolean {
+  return path.startsWith('/auth/') || path === '/settings/panel' || path === '/instances';
+}
+
 /** Scope every request (and instance-aware WS URLs) to one instance. */
 export function setInstance(id: string) {
   activeInstance = id;
@@ -131,11 +138,12 @@ export function getInstance(): string {
   return activeInstance;
 }
 
-/** Headers for raw (non-JSON) fetches: auth + active-instance scoping. */
-export function rawHeaders(extra: Record<string, string> = {}): Record<string, string> {
+/** Headers for raw (non-JSON) fetches: auth + active-instance scoping. Pass
+ * the API path (no /api/v1 prefix) to opt instance-unscoped endpoints out. */
+export function rawHeaders(extra: Record<string, string> = {}, apiPath = ''): Record<string, string> {
   const headers: Record<string, string> = { ...extra };
   if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
-  if (activeInstance) headers['X-Instance'] = activeInstance;
+  if (activeInstance && !isUnscoped(apiPath)) headers['X-Instance'] = activeInstance;
   return headers;
 }
 
@@ -149,7 +157,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (authToken) {
     headers['Authorization'] = `Bearer ${authToken}`;
   }
-  if (activeInstance) {
+  if (activeInstance && !isUnscoped(path)) {
     headers['X-Instance'] = activeInstance;
   }
 

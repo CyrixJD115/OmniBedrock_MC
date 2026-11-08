@@ -6,7 +6,8 @@
   import { detectLevel } from '$lib/console';
   import { currentUser, authToken, userPermissions } from '$stores/auth';
   import { onMount, onDestroy } from 'svelte';
-  import { api, getToken, setToken } from '$lib/api/client';
+  import { api, getToken, setToken, setInstance } from '$lib/api/client';
+  import { fallbackInstanceId } from '$lib/instanceScope';
   import { wsManager } from '$lib/websocket';
   import { addToast } from '$stores/toast';
   import { page } from '$app/stores';
@@ -100,6 +101,18 @@
     let panel: { login_enabled: boolean } | null = null;
     try { panel = await api.getPanelSettings(); } catch { /* backend still starting */ }
     loginDisabled = panel?.login_enabled === false;
+
+    // Reconcile the persisted instance scope BEFORE the session check: a
+    // selection left pointing at a renamed/deleted instance must be reset to
+    // a scope that exists (loadInstances applies fallbackInstanceId()) so it
+    // cannot poison boot; a failed listing falls back to 'default' outright.
+    try {
+      await loadInstances();
+    } catch {
+      const scope = fallbackInstanceId($activeInstanceId, []);
+      activeInstanceId.set(scope);
+      setInstance(scope);
+    }
 
     const savedToken = typeof localStorage !== 'undefined' ? localStorage.getItem('omb_token') || '' : '';
     const savedUser = typeof localStorage !== 'undefined' ? localStorage.getItem('omb_user') || '' : '';

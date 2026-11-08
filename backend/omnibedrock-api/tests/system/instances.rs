@@ -6,6 +6,76 @@ use crate::harness::{FAKE, call, call_instance, call_text, state, state_with_con
 use axum::http::StatusCode;
 use serde_json::json;
 
+/// A stale X-Instance header (instance renamed or deleted elsewhere) must not
+/// 404 the panel-level endpoints the browser session depends on: the instance
+/// list, and /auth/me — the identity call whose persistent 404 used to wipe
+/// the saved token and logout-loop every client that held the old id.
+#[tokio::test]
+async fn instance_list_and_identity_ignore_unknown_x_instance() {
+    let (_dir, s, app, token) = state().await;
+    let (code, body) = call_instance(
+        &app,
+        "GET",
+        "/api/v1/instances",
+        Some(&token),
+        Some("ghost-instance"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{body}");
+    assert_eq!(body.as_array().unwrap().len(), 1);
+    assert_eq!(body[0]["id"], "default");
+    let (code, body) = call_instance(
+        &app,
+        "GET",
+        "/api/v1/auth/me",
+        Some(&token),
+        Some("ghost-instance"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{body}");
+    assert_eq!(body["username"], "test-owner", "{body}");
+    s.shutdown.cancel();
+    s.instances.shutdown_all().await;
+}
+
+/// Genuinely instance-scoped routes still reject an unknown X-Instance scope
+/// with a machine-readable 404 detail naming the id.
+#[tokio::test]
+async fn instance_scoped_route_404s_on_unknown_x_instance() {
+    let (_dir, s, app, token) = state().await;
+    let (code, body) = call_instance(
+        &app,
+        "GET",
+        "/api/v1/server/status",
+        Some(&token),
+        Some("ghost-instance"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::NOT_FOUND, "{body}");
+    assert!(
+        body["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains("ghost-instance")),
+        "{body}"
+    );
+    // A valid scope keeps the same route working.
+    let (code, body) = call_instance(
+        &app,
+        "GET",
+        "/api/v1/server/status",
+        Some(&token),
+        Some("default"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{body}");
+    s.shutdown.cancel();
+    s.instances.shutdown_all().await;
+}
+
 #[tokio::test]
 async fn docker_extra_mounts_are_opt_in() {
     // Production default: bind mounts are refused outright, even for the

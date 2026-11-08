@@ -19,6 +19,35 @@ use super::helpers::{data_response, success, value_string};
 use super::state::AppState;
 use super::upload::upload_addons;
 
+/// True for routes whose handlers operate on the `X-Instance`-scoped instance
+/// (server runtime, console, players, properties, worlds, files, addons,
+/// store, backups, broadcaster, and per-instance server settings). Panel-level
+/// routes — auth, identity, roles, panel settings, the instance registry
+/// itself, audit, host — never touch it, so an unknown id must not 404 them:
+/// a browser holding a renamed/deleted instance used to lose its whole
+/// session to this check (the identity call the login screen validates with
+/// returned 404 and the client wiped its token, forever).
+fn instance_scoped(segments: &[&str]) -> bool {
+    match segments.first().copied() {
+        Some("settings") => segments.get(1) == Some(&"server"),
+        Some(first) => matches!(
+            first,
+            "server"
+                | "console"
+                | "performance"
+                | "players"
+                | "properties"
+                | "worlds"
+                | "files"
+                | "addons"
+                | "store"
+                | "backups"
+                | "broadcaster"
+        ),
+        None => false,
+    }
+}
+
 pub(super) async fn dispatch(
     State(state): State<AppState>,
     Path(path): Path<String>,
@@ -169,9 +198,18 @@ pub(super) async fn dispatch(
     } else {
         state.auth.resolve_user(header_token.as_deref()).await?
     };
-    let svc = state
-        .resolve_instance(instance_id.as_deref(), &user)
-        .await?;
+    // Resolve the scoped instance only for routes that actually consume it
+    // (`instance_scoped`): strict 404 on an unknown id belongs there alone.
+    // Panel-level endpoints resolve the always-present default instead, so a
+    // stale X-Instance header can no longer break auth, identity, or the
+    // instance list itself.
+    let svc = if instance_scoped(&segments) {
+        state
+            .resolve_instance(instance_id.as_deref(), &user)
+            .await?
+    } else {
+        state.resolve_instance(None, &user).await?
+    };
     let result =
         dispatch_authenticated(&state, &svc, &user, &method, &segments, &query, &body).await?;
     // Never include passwords, JWTs, or full edited documents in the audit trail.

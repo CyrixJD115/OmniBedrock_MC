@@ -1,6 +1,7 @@
 import { writable, derived, get } from 'svelte/store';
 import { api, setInstance } from '$lib/api/client';
 import { persisted } from '$lib/persisted';
+import { fallbackInstanceId } from '$lib/instanceScope';
 import { wsManager } from '$lib/websocket';
 import type { Instance, HostInfo } from '$types/index';
 
@@ -17,14 +18,9 @@ export const activeInstance = derived(
 export async function loadInstances(): Promise<Instance[]> {
   const list = await api.listInstances();
   instances.set(list);
-  const current = get(activeInstanceId);
-  if (!list.some((i) => i.id === current)) {
-    const fallback = list.find((i) => i.id === 'default')?.id ?? list[0]?.id ?? 'default';
-    activeInstanceId.set(fallback);
-    setInstance(fallback);
-  } else {
-    setInstance(current);
-  }
+  const scope = fallbackInstanceId(get(activeInstanceId), list);
+  if (scope !== get(activeInstanceId)) activeInstanceId.set(scope);
+  setInstance(scope);
   return list;
 }
 
