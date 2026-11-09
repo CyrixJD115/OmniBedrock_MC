@@ -7,7 +7,6 @@
   import { currentUser, authToken, userPermissions } from '$stores/auth';
   import { onMount, onDestroy } from 'svelte';
   import { api, getToken, setToken, setInstance } from '$lib/api/client';
-  import { fallbackInstanceId } from '$lib/instanceScope';
   import { wsManager } from '$lib/websocket';
   import { addToast } from '$stores/toast';
   import { page } from '$app/stores';
@@ -102,24 +101,28 @@
     try { panel = await api.getPanelSettings(); } catch { /* backend still starting */ }
     loginDisabled = panel?.login_enabled === false;
 
-    // Reconcile the persisted instance scope BEFORE the session check: a
-    // selection left pointing at a renamed/deleted instance must be reset to
-    // a scope that exists (loadInstances applies fallbackInstanceId()) so it
-    // cannot poison boot; a failed listing falls back to 'default' outright.
-    try {
-      await loadInstances();
-    } catch {
-      const scope = fallbackInstanceId($activeInstanceId, []);
-      activeInstanceId.set(scope);
-      setInstance(scope);
-    }
-
+    // Restore the saved credentials BEFORE any authenticated fetch: the
+    // instance listing used to run unauthenticated here, 401, and its failure
+    // handler reset the persisted instance scope to 'default' — clobbering
+    // the user's selection on every page reload.
     const savedToken = typeof localStorage !== 'undefined' ? localStorage.getItem('omb_token') || '' : '';
     const savedUser = typeof localStorage !== 'undefined' ? localStorage.getItem('omb_user') || '' : '';
-
     if (savedToken) {
       setToken(savedToken);
       authToken.set(savedToken);
+    }
+
+    // Reconcile the persisted instance scope against the real list: a
+    // selection pointing at a renamed/deleted instance must land on a scope
+    // that exists (loadInstances applies fallbackInstanceId()). When the
+    // listing fails (backend still booting) the persisted scope is KEPT —
+    // the client already sends it as X-Instance, and post-auth boot()
+    // reconciles again once the list is actually available.
+    try {
+      await loadInstances();
+    } catch { /* backend still starting — keep the persisted scope */ }
+
+    if (savedToken) {
       if (savedUser) {
         try {
           currentUser.set(JSON.parse(savedUser));
