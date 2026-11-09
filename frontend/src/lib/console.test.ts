@@ -7,7 +7,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { collapseRuns, type FeedLine } from './console.ts';
+import { collapseKey, collapseRuns, type FeedLine } from './console.ts';
 import {
   broadcasterFeed,
   handleBroadcastEvent,
@@ -57,6 +57,38 @@ test('collapseRuns carries the newest timestamp and sequence of a run', () => {
   assert.equal(runs[0].timestamp, 1003);
   // Key stays pinned to the run's first line so the DOM node is reused.
   assert.equal(runs[0].id, 1);
+});
+
+test('collapseRuns ignores the leading timestamp stamp when merging', () => {
+  // The real jar stamps every line with the wall clock — byte-equality
+  // would never merge these, which is the collapser's whole purpose.
+  const runs = collapseRuns([
+    line(1, '[16:37:28 INFO] [Primary Session] Updated session!', 1),
+    line(2, '[16:37:59 INFO] [Primary Session] Updated session!', 2),
+    line(3, '[16:38:29 INFO] [Primary Session] Updated session!', 3),
+    line(4, '[16:38:59 INFO] [Primary Session] session failed!', 4),
+    line(5, '[16:39:29 INFO] [Primary Session] Updated session!', 5),
+  ]);
+  assert.deepEqual(
+    runs.map((r) => `${collapseKey(r.text)} x${r.count}`),
+    [
+      '[Primary Session] Updated session! x3',
+      '[Primary Session] session failed! x1',
+      '[Primary Session] Updated session! x1',
+    ],
+  );
+  // The rendered text stays the FIRST occurrence, stamp included.
+  assert.match(runs[0].text, /^\[16:37:28 INFO\]/);
+});
+
+test('collapseKey only strips genuine timestamp stamps', () => {
+  assert.equal(collapseKey('[16:36:57 INFO] hello'), 'hello');
+  assert.equal(collapseKey('[2026-11-09 13:24:42:608 INFO] hello'), 'hello');
+  assert.equal(collapseKey('[16:36:57 WARNING] hello'), 'hello');
+  // Bracketed message text without a timestamp+level stamp is untouched.
+  assert.equal(collapseKey('[Primary Session] Updated session!'), '[Primary Session] Updated session!');
+  assert.equal(collapseKey('[not-a-time INFO] x'), '[not-a-time INFO] x');
+  assert.equal(collapseKey('16:36:57 INFO hello'), '16:36:57 INFO hello');
 });
 
 test('collapseRuns recomputes over any slice (freeze boundaries)', () => {

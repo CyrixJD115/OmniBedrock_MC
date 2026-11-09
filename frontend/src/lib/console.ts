@@ -85,19 +85,40 @@ export interface CollapsedLine extends FeedLine {
 }
 
 /**
+ * The collapse identity of a log line: the line text with a leading
+ * timestamp+level stamp stripped. Broadcaster and BDS stamp every line
+ * (`[16:36:57 INFO] …`, `[2026-11-09 13:24:42:608 INFO] …`), so raw
+ * byte-equality would never merge the periodic "Updated session!" spam the
+ * collapser exists for — the message body is what makes two lines "the
+ * same". Only a genuine timestamp-stamp prefix is stripped; bracketed
+ * message text is left alone.
+ */
+const TIMESTAMP_STAMP_PREFIX =
+  /^\[(?:\d{4}-\d{2}-\d{2}[ ])?\d{1,2}:\d{2}:\d{2}(?::\d{1,3})?\s+(?:INFO|WARN(?:ING)?|ERROR|ERR|DEBUG|TRACE|FATAL|LOCAL)\]\s?/;
+
+export function collapseKey(text: string): string {
+  return text.replace(TIMESTAMP_STAMP_PREFIX, '');
+}
+
+/**
  * Collapse consecutive identical lines into runs, exactly the terminal
  * compaction users expect: repeated output ([Primary Session] Updated
  * session! every 30s, heartbeat spam) renders once with a ×N badge, and any
  * different line starts a new run — so the same text can reappear later as
- * its own collapsed run. Operates on whatever list it is given (live,
- * frozen, filtered), so runs are always recomputed from the actually
- * rendered slice and never split across freeze boundaries.
+ * its own collapsed run. Identity ignores the leading timestamp stamp, so
+ * per-line clock stamps do not defeat the merge. Operates on whatever list
+ * it is given (live, frozen, filtered), so runs are always recomputed from
+ * the actually rendered slice and never split across freeze boundaries.
  */
 export function collapseRuns(lines: FeedLine[]): CollapsedLine[] {
   const out: CollapsedLine[] = [];
   for (const line of lines) {
     const last = out[out.length - 1];
-    if (last && last.text === line.text && last.level === line.level) {
+    if (
+      last &&
+      last.level === line.level &&
+      collapseKey(last.text) === collapseKey(line.text)
+    ) {
       last.count++;
       // The run carries the most recent occurrence: timestamps-on shows the
       // latest instant, and the sequence tracks the newest line for cursors.
