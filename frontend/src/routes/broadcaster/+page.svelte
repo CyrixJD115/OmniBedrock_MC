@@ -5,15 +5,15 @@
   import { addToast } from '$stores/toast';
   import { userPermissions } from '$stores/auth';
   import { activeInstance } from '$stores/instances';
-  import { createConsoleFeed, detectLevel, nearBottom, stickToBottom } from '$lib/console';
+  import { createConsoleFeed, detectLevel } from '$lib/console';
   import type { FeedLine } from '$lib/console';
+  import Terminal from '$lib/components/terminal/Terminal.svelte';
   import type { BroadcasterStatus, DeviceCode } from '$types/index';
   import { normalize, overlayModel, visualDefaults } from '$lib/broadcaster/configModel';
   import type { BcVisualConfig } from '$lib/broadcaster/configModel';
   import { load as yamlLoad, dump as yamlDump } from 'js-yaml';
   import {
-    Radio, Send, Save, Upload, RefreshCw, Settings2, FileText,
-    ArrowDown, Eraser, FileCode
+    Radio, Save, Upload, RefreshCw, Settings2, FileText
   } from '@lucide/svelte';
   import StatusBanners from '$lib/components/broadcaster/StatusBanners.svelte';
   import ProcessCard from '$lib/components/broadcaster/ProcessCard.svelte';
@@ -29,7 +29,6 @@
   const feed = createConsoleFeed(500);
   let lines = $state<FeedLine[]>([]);
   feed.subscribe(v => { lines = v; });
-  let input = $state('');
   let configText = $state('');
   let configDirty = $state(false);
   let configMode = $state<'visual' | 'raw'>('visual');
@@ -40,7 +39,6 @@
   let newAccount = $state('');
   let screenshotAccount = $state('main');
   let previewUrl = $state('');
-  let terminalEl: HTMLDivElement;
   let screenshotInput = $state<HTMLInputElement | undefined>(undefined);
   let poll: ReturnType<typeof setInterval>;
   const unsubs: Array<() => void> = [];
@@ -53,31 +51,6 @@
   function saveSetting(key: string, value: unknown) {
     if (typeof localStorage !== 'undefined') localStorage.setItem(key, JSON.stringify(value));
   }
-
-  // Console autoscroll: only pin to the bottom when the reader is already
-  // there (or the toggle is on and they haven't scrolled away), so a replay
-  // or a stray log line never drags the viewport around.
-  let autoScroll = $state(loadSetting('omb_bc_console_scroll', true));
-  let stick = $state(true);
-  $effect(() => { saveSetting('omb_bc_console_scroll', autoScroll); });
-
-  function onTerminalScroll() {
-    if (!terminalEl) return;
-    stick = nearBottom(terminalEl);
-  }
-
-  function jumpToLatest() {
-    stick = true;
-    if (terminalEl) stickToBottom(terminalEl);
-  }
-
-  // Runs after the DOM update, so scrollHeight is final and a replayed batch
-  // settles with one scroll instead of one per line.
-  $effect(() => {
-    void lines.length;
-    if (!autoScroll || !stick || !terminalEl) return;
-    stickToBottom(terminalEl);
-  });
 
   const canManage = $derived($userPermissions.includes('BROADCASTER_MANAGE'));
 
@@ -134,7 +107,6 @@
   async function loadAll() {
     for (const unsub of unsubs.splice(0)) unsub();
     feed.clear();
-    stick = true;
     // The WebSocket manager appends a fresh short-lived download token.
     const instance = $activeInstance?.id || 'default';
     const query = `instance=${encodeURIComponent(instance)}`;
@@ -215,10 +187,7 @@
     busy = '';
   }
 
-  async function send() {
-    const cmd = input.trim();
-    if (!cmd) return;
-    input = '';
+  async function send(cmd: string) {
     pushLine(`> ${cmd}`, 'local');
     try { await api.sendBroadcasterCommand(cmd); } catch (e: any) {
       addToast(`Command failed: ${e.message}`, 'error');
@@ -306,56 +275,17 @@
     <AccountsCard accounts={status?.accounts ?? []} canManage={canManage} bind:newAccount onaction={accountAction} />
   </div>
 
-  <!-- Console -->
-  <div class="card">
-    <div class="flex items-center justify-between flex-wrap gap-2">
-      <h2 class="card-header flex items-center gap-2"><FileCode size={13} /> Console</h2>
-      <div class="flex items-center gap-3">
-        <span class="text-[10px] font-mono text-deep-400">{lines.length} lines</span>
-        <label class="flex items-center gap-1.5 text-xs text-deep-400 uppercase tracking-wider cursor-pointer select-none">
-          <input type="checkbox" bind:checked={autoScroll} class="accent-bedrock-500" />
-          Scroll
-        </label>
-        <button onclick={() => feed.clear()} class="btn-ghost p-1.5" title="Clear view (backend history keeps flowing)">
-          <Eraser size={12} />
-        </button>
-        <button onclick={refresh} class="btn-ghost p-1.5" title="Refresh"><RefreshCw size={12} /></button>
-      </div>
-    </div>
-    <div class="relative">
-      <div bind:this={terminalEl} onscroll={onTerminalScroll}
-           class="terminal-container h-72 md:h-96 overflow-y-auto p-4 font-terminal text-base leading-relaxed terminal-surface border-2 border-deep-600/50">
-        {#each lines as line (line.id)}
-          <div class={"terminal-line leading-snug " + (
-            line.level === 'error' ? 'terminal-line-error' :
-            line.level === 'warn' ? 'terminal-line-warn' :
-            line.level === 'local' ? 'terminal-line-local' :
-            'terminal-line-info'
-          )}>{line.text}</div>
-        {/each}
-        {#if lines.length === 0}
-          <div class="terminal-line-plain opacity-60 font-mono">&gt; Broadcaster output appears here…</div>
-        {/if}
-      </div>
-      {#if !stick && lines.length > 0}
-        <button onclick={jumpToLatest}
-                class="absolute bottom-4 right-4 z-10 flex items-center gap-1.5 px-3 py-1.5 text-[11px] uppercase tracking-wider
-                       bg-deep-900/95 border-2 border-bedrock-500/60 text-bedrock-300 hover:text-strong hover:border-bedrock-400 shadow-block transition-colors">
-          <ArrowDown size={12} /> Jump to latest
-        </button>
-      {/if}
-    </div>
-    {#if canManage}
-      <div class="flex gap-2 mt-3">
-        <input type="text" bind:value={input} onkeydown={(e) => e.key === 'Enter' && send()}
-               placeholder="accounts list · restart · dumpsession · stop…"
-               class="input flex-1 font-terminal text-base tracking-wider" />
-        <button onclick={send} class="btn-primary flex items-center gap-2 text-xs">
-          <Send size={14} /> Send
-        </button>
-      </div>
-    {/if}
-  </div>
+  <!-- Console: same shared terminal widget as the Console page -->
+  <Terminal
+    title="broadcaster-console"
+    heightKey="broadcaster"
+    {lines}
+    emptyHint="> Broadcaster output appears here…"
+    onclear={() => feed.clear()}
+    onsend={send}
+    canSend={canManage}
+    sendPlaceholder="accounts list · restart · dumpsession · stop…"
+  />
 
   <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
     <!-- Config editor -->
