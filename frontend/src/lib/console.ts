@@ -78,6 +78,38 @@ function escapeRegex(s: string): string {
 /** A console line with a client-assigned id that never changes. */
 export type FeedLine = ConsoleLine & { id: number };
 
+/** A run of consecutive identical lines (the terminal collapse view). */
+export interface CollapsedLine extends FeedLine {
+  /** How many consecutive raw lines this run covers (1 for a single line). */
+  count: number;
+}
+
+/**
+ * Collapse consecutive identical lines into runs, exactly the terminal
+ * compaction users expect: repeated output ([Primary Session] Updated
+ * session! every 30s, heartbeat spam) renders once with a ×N badge, and any
+ * different line starts a new run — so the same text can reappear later as
+ * its own collapsed run. Operates on whatever list it is given (live,
+ * frozen, filtered), so runs are always recomputed from the actually
+ * rendered slice and never split across freeze boundaries.
+ */
+export function collapseRuns(lines: FeedLine[]): CollapsedLine[] {
+  const out: CollapsedLine[] = [];
+  for (const line of lines) {
+    const last = out[out.length - 1];
+    if (last && last.text === line.text && last.level === line.level) {
+      last.count++;
+      // The run carries the most recent occurrence: timestamps-on shows the
+      // latest instant, and the sequence tracks the newest line for cursors.
+      if (line.timestamp) last.timestamp = line.timestamp;
+      if (line.sequence !== undefined) last.sequence = line.sequence;
+    } else {
+      out.push({ ...line, count: 1 });
+    }
+  }
+  return out;
+}
+
 /**
  * A capped console line store with stable per-line keys.
  *

@@ -5,9 +5,17 @@
   import { addToast } from '$stores/toast';
   import { userPermissions } from '$stores/auth';
   import { activeInstance } from '$stores/instances';
-  import { createConsoleFeed, detectLevel } from '$lib/console';
-  import type { FeedLine } from '$lib/console';
+  import { detectLevel, type FeedLine } from '$lib/console';
   import Terminal from '$lib/components/terminal/Terminal.svelte';
+  import {
+    broadcasterFeed,
+    handleBroadcastEvent,
+    clearView as clearBroadcastView,
+    resumeSuffix,
+    isReconnect,
+    markLoaded,
+    resetFor,
+  } from '$lib/broadcaster/console.ts';
   import type { BroadcasterStatus, DeviceCode } from '$types/index';
   import { normalize, overlayModel, visualDefaults } from '$lib/broadcaster/configModel';
   import type { BcVisualConfig } from '$lib/broadcaster/configModel';
@@ -23,10 +31,9 @@
 
   let status = $state<BroadcasterStatus | null>(null);
   let codes = $state<Record<string, DeviceCode>>({});
-  // Capped feed with stable line keys and rAF batching: see createConsoleFeed.
-  // Without stable keys this console rebuilt its entire DOM for every incoming
-  // line once the cap was reached, which froze stop/restart until it caught up.
-  const feed = createConsoleFeed(500);
+  // Module-level feed: the view (and any Clear) survives tab switches; see
+  // $lib/broadcaster/console for the replay/resume bookkeeping.
+  const feed = broadcasterFeed;
   let lines = $state<FeedLine[]>([]);
   feed.subscribe(v => { lines = v; });
   let configText = $state('');
@@ -96,6 +103,10 @@
     feed.push(text, (level || detectLevel(text)) as FeedLine['level']);
   }
 
+  function instanceId(): string {
+    return $activeInstance?.id || 'default';
+  }
+
   async function refresh() {
     try {
       status = await api.getBroadcasterStatus();
@@ -106,14 +117,23 @@
   /** (Re)load everything for the active instance: console stream, status, config. */
   async function loadAll() {
     for (const unsub of unsubs.splice(0)) unsub();
-    feed.clear();
     // The WebSocket manager appends a fresh short-lived download token.
-    const instance = $activeInstance?.id || 'default';
-    const query = `instance=${encodeURIComponent(instance)}`;
+    const instance = instanceId();
+    // Switching to a different instance resets the view and its replay
+    // bookkeeping; returning to a page we were just on is a RECONNECT — the
+    // module-level feed already holds that view, so the socket resumes with
+    // after=<lastSeq> and the backend replays nothing (a cleared view stays
+    // cleared instead of resurrecting from the journal).
+    const fresh = !isReconnect(instance);
+    if (fresh) {
+      broadcasterFeed.clear();
+      resetFor(instance);
+    }
+    markLoaded(instance);
+    const query = `instance=${encodeURIComponent(instance)}${fresh ? '' : resumeSuffix(instance)}`;
     unsubs.push(wsManager.connect(`/api/v1/broadcaster/ws?${query}`, (data) => {
-      if (data.type === 'hello' && data.resumed === false) feed.clear();
-      else if (data.type === 'console') {
-        pushLine(data.line as string, data.level as string);
+      if (data.type === 'hello' || data.type === 'console') {
+        handleBroadcastEvent(instance, data);
       } else if (data.type === 'status') {
         if (status) status.status = data.status as BroadcasterStatus['status'];
         else refresh();
@@ -281,7 +301,7 @@
     heightKey="broadcaster"
     {lines}
     emptyHint="> Broadcaster output appears here…"
-    onclear={() => feed.clear()}
+    onclear={() => clearBroadcastView(instanceId())}
     onsend={send}
     canSend={canManage}
     sendPlaceholder="accounts list · restart · dumpsession · stop…"

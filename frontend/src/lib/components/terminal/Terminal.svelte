@@ -6,8 +6,8 @@
      feed store and the send handler; this component owns the rendering. -->
 <script lang="ts">
   import { Filter, ArrowUp, ArrowDown, Binary, Download, Trash2, Eraser, WrapText, Clock, Send } from '@lucide/svelte';
-  import { parseAnsi, sanitizeConsoleHtml, highlightMatches, matchesQuery, nearBottom, stickToBottom } from '$lib/console';
-  import type { FeedLine } from '$lib/console';
+  import { parseAnsi, sanitizeConsoleHtml, highlightMatches, matchesQuery, nearBottom, stickToBottom, collapseRuns } from '$lib/console';
+  import type { FeedLine, CollapsedLine } from '$lib/console';
 
   let {
     title,
@@ -85,7 +85,7 @@
   // Runs after the DOM update, so scrollHeight is final. While frozen the
   // rendered length never changes, so this fires but no-ops.
   $effect(() => {
-    void renderList.length;
+    void visibleRuns.length;
     if (!autoScroll || !stick || !terminalEl) return;
     stickToBottom(terminalEl);
   });
@@ -101,11 +101,15 @@
     return out;
   });
   // The view the user scrolls: frozen slices the UNFILTERED feed so nothing
-  // shifts while reading; live rendering applies the filter.
-  let visible = $derived(stick ? filtered : renderList);
+  // shifts while reading; live rendering applies the filter. Consecutive
+  // identical lines collapse into runs (×N badge) — computed from the
+  // actually rendered slice, so counts are always exact and never split
+  // across freeze boundaries. Match navigation walks runs, not raw lines.
+  let filteredRuns = $derived(collapseRuns(filtered));
+  let visibleRuns = $derived(stick ? filteredRuns : collapseRuns(renderList));
 
   let currentMatch = $state(-1);
-  let matchIds = $derived(stick ? filtered.map((f) => f.id) : []);
+  let matchIds = $derived(stick ? filteredRuns.map((f) => f.id) : []);
   let matchCount = $derived(matchIds.length);
 
   function navigateMatch(dir: -1 | 1) {
@@ -302,7 +306,7 @@
         ? 'whitespace-pre-wrap break-words'
         : 'whitespace-pre'}"
     >
-      {#each visible as f (f.id)}
+      {#each visibleRuns as f (f.id)}
         <div data-line-id={f.id}
              class={"leading-snug " + (
                f.level === 'error' ? 'terminal-line-error' :
@@ -311,10 +315,10 @@
                f.level === 'local' ? 'terminal-line-local' :
                'terminal-line-info'
              )}>
-          {#if timestamps && timeOf(f)}<span class="text-deep-600 select-none mr-2 text-[0.8em]">{timeOf(f)}</span>{/if}{@html renderLine(f.text)}
+          {#if timestamps && timeOf(f)}<span class="text-deep-600 select-none mr-2 text-[0.8em]">{timeOf(f)}</span>{/if}{@html renderLine(f.text)}{#if f.count > 1}<span class="run-badge" title="Same line repeated {f.count} times in a row">× {f.count}</span>{/if}
         </div>
       {/each}
-      {#if visible.length === 0}
+      {#if visibleRuns.length === 0}
         <div class="terminal-line-plain opacity-60 font-mono">
           {filterActive() ? '> No matches' : emptyHint}
         </div>
@@ -361,6 +365,18 @@
     background: rgb(var(--term-info) / 0.28);
     border-radius: 2px;
     outline: 1px solid rgb(var(--term-info) / 0.55);
+  }
+  .run-badge {
+    display: inline-block;
+    margin-left: 0.5rem;
+    padding: 0 0.375rem;
+    vertical-align: baseline;
+    font-size: 10px;
+    font-family: 'JetBrains Mono', 'VT323', monospace;
+    border-radius: 2px;
+    color: rgb(var(--bedrock-300));
+    background: rgb(var(--bedrock-500) / 0.12);
+    border: 1px solid rgb(var(--bedrock-500) / 0.35);
   }
   :global(.console-match-active) {
     background: rgb(var(--term-info) / 0.15);
