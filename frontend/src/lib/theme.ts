@@ -12,7 +12,7 @@
  * the two in sync).
  */
 import { derived } from 'svelte/store';
-import { persisted } from '$lib/persisted';
+import { persisted } from './persisted.ts';
 
 export type ThemeId =
   | 'cyan' | 'minecraft' | 'blue' | 'purple'
@@ -48,9 +48,7 @@ export const THEMES: ThemeMeta[] = [
   { id: 'rose', label: 'Rose', hint: 'Crimson bloom', swatch: ['#fb7185', '#e11d48'] },
   { id: 'pink', label: 'Pink', hint: 'Cherry blossom', swatch: ['#f472b6', '#db2777'] },
   { id: 'fuchsia', label: 'Fuchsia', hint: 'Dragon-egg purple', swatch: ['#e879f9', '#c026d3'] },
-  { id: 'purple', label: 'Purple', hint: 'End portal vibes', swatch: ['#a78bfa', '#7c3aed'] },
   { id: 'indigo', label: 'Indigo', hint: 'Deep dusk blue', swatch: ['#818cf8', '#4f46e5'] },
-  { id: 'blue', label: 'Blue', hint: 'Classic panel blue', swatch: ['#60a5fa', '#2563eb'] },
   { id: 'sky', label: 'Sky', hint: 'Open daylight blue', swatch: ['#38bdf8', '#0284c7'] },
   { id: 'teal', label: 'Teal', hint: 'Deep ocean', swatch: ['#2dd4bf', '#0d9488'] },
   { id: 'slate', label: 'Slate', hint: 'Stone, no color cast', swatch: ['#94a3b8', '#475569'] },
