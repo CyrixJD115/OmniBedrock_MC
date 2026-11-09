@@ -8,7 +8,20 @@
   import { setToken } from '$lib/api/client';
   import { currentUser, authToken as authTokenStore } from '$stores/auth';
   import { activeInstance } from '$stores/instances';
-  import { THEMES, THEME_MODES, theme, themeMode } from '$lib/theme';
+  import { THEMES, THEME_MODES, theme, themeMode, customAccent, uiDensity, uiFontScale, isHexColor } from '$lib/theme';
+
+  // Custom accent: the color input emits #rrggbb live while dragging.
+  // Seeded from the persisted accent so the picker reflects the saved choice.
+  let customHexInput = $state($customAccent);
+  function applyCustomAccent(hex: string) {
+    customHexInput = hex;
+    if (!isHexColor(hex)) return;
+    customAccent.set(hex.toLowerCase());
+    theme.set('custom');
+  }
+  function pickPreset() {
+    theme.set('custom');
+  }
 
   let s = $state<Record<string, unknown>>({});
   let backend = $state<BackendInfo | null>(null);
@@ -254,6 +267,66 @@
         <p class="text-[10px] text-deep-400 mt-2">
           Applies instantly across the panel and is remembered in this browser. “System” follows your OS setting.
         </p>
+      </div>
+      <div>
+        <p class="text-xs text-deep-300 uppercase tracking-wider mb-2">Custom accent</p>
+        <div class="flex flex-wrap items-center gap-3">
+          <input
+            type="color"
+            value={customHexInput}
+            oninput={(e) => applyCustomAccent((e.currentTarget as HTMLInputElement).value)}
+            class="w-10 h-10 cursor-pointer border-2 border-deep-600/50 bg-deep-900/40 rounded-sm p-0.5"
+            aria-label="Pick a custom accent color"
+          />
+          <input
+            class="input w-32 text-xs font-mono"
+            value={customHexInput}
+            onchange={(e) => applyCustomAccent((e.currentTarget as HTMLInputElement).value.trim())}
+            placeholder="#38bdf8"
+            aria-label="Custom accent hex"
+          />
+          <button onclick={pickPreset}
+                  aria-pressed={$theme === 'custom'}
+                  class={"text-xs uppercase tracking-wider font-semibold px-3 py-1.5 border-2 transition-colors " + ($theme === 'custom'
+                    ? 'border-bedrock-400 bg-bedrock-500/10 text-bedrock-300'
+                    : 'border-deep-600/50 text-deep-300 hover:border-deep-500')}>
+            Use color
+          </button>
+          <span class="text-[10px] text-deep-400">The whole accent ramp (buttons, highlights, glows) is derived from this one color.</span>
+        </div>
+      </div>
+      <div>
+        <p class="text-xs text-deep-300 uppercase tracking-wider mb-2">Density</p>
+        <div class="inline-flex border-2 border-deep-600/50 bg-deep-900/40 p-0.5 gap-0.5" role="group" aria-label="UI density">
+          <button onclick={() => uiDensity.set('comfortable')} aria-pressed={$uiDensity === 'comfortable'}
+                  class={"px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors " + ($uiDensity === 'comfortable'
+                    ? 'bg-bedrock-600 text-white' : 'text-deep-300 hover:bg-deep-700/60 hover:text-deep-100')}>
+            Comfortable
+          </button>
+          <button onclick={() => uiDensity.set('compact')} aria-pressed={$uiDensity === 'compact'}
+                  class={"px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors " + ($uiDensity === 'compact'
+                    ? 'bg-bedrock-600 text-white' : 'text-deep-300 hover:bg-deep-700/60 hover:text-deep-100')}>
+            Compact
+          </button>
+        </div>
+      </div>
+      <div>
+        <p class="text-xs text-deep-300 uppercase tracking-wider mb-2">Interface size</p>
+        <div class="flex items-center gap-3">
+          <input
+            type="range"
+            min="90"
+            max="120"
+            step="5"
+            value={Math.round($uiFontScale * 100)}
+            oninput={(e) => uiFontScale.set(Number((e.currentTarget as HTMLInputElement).value) / 100)}
+            class="w-56 accent-bedrock-500"
+            aria-label="Interface font size"
+          />
+          <span class="text-xs font-mono text-deep-300 w-10">{Math.round($uiFontScale * 100)}%</span>
+          <button onclick={() => uiFontScale.set(1)} class="btn-ghost text-xs px-2 py-1" title="Reset to 100%">Reset</button>
+        </div>
+        <p class="text-[10px] text-deep-400 mt-2">Scales every panel surface; combines with density.</p>
       </div>
     </div>
   </div>

@@ -9,7 +9,7 @@
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
   import {
     Save, RotateCw, FileDown, FileUp,
-    Upload as UploadIcon, Loader2,
+    Upload as UploadIcon, Loader2, Puzzle, Blocks,
   } from '@lucide/svelte';
   import {
     ALL_WORLDS, PackOrders,
@@ -28,6 +28,7 @@
   import VersionEditorModal from '$lib/components/addons/VersionEditorModal.svelte';
   import UuidEditorModal from '$lib/components/addons/UuidEditorModal.svelte';
   import RenameModal from '$lib/components/addons/RenameModal.svelte';
+  import PluginsCard from '$lib/components/plugins/PluginsCard.svelte';
 
   // ─── state ────────────────────────────────────────────────────────────────
   let worlds = $state<string[]>([]);
@@ -186,6 +187,25 @@
   }
 
   const canManage = $derived($userPermissions.includes('ADDONS_MANAGE'));
+
+  // Mods page top level: pack organizer vs the Endstone plugin manager.
+  // The plugins sub-tab only exists on endstone-backend instances held by a
+  // PLUGIN_MANAGE user (enforced server-side as well).
+  let modTab = $state<'addons' | 'plugins'>('addons');
+  const pluginsAvailable = $derived(
+    $activeInstance?.backend === 'endstone' && $userPermissions.includes('PLUGIN_MANAGE')
+  );
+  $effect(() => {
+    // Losing the active instance's backend (or the permission) must not
+    // strand the user on a hidden tab.
+    if (!pluginsAvailable && modTab === 'plugins') modTab = 'addons';
+  });
+  function modTabClass(tab: 'addons' | 'plugins'): string {
+    return 'flex items-center gap-1.5 px-3 py-1.5 text-xs uppercase tracking-wider font-semibold transition-all border-b-2 ' +
+      (modTab === tab
+        ? 'border-bedrock-400 text-bedrock-300 bg-bedrock-500/10'
+        : 'border-transparent text-deep-400 hover:text-deep-200');
+  }
 
   // World pack orders: activation state + debounced autosave engine.
   const orders = new PackOrders({
@@ -615,11 +635,11 @@
 
 <!-- main layout: shifts left when drawer is open -->
 <div class="transition-[padding] duration-200 {previewAddon ? 'lg:pr-96' : ''}"
-     role="region" aria-label="Addon organizer; drop archives here to upload"
-     ondragover={onFileDragOver}
-     ondragleave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) dragFilesOver = false; }}
-     ondrop={onFileDrop}>
-  {#if dragFilesOver && canManage}
+     role="region" aria-label="Mod organizer; drop archives here to upload"
+     ondragover={modTab === 'addons' ? onFileDragOver : undefined}
+     ondragleave={modTab === 'addons' ? (e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) dragFilesOver = false; } : undefined}
+     ondrop={modTab === 'addons' ? onFileDrop : undefined}>
+  {#if modTab === 'addons' && dragFilesOver && canManage}
     <div class="fixed inset-0 z-[70] flex items-center justify-center bg-deep-950/80 border-4 border-dashed border-bedrock-400 pointer-events-none">
       <div class="text-center">
         <UploadIcon size={40} class="text-bedrock-400 mx-auto mb-3 animate-pulse" />
@@ -632,9 +652,20 @@
     <!-- header -->
     <div class="flex items-center justify-between">
       <div>
-        <h1 class="text-lg font-bold text-strong uppercase tracking-widest">Addon Organizer</h1>
+        <h1 class="text-lg font-bold text-strong uppercase tracking-widest">Mods</h1>
         <div class="pixel-divider mt-2 w-40"></div>
+        <div class="flex gap-1 mt-3">
+          <button onclick={() => (modTab = 'addons')} class={modTabClass('addons')} aria-selected={modTab === 'addons'} role="tab">
+            <Puzzle size={13} /> Addons
+          </button>
+          {#if pluginsAvailable}
+            <button onclick={() => (modTab = 'plugins')} class={modTabClass('plugins')} aria-selected={modTab === 'plugins'} role="tab">
+              <Blocks size={13} /> Endstone Plugins
+            </button>
+          {/if}
+        </div>
       </div>
+      {#if modTab === 'addons'}
       <div class="flex items-center gap-2">
         {#if orders.orderDirty && canManage}
           <span class="text-yellow-400 text-xs uppercase tracking-wider animate-pulse">Unsaved</span>
@@ -666,8 +697,10 @@
           </button>
         {/if}
       </div>
+      {/if}
     </div>
 
+    {#if modTab === 'addons'}
     <!-- world selector -->
     <div class="flex flex-wrap items-center gap-3">
       <label for="addon-world" class="text-deep-400 text-xs uppercase tracking-wider">World</label>
@@ -809,6 +842,10 @@
           {/each}
         </div>
       </div>
+    {/if}
+
+    {:else if pluginsAvailable}
+      <PluginsCard instanceId={$activeInstance?.id ?? 'default'} />
     {/if}
   </div>
 </div>

@@ -5,7 +5,7 @@
   import { instances, activeInstanceId, activeInstance, switchInstance } from '$stores/instances';
   import { themeMode, cycleMode } from '$lib/theme';
   import {
-    LayoutDashboard, Terminal, FileCode, HardDrive, Package, Globe,
+    LayoutDashboard, Terminal, FileCode, HardDrive, Package, Globe, Puzzle,
     Users, UserCog, FileText, BarChart3, Settings, ChevronLeft, Server, Power, LogOut,
     UserCircle, Shield, ClipboardList, Radio, Store, Sun, Moon, Monitor, Layers, ChevronsUpDown, Check
   } from '@lucide/svelte';
@@ -13,23 +13,45 @@
 
   let { sidebarOpen, onlogout }: { sidebarOpen: boolean; onlogout?: () => void } = $props();
 
-  const navItems = [
-    { href: '/', icon: LayoutDashboard, label: 'Dashboard', perm: '' },
-    { href: '/instances', icon: Layers, label: 'Instances', perm: '' },
-    { href: '/console', icon: Terminal, label: 'Console', perm: 'CONSOLE_VIEW' },
-    { href: '/properties', icon: FileCode, label: 'Properties', perm: 'PROPERTIES_VIEW' },
-    { href: '/backups', icon: HardDrive, label: 'Backups', perm: 'BACKUPS_VIEW' },
-    { href: '/addons', icon: Package, label: 'Addons', perm: 'ADDONS_VIEW' },
-    { href: '/store', icon: Store, label: 'Store', perm: 'STORE_VIEW' },
-    { href: '/worlds', icon: Globe, label: 'Worlds', perm: '' },
-    { href: '/players', icon: Users, label: 'Players', perm: 'PLAYERS_VIEW' },
-    { href: '/broadcaster', icon: Radio, label: 'Broadcaster', perm: 'BROADCASTER_VIEW' },
-    { href: '/users', icon: UserCog, label: 'Users', perm: 'USERS_VIEW' },
-    { href: '/roles', icon: Shield, label: 'Roles', perm: 'USERS_VIEW' },
-    { href: '/files', icon: FileText, label: 'Files', perm: 'FILES_VIEW' },
-    { href: '/performance', icon: BarChart3, label: 'Performance', perm: '' },
-    { href: '/audit', icon: ClipboardList, label: 'Audit', perm: 'AUDIT_VIEW' },
-    { href: '/settings', icon: Settings, label: 'Settings', perm: 'SETTINGS_VIEW' },
+  // Grouped nav: three labeled sections instead of a flat 15-item list.
+  // Groups whose items are all permission-hidden collapse away entirely.
+  interface NavItem {
+    href: string;
+    icon: typeof LayoutDashboard;
+    label: string;
+    perm: string;
+  }
+  const navGroups: { label: string; items: NavItem[] }[] = [
+    {
+      label: 'Instance',
+      items: [
+        { href: '/', icon: LayoutDashboard, label: 'Dashboard', perm: '' },
+        { href: '/instances', icon: Layers, label: 'Instances', perm: '' },
+        { href: '/console', icon: Terminal, label: 'Console', perm: 'CONSOLE_VIEW' },
+        { href: '/properties', icon: FileCode, label: 'Properties', perm: 'PROPERTIES_VIEW' },
+        { href: '/files', icon: FileText, label: 'Files', perm: 'FILES_VIEW' },
+        { href: '/backups', icon: HardDrive, label: 'Backups', perm: 'BACKUPS_VIEW' },
+        { href: '/players', icon: Users, label: 'Players', perm: 'PLAYERS_VIEW' },
+        { href: '/performance', icon: BarChart3, label: 'Performance', perm: '' },
+      ],
+    },
+    {
+      label: 'Content',
+      items: [
+        { href: '/addons', icon: Puzzle, label: 'Mods', perm: 'ADDONS_VIEW' },
+        { href: '/store', icon: Store, label: 'Store', perm: 'STORE_VIEW' },
+        { href: '/worlds', icon: Globe, label: 'Worlds', perm: '' },
+        { href: '/broadcaster', icon: Radio, label: 'Broadcaster', perm: 'BROADCASTER_VIEW' },
+      ],
+    },
+    {
+      label: 'Panel',
+      items: [
+        { href: '/users', icon: UserCog, label: 'Users & Roles', perm: 'USERS_VIEW' },
+        { href: '/audit', icon: ClipboardList, label: 'Audit', perm: 'AUDIT_VIEW' },
+        { href: '/settings', icon: Settings, label: 'Settings', perm: 'SETTINGS_VIEW' },
+      ],
+    },
   ];
 
   let currentPath = $state('/');
@@ -114,14 +136,22 @@
   {/if}
 
   <nav class="flex-1 overflow-y-auto p-2 space-y-0.5">
-    {#each navItems as item}
-      {#if canAccess(item.perm)}
-        <a href={item.href} class={navClass(item.href)} title={sidebarOpen ? undefined : item.label}>
-          <item.icon size={16} class="shrink-0" />
-          {#if sidebarOpen}
-            <span>{item.label}</span>
-          {/if}
-        </a>
+    {#each navGroups as group}
+      {@const visible = group.items.filter((item) => canAccess(item.perm))}
+      {#if visible.length > 0}
+        {#if sidebarOpen}
+          <p class="px-3 pt-2 pb-1 text-[9px] uppercase tracking-[0.2em] text-deep-500 font-bold select-none">{group.label}</p>
+        {:else}
+          <div class="my-1 border-t border-deep-700/40"></div>
+        {/if}
+        {#each visible as item}
+          <a href={item.href} class={navClass(item.href)} title={sidebarOpen ? undefined : item.label}>
+            <item.icon size={16} class="shrink-0" />
+            {#if sidebarOpen}
+              <span>{item.label}</span>
+            {/if}
+          </a>
+        {/each}
       {/if}
     {/each}
   </nav>

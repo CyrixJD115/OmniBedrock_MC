@@ -207,6 +207,86 @@
   --bedrock-200: 153 246 228; --bedrock-300: 13 148 136; --bedrock-400: 13 148 136;
   --bedrock-500: 13 148 136; --bedrock-600: 15 118 110; --bedrock-700: 17 94 89;
 }
+:root[data-theme='emerald'] {
+  --bedrock-50: 236 253 245; --bedrock-100: 209 250 229; --bedrock-200: 167 243 208;
+  --bedrock-300: 110 231 183; --bedrock-400: 52 211 153; --bedrock-500: 16 185 129;
+  --bedrock-600: 5 150 105; --bedrock-700: 4 120 87; --bedrock-800: 6 95 70;
+  --bedrock-900: 4 78 56; --bedrock-950: 2 44 34;
+}
+:root[data-theme='lime'] {
+  --bedrock-50: 247 254 231; --bedrock-100: 236 252 203; --bedrock-200: 217 249 157;
+  --bedrock-300: 190 242 100; --bedrock-400: 163 230 53; --bedrock-500: 132 204 22;
+  --bedrock-600: 101 163 13; --bedrock-700: 77 124 15; --bedrock-800: 63 98 18;
+  --bedrock-900: 41 66 16; --bedrock-950: 26 46 5;
+}
+:root[data-theme='amber'] {
+  --bedrock-50: 255 251 235; --bedrock-100: 254 243 199; --bedrock-200: 253 230 138;
+  --bedrock-300: 252 211 77; --bedrock-400: 251 191 36; --bedrock-500: 245 158 11;
+  --bedrock-600: 217 119 6; --bedrock-700: 180 83 9; --bedrock-800: 146 64 14;
+  --bedrock-900: 120 53 15; --bedrock-950: 69 26 3;
+}
+:root[data-theme='rose'] {
+  --bedrock-50: 255 241 242; --bedrock-100: 255 228 230; --bedrock-200: 254 205 211;
+  --bedrock-300: 253 164 175; --bedrock-400: 251 113 133; --bedrock-500: 244 63 94;
+  --bedrock-600: 225 29 72; --bedrock-700: 190 18 60; --bedrock-800: 159 18 57;
+  --bedrock-900: 136 19 55; --bedrock-950: 76 5 25;
+}
+:root[data-theme='fuchsia'] {
+  --bedrock-50: 253 244 255; --bedrock-100: 250 232 255; --bedrock-200: 245 208 254;
+  --bedrock-300: 240 171 252; --bedrock-400: 232 121 249; --bedrock-500: 217 70 239;
+  --bedrock-600: 192 38 211; --bedrock-700: 162 28 175; --bedrock-800: 134 25 143;
+  --bedrock-900: 112 26 117; --bedrock-950: 74 4 78;
+}
+:root[data-theme='sky'] {
+  --bedrock-50: 240 249 255; --bedrock-100: 224 242 254; --bedrock-200: 186 230 253;
+  --bedrock-300: 125 211 252; --bedrock-400: 56 189 248; --bedrock-500: 14 165 233;
+  --bedrock-600: 2 132 199; --bedrock-700: 3 105 161; --bedrock-800: 7 89 133;
+  --bedrock-900: 12 74 110; --bedrock-950: 8 47 73;
+}
+:root[data-theme='indigo'] {
+  --bedrock-50: 238 242 255; --bedrock-100: 224 231 255; --bedrock-200: 199 210 254;
+  --bedrock-300: 165 180 252; --bedrock-400: 129 140 248; --bedrock-500: 99 102 241;
+  --bedrock-600: 79 70 229; --bedrock-700: 67 56 202; --bedrock-800: 55 48 163;
+  --bedrock-900: 49 46 129; --bedrock-950: 30 27 75;
+}
+:root[data-theme='slate'] {
+  --bedrock-50: 248 250 252; --bedrock-100: 241 245 249; --bedrock-200: 226 232 240;
+  --bedrock-300: 203 213 225; --bedrock-400: 148 163 184; --bedrock-500: 100 116 139;
+  --bedrock-600: 71 85 105; --bedrock-700: 51 65 85; --bedrock-800: 30 41 59;
+  --bedrock-900: 15 23 42; --bedrock-950: 2 6 23;
+}
+:root[data-theme='emerald'][data-mode='light'] {
+  --bedrock-200: 167 243 208; --bedrock-300: 4 120 87; --bedrock-400: 5 150 105;
+  --bedrock-500: 16 185 129; --bedrock-600: 5 150 105; --bedrock-700: 4 120 87;
+}
+:root[data-theme='lime'][data-mode='light'] {
+  --bedrock-200: 217 249 157; --bedrock-300: 77 124 15; --bedrock-400: 101 163 13;
+  --bedrock-500: 132 204 22; --bedrock-600: 101 163 13; --bedrock-700: 77 124 15;
+}
+:root[data-theme='amber'][data-mode='light'] {
+  --bedrock-200: 253 230 138; --bedrock-300: 180 83 9; --bedrock-400: 217 119 6;
+  --bedrock-500: 245 158 11; --bedrock-600: 217 119 6; --bedrock-700: 180 83 9;
+}
+:root[data-theme='rose'][data-mode='light'] {
+  --bedrock-200: 254 205 211; --bedrock-300: 190 18 60; --bedrock-400: 225 29 72;
+  --bedrock-500: 244 63 94; --bedrock-600: 225 29 72; --bedrock-700: 190 18 60;
+}
+:root[data-theme='fuchsia'][data-mode='light'] {
+  --bedrock-200: 245 208 254; --bedrock-300: 162 28 175; --bedrock-400: 192 38 211;
+  --bedrock-500: 217 70 239; --bedrock-600: 192 38 211; --bedrock-700: 162 28 175;
+}
+:root[data-theme='sky'][data-mode='light'] {
+  --bedrock-200: 186 230 253; --bedrock-300: 3 105 161; --bedrock-400: 2 132 199;
+  --bedrock-500: 14 165 233; --bedrock-600: 2 132 199; --bedrock-700: 3 105 161;
+}
+:root[data-theme='indigo'][data-mode='light'] {
+  --bedrock-200: 199 210 254; --bedrock-300: 67 56 202; --bedrock-400: 79 70 229;
+  --bedrock-500: 99 102 241; --bedrock-600: 79 70 229; --bedrock-700: 67 56 202;
+}
+:root[data-theme='slate'][data-mode='light'] {
+  --bedrock-200: 226 232 240; --bedrock-300: 51 65 85; --bedrock-400: 71 85 105;
+  --bedrock-500: 100 116 139; --bedrock-600: 71 85 105; --bedrock-700: 51 65 85;
+}
 /* Minecraft light: Bedrock-green accent + warm stone surfaces. */
 :root[data-theme='minecraft'][data-mode='light'] {
   --bedrock-200: 148 220 163; --bedrock-300: 44 106 28; --bedrock-400: 47 106 31;
@@ -474,3 +554,11 @@
 .status-dot.running { background: rgb(var(--c-teal-400)); box-shadow: 0 0 8px rgb(var(--c-teal-400) / 0.6); }
 .status-dot.stopped { background: rgb(var(--c-red-400)); box-shadow: 0 0 8px rgb(var(--c-red-400) / 0.4); }
 .status-dot.starting { background: rgb(var(--c-yellow-400)); box-shadow: 0 0 8px rgb(var(--c-yellow-400) / 0.4); animation: pulse 1s infinite; }
+
+/* -- UI density (Settings ▸ Appearance) -----------------------------------
+   `compact` tightens the chrome paddings; everything else is rem-based and
+   follows the font-scale setting, so the two combine predictably. Plain
+   (unlayered) rules so they always win over the component layer. */
+:root[data-density='compact'] .card { padding: 0.875rem; }
+:root[data-density='compact'] .card-header { margin-bottom: 0.625rem; padding-bottom: 0.375rem; }
+:root[data-density='compact'] .btn { padding-top: 0.5rem; padding-bottom: 0.5rem; padding-left: 0.875rem; padding-right: 0.875rem; }
