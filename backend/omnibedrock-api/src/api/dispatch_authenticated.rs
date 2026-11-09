@@ -20,7 +20,6 @@ use super::addons::addons;
 use super::backups::backups;
 use super::broadcaster::broadcaster;
 use super::explorer;
-use super::files::{config_file_path, list_files};
 use super::helpers::{data_response, optional_string, success, value_string};
 use super::instances::{create_instance, instances_text, update_instance, usage_json};
 use super::players::list_players;
@@ -587,27 +586,6 @@ pub(super) async fn dispatch_authenticated(
             tokio::task::spawn_blocking(move || files::world_tree(&path))
                 .await
                 .map_err(anyhow::Error::from)??
-        }
-        ["files"] if read => {
-            s.require_for(u, "FILES_VIEW", svc).await?;
-            list_files(s).await?
-        }
-        ["files", filename] if read || write || delete => {
-            s.auth
-                .require(u, if read { "FILES_VIEW" } else { "FILES_EDIT" })
-                .await?;
-            let path = config_file_path(s, filename).await?;
-            if read {
-                json!({"name":filename,"content":tokio::fs::read_to_string(path).await?})
-            } else {
-                let _lock = s.edits.lock().await;
-                if write {
-                    atomic_write(&path, value_string(b, "content")?.as_bytes()).await?;
-                } else {
-                    tokio::fs::remove_file(path).await?;
-                }
-                success("File updated")
-            }
         }
         ["addons", ..] => {
             return addons(s, svc, u, m, p, q, b).await;

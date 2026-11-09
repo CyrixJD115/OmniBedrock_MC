@@ -1,4 +1,4 @@
-import type { ServerStatus, ServerActionResponse, Backup, AddonList, Addon, Player, PropertyEntry, IniFile, WorldInfo, BackupSettings, SchedulerConfig, CommandEntry, IncludeItem, FolderEntry, BackendInfo, VersionRegistry, EndstoneRegistry, BroadcasterStatus, CfProject, StoreSearchResponse, StoreMeta, StoreFilesResponse, StoreInstallResponse, Instance, HostInfo, PluginFile, ExplorerListing } from '$types/index';
+import type { ServerStatus, ServerActionResponse, Backup, AddonList, Addon, Player, PropertyEntry, WorldInfo, BackupSettings, SchedulerConfig, CommandEntry, IncludeItem, FolderEntry, BackendInfo, VersionRegistry, EndstoneRegistry, BroadcasterStatus, CfProject, StoreSearchResponse, StoreMeta, StoreFilesResponse, StoreInstallResponse, Instance, HostInfo, PluginFile, ExplorerListing } from '$types/index';
 
 const API_BASE = '/api/v1';
 let authToken = '';
@@ -473,17 +473,6 @@ export const api = {
   // Worlds
   listWorldsInfo: () => request<string[]>('/worlds/'),
   getWorldInfo: (world: string) => request<WorldInfo>(`/worlds/${world}`),
-
-  // Files/INI
-  listIniFiles: () => request<IniFile[]>('/files/'),
-  readIniFile: (filename: string) => request<{ name: string; content: string }>(`/files/${filename}`),
-  writeIniFile: (filename: string, content: string) =>
-    request<{ success: boolean }>(`/files/${filename}`, {
-      method: 'PUT',
-      body: JSON.stringify({ content }),
-    }),
-  deleteIniFile: (filename: string) =>
-    request<{ success: boolean }>(`/files/${filename}`, { method: 'DELETE' }),
 
   // Endstone plugins (instance id in the path; multipart form uploads)
   listPlugins: (instanceId: string) =>

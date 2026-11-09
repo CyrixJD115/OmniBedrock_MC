@@ -40,7 +40,6 @@ fn instance_scoped(segments: &[&str]) -> bool {
                 | "players"
                 | "properties"
                 | "worlds"
-                | "files"
                 | "addons"
                 | "store"
                 | "backups"

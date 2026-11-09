@@ -155,11 +155,6 @@ pub(super) fn audit_action(
             "instances",
         ),
         ["host"] => ("host.view".into(), detail, "instances"),
-        ["files", ..] => (
-            format!("files.{}", method.as_str().to_lowercase()),
-            detail,
-            "files",
-        ),
         _ => (
             format!(
                 "{}:{}",

@@ -755,63 +755,6 @@
     }
    }
   },
-  "/files": {
-   "get": {
-    "tags": [
-     "files"
-    ],
-    "summary": "List editable config files (server.properties, allowlist.json, permissions.json, ...)",
-    "x-permission": "FILES_VIEW",
-    "responses": {
-     "200": {
-      "description": "Array of file names"
-     }
-    }
-   }
-  },
-  "/files/{name}": {
-   "get": {
-    "tags": [
-     "files"
-    ],
-    "summary": "Read one config file",
-    "x-permission": "FILES_VIEW",
-    "responses": {
-     "200": {
-      "description": "{name, content}"
-     }
-    }
-   },
-   "put": {
-    "tags": [
-     "files"
-    ],
-    "summary": "Overwrite one config file",
-    "x-permission": "FILES_EDIT",
-    "requestBody": {
-     "x-body": {
-      "content": "string"
-     }
-    },
-    "responses": {
-     "200": {
-      "description": "{success, message}"
-     }
-    }
-   },
-   "delete": {
-    "tags": [
-     "files"
-    ],
-    "summary": "Delete one config file",
-    "x-permission": "FILES_EDIT",
-    "responses": {
-     "200": {
-      "description": "{success, message}"
-     }
-    }
-   }
-  },
   "/addons": {
    "get": {
     "tags": [

@@ -9,7 +9,6 @@ mod dispatch;
 mod dispatch_authenticated;
 mod docs;
 mod explorer;
-mod files;
 mod helpers;
 mod instances;
 mod middleware;

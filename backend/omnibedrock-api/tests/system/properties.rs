@@ -38,35 +38,10 @@ async fn api_file_properties_world_addons_and_audit() {
     assert_eq!(code, StatusCode::OK);
     let (_, text) = call(&app, "GET", "/api/v1/properties/raw", t, json!({})).await;
     assert!(text.as_str().unwrap().contains("max-players=20 # inline"));
-    let (code, _) = call(
-        &app,
-        "PUT",
-        "/api/v1/files/example.ini",
-        t,
-        json!({"content":"[server]\nmode=1\n"}),
-    )
-    .await;
-    assert_eq!(code, StatusCode::OK);
-    let (_, v) = call(&app, "GET", "/api/v1/files/example.ini", t, json!({})).await;
-    assert_eq!(v["content"], "[server]\nmode=1\n");
-    for file in [
-        "users.yaml",
-        "roles.yaml",
-        "jwt_secret",
-        "console_lock_state.yaml",
-    ] {
-        let (code, _) = call(&app, "GET", &format!("/api/v1/files/{file}"), t, json!({})).await;
-        assert_eq!(code, StatusCode::FORBIDDEN);
-    }
-    let (code, _) = call(
-        &app,
-        "GET",
-        "/api/v1/files/%2E%2E%2Fusers.yaml",
-        t,
-        json!({}),
-    )
-    .await;
-    assert_ne!(code, StatusCode::OK);
+    // The panel-level config-file editor (/files) was removed — the instance
+    // explorer under /instances/{id}/files (system::tree) is the file surface.
+    let (code, _) = call(&app, "GET", "/api/v1/files/", t, json!({})).await;
+    assert_eq!(code, StatusCode::NOT_FOUND);
     let pack = s
         .config
         .bedrock_server_dir
