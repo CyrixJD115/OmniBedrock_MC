@@ -1,14 +1,17 @@
 <!-- Instance file explorer: confined browsing of the instance tree with
-     upload/mkdir/rename/delete and a small text editor. Write actions are
-     additionally enforced server-side (FILES_WRITE); hiding them here is
-     only UX. -->
+     upload/mkdir/rename/delete and an inline editor with pretty views
+     (JSON/YAML tree, .properties table) beside the raw text editor. Write
+     actions are additionally enforced server-side (FILES_WRITE); hiding
+     them here is only UX. -->
 <script lang="ts">
-  import { Check, Download, FolderPlus, Pencil, Trash2, Upload, RotateCw, Folder, FileText, TriangleAlert } from '@lucide/svelte';
+  import { Check, Download, FolderPlus, Pencil, Trash2, Upload, RotateCw, Folder, FileText, TriangleAlert, Eye, FileCode } from '@lucide/svelte';
   import { api } from '$lib/api/client';
   import { addToast } from '$stores/toast';
   import { baseName, breadcrumbs, joinPath, normalizePath, parentPath, isTextFile } from '$lib/files/paths';
+  import { prettyView, type PrettyView } from '$lib/files/pretty';
   import { fmtDate, fmtSize } from '$lib/addons/display';
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
+  import ValueTree from '$lib/components/files/ValueTree.svelte';
   import type { ExplorerEntry, ExplorerListing } from '$types/index';
 
   let { instanceId, canWrite, serverRunning }: {
@@ -28,9 +31,13 @@
   let restartNeeded = $state(false);
   let uploading = $state(false);
 
-  // Inline editor state.
+  // Inline editor state. `pretty` holds the parsed view (null → raw only);
+  // `viewMode` switches between the rendered document and the raw editor.
   let editPath = $state('');
   let editContent = $state('');
+  let editDirty = $state(false);
+  let pretty = $state<PrettyView>(null);
+  let viewMode = $state<'pretty' | 'raw'>('pretty');
 
   // Confirm/delete + rename/mkdir modal state.
   let confirmOpen = $state(false);
@@ -44,8 +51,11 @@
   let modalTarget = $state('');
 
   let fileInput = $state<HTMLInputElement | null>(null);
+  let editorEl = $state<HTMLTextAreaElement | null>(null);
+  let gutterEl = $state<HTMLDivElement | null>(null);
 
   const crumbs = $derived(breadcrumbs(path));
+  const editLines = $derived(editContent === '' ? 1 : editContent.split('\n').length);
 
   // Re-anchor to the root whenever the active instance changes; stale loads
   // of the previous instance are discarded via a monotonic epoch.
@@ -63,6 +73,9 @@
   function closeEditor() {
     editPath = '';
     editContent = '';
+    editDirty = false;
+    pretty = null;
+    viewMode = 'pretty';
   }
 
   async function load(mine: number = epoch, target?: string) {
@@ -101,6 +114,7 @@
     void load(epoch, norm);
   }
 
+  /** Single click: folders navigate, text files open in the editor. */
   function open(entry: ExplorerEntry) {
     const target = joinPath(path, entry.name);
     if (entry.is_dir) {
@@ -124,21 +138,57 @@
         }
         editPath = target;
         editContent = text;
+        editDirty = false;
+        pretty = prettyView(entry.name, text);
+        viewMode = pretty ? 'pretty' : 'raw';
       } catch (e: any) {
         addToast(`Failed to open: ${e.message}`, 'error');
       }
     })();
   }
 
+  function markDirty() {
+    if (!editDirty) editDirty = true;
+  }
+
+  function switchView(mode: 'pretty' | 'raw') {
+    viewMode = mode;
+  }
+
   async function saveEditor() {
-    if (!editPath) return;
+    if (!editPath || !editDirty) return;
     try {
       const res = await api.writeExplorerFile(instanceId, editPath, editContent);
       addToast(res.message, 'success');
+      editDirty = false;
+      // Re-parse so the pretty view reflects the saved content.
+      const name = baseName(editPath);
+      pretty = prettyView(name, editContent);
+      if (!pretty) viewMode = 'raw';
       if (res.restart_required) restartNeeded = true;
     } catch (e: any) {
       addToast(`Save failed: ${e.message}`, 'error');
     }
+  }
+
+  function onEditorKeydown(e: KeyboardEvent) {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+      e.preventDefault();
+      void saveEditor();
+    }
+  }
+
+  // Tab inserts two spaces instead of leaving the textarea.
+  function onEditorTab(e: KeyboardEvent) {
+    if (e.key !== 'Tab') return;
+    e.preventDefault();
+    const el = e.currentTarget as HTMLTextAreaElement;
+    const { selectionStart, selectionEnd } = el;
+    editContent = `${editContent.slice(0, selectionStart)}  ${editContent.slice(selectionEnd)}`;
+    editDirty = true;
+    requestAnimationFrame(() => {
+      el.selectionStart = el.selectionEnd = selectionStart + 2;
+    });
   }
 
   async function upload(files: FileList | File[]) {
@@ -243,6 +293,8 @@
     if (files && files.length > 0) void upload(files);
   }
 </script>
+
+<svelte:window onkeydown={onEditorKeydown} />
 
 <div class="space-y-3">
   <!-- toolbar: breadcrumbs / path jump / actions -->
@@ -349,9 +401,8 @@
                 <td class="py-1.5 pr-2">
                   <button
                     class="flex items-center gap-2 min-w-0 w-full text-left"
-                    ondblclick={() => open(entry)}
-                    onkeydown={(e) => e.key === 'Enter' && open(entry)}
-                    title={entry.name}
+                    onclick={() => open(entry)}
+                    title={entry.is_dir ? `Open ${entry.name}` : `View ${entry.name}`}
                   >
                     {#if entry.is_dir}
                       <Folder size={13} class="text-bedrock-400 shrink-0" />
@@ -407,17 +458,86 @@
     </div>
   </div>
 
-  <!-- inline text editor -->
+  <!-- inline editor / pretty viewer -->
   {#if editPath}
     <div class="card">
-      <div class="flex items-center justify-between mb-3">
-        <h3 class="card-header mb-0 font-mono">{editPath}</h3>
-        <div class="flex gap-2">
-          <button onclick={saveEditor} class="btn-primary text-xs">Save</button>
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <h3 class="card-header mb-0 font-mono flex items-center gap-2">
+          <FileCode size={13} class="text-bedrock-400" />
+          {editPath}
+          {#if editDirty}<span class="text-yellow-400 text-[10px] uppercase tracking-wider">unsaved</span>{/if}
+        </h3>
+        <div class="flex items-center gap-2">
+          {#if pretty}
+            <div class="flex border-2 border-deep-600/40 overflow-hidden">
+              <button onclick={() => switchView('pretty')}
+                      class={"flex items-center gap-1 px-2.5 py-1 text-[11px] uppercase tracking-wider transition-colors " + (viewMode === 'pretty' ? 'bg-bedrock-500/20 text-bedrock-300' : 'text-deep-400 hover:text-strong')}
+                      title="Rendered view">
+                <Eye size={11} /> Pretty
+              </button>
+              <button onclick={() => switchView('raw')}
+                      class={"flex items-center gap-1 px-2.5 py-1 text-[11px] uppercase tracking-wider transition-colors border-l-2 border-deep-600/40 " + (viewMode === 'raw' ? 'bg-bedrock-500/20 text-bedrock-300' : 'text-deep-400 hover:text-strong')}
+                      title="Raw text editor">
+                <FileCode size={11} /> Raw
+              </button>
+            </div>
+          {/if}
+          <button onclick={saveEditor} disabled={!editDirty} class="btn-primary text-xs disabled:opacity-40">Save</button>
           <button onclick={closeEditor} class="btn-secondary text-xs">Close</button>
         </div>
       </div>
-      <textarea bind:value={editContent} class="input w-full h-[45vh] font-mono text-sm" spellcheck="false"></textarea>
+
+      {#if viewMode === 'pretty' && pretty?.kind === 'tree'}
+        <div class="border-2 border-deep-600/40 bg-black/30 p-4 overflow-auto max-h-[55vh] font-mono text-xs">
+          <ValueTree value={pretty.data} defaultDepth={1} />
+        </div>
+      {:else if viewMode === 'pretty' && pretty?.kind === 'properties'}
+        <div class="border-2 border-deep-600/40 overflow-auto max-h-[55vh]">
+          <table class="w-full text-xs font-mono">
+            <thead>
+              <tr class="text-left text-deep-400 uppercase tracking-wider text-[10px] border-b border-deep-600/40">
+                <th class="py-2 px-3 w-1/3">Key</th>
+                <th class="py-2 px-3">Value</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each pretty.rows as row, i}
+                {#if row.kind === 'pair'}
+                  <tr class="border-b border-deep-700/30 hover:bg-deep-800/40 transition-colors">
+                    <td class="py-1 px-3 text-bedrock-300 align-top">{row.key}</td>
+                    <td class="py-1 px-3 text-deep-100 break-all">
+                      {row.value}
+                      {#if row.comment}<span class="text-deep-500 ml-2">{row.comment}</span>{/if}
+                    </td>
+                  </tr>
+                {:else if row.kind === 'comment'}
+                  <tr class="border-b border-deep-700/30"><td colspan="2" class="py-1 px-3 text-deep-500 italic">{row.comment}</td></tr>
+                {/if}
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      {:else}
+        <!-- Line numbers live in a gutter that mirrors the textarea's scroll. -->
+        <div class="flex border-2 border-deep-600/40 bg-black/30 font-mono text-sm max-h-[55vh] overflow-hidden">
+          <div
+            bind:this={gutterEl}
+            class="select-none text-right py-3 px-2 text-deep-600 text-xs leading-6 overflow-hidden bg-black/20"
+            aria-hidden="true"
+          >
+            {#each Array(editLines) as _, i (i)}<div>{i + 1}</div>{/each}
+          </div>
+          <textarea
+            bind:this={editorEl}
+            bind:value={editContent}
+            oninput={markDirty}
+            onkeydown={onEditorTab}
+            onscroll={() => { if (gutterEl && editorEl) gutterEl.scrollTop = editorEl.scrollTop; }}
+            spellcheck="false"
+            class="w-full h-[55vh] bg-transparent p-3 leading-6 outline-none resize-none text-deep-100"
+          ></textarea>
+        </div>
+      {/if}
     </div>
   {/if}
 </div>
