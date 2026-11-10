@@ -91,6 +91,31 @@ test('collapseKey only strips genuine timestamp stamps', () => {
   assert.equal(collapseKey('16:36:57 INFO hello'), '16:36:57 INFO hello');
 });
 
+test('collapseRuns merges ANSI-colored jar lines across stamps', () => {
+  // Log4j %highlight keeps emitting ANSI on Linux pipes even when JAnsi
+  // reports itself unavailable — broadcaster lines arrive color-wrapped.
+  const jar = (stamp: string, seq: number) =>
+    line(seq, `\x1b[36m[${stamp}\x1b[m \x1b[36mINFO\x1b[m [Primary Session] Updated session!`, seq);
+  const runs = collapseRuns([
+    jar('16:36:57', 1),
+    jar('16:37:28', 2),
+    line(3, '\x1b[36m[16:37:59\x1b[m \x1b[36mINFO\x1b[m [Primary Session] session failed!', 3),
+    line(4, '\r\n', 4), // CR-only fragment
+    jar('16:38:29', 5),
+  ]);
+  assert.deepEqual(
+    runs.map((r) => `${r.count}x`),
+    ['2x', '1x', '1x', '1x'],
+    'colored stamp variants merge; failures and blank lines stay separate',
+  );
+  // Whitespace jitter and missing close-bracket variants also merge.
+  const j1 = line(10, '\x1b[36m[16:40:00\x1b[m  INFO  [Primary Session] Updated session!', 10);
+  const j2 = line(11, '[16:40:30 \x1b[36mINFO\x1b[m [Primary Session] Updated session!', 11);
+  const j3 = line(12, '[16:41:00 INFO [Primary Session] Updated session!', 12);
+  const j4 = line(13, '[16:41:30 INFO] [Primary Session] Updated session!', 13);
+  assert.equal(collapseRuns([j1, j2, j3, j4]).length, 1, 'all four forms are the same message');
+});
+
 test('collapseRuns recomputes over any slice (freeze boundaries)', () => {
   const all = collapseRuns([line(1, 'dup'), line(2, 'dup'), line(3, 'dup'), line(4, 'x')]);
   assert.equal(all[0].count, 3);

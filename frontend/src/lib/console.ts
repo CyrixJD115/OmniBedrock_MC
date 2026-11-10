@@ -94,10 +94,33 @@ export interface CollapsedLine extends FeedLine {
  * message text is left alone.
  */
 const TIMESTAMP_STAMP_PREFIX =
-  /^\[(?:\d{4}-\d{2}-\d{2}[ ])?\d{1,2}:\d{2}:\d{2}(?::\d{1,3})?\s+(?:INFO|WARN(?:ING)?|ERROR|ERR|DEBUG|TRACE|FATAL|LOCAL)\]\s?/;
+  /^\[(?:\d{4}-\d{2}-\d{2}[ ])?\d{1,2}:\d{2}:\d{2}(?::\d{1,3})?\s+(?:INFO|WARN(?:ING)?|ERROR|ERR|DEBUG|TRACE|FATAL|LOCAL)\]?\s?/;
 
+/**
+ * ANSI escape sequences: CSI forms (colors, cursor moves), OSC forms
+ * (window titles, hyperlinks), and bare single-character escapes. Log4j's
+ * %highlight keeps emitting these on Linux pipes even after JAnsi declares
+ * "advanced terminal features are not available", so jar lines arrive
+ * color-wrapped while BDS lines stay plain.
+ */
+const ANSI_ESCAPE =
+  /(?:\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_])/g;
+
+/**
+ * The collapse identity of a log line: ANSI-stripped, timestamp-stamp
+ * stripped, whitespace-normalized text. Broadcaster (Java/Log4j) and BDS
+ * stamp every line with the wall clock, and the jar additionally wraps its
+ * output in color codes, so raw byte-equality would never merge the
+ * periodic "Updated session!" spam the collapser exists for — the message
+ * body is what makes two lines "the same".
+ */
 export function collapseKey(text: string): string {
-  return text.replace(TIMESTAMP_STAMP_PREFIX, '');
+  return text
+    .replace(ANSI_ESCAPE, '')
+    .replace(TIMESTAMP_STAMP_PREFIX, '')
+    .replace(/[\r\f\b]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 /**
