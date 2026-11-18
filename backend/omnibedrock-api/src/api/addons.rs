@@ -477,20 +477,33 @@ async fn cdn_status(s: &AppState, svc: &Arc<Instance>) -> Result<Value> {
         .await
         .map_err(anyhow::Error::from)?;
     // The newest BDS verdict about the CDN config in this run's console.
-    let bds = svc.server.console.tail(4000).iter().rev().find_map(|e| {
+    // BDS only speaks up on problems ("No CDN config file found", a
+    // mismatch, a parse error). A boot that reached "Server started." after
+    // the panel wrote the file, with none of those, means the file was found
+    // and accepted.
+    let tail = svc.server.console.tail(4000);
+    let mut bds: Option<(&str, String)> = None;
+    let mut wrote_config = false;
+    for e in tail.iter() {
         let line = e.line.as_str();
-        if line.contains("CDN config packIdVersions") {
-            Some(("loaded", line.to_owned()))
+        if line.contains("Pack CDN:") {
+            wrote_config = line.contains("offered for HTTP download");
+            bds = None;
+        } else if line.contains("CDN config packIdVersions") {
+            bds = Some(("loaded", line.to_owned()));
         } else if line.contains("Mismatch detected between CDN config") {
-            Some(("mismatch", line.to_owned()))
+            bds = Some(("mismatch", line.to_owned()));
         } else if line.contains("Failed to parse CDN config") {
-            Some(("parse_error", line.to_owned()))
+            bds = Some(("parse_error", line.to_owned()));
         } else if line.contains("No CDN config file found") {
-            Some(("absent", line.to_owned()))
-        } else {
-            None
+            bds = Some(("absent", line.to_owned()));
+        } else if line.contains("Server started.") && wrote_config && bds.is_none() {
+            bds = Some((
+                "accepted",
+                "Bedrock started with cdn_config.json and reported no problem with it".to_owned(),
+            ));
         }
-    });
+    }
     // A public address the operator already configured for joins.
     let props = tokio::fs::read_to_string(svc.config.bedrock_server_dir.join("server.properties"))
         .await

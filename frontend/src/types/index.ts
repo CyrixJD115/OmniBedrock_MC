@@ -627,7 +627,7 @@ export interface PackCdnStatus {
     total_bytes: number;
   };
   /** What BDS logged about cdn_config.json during this run. */
-  bds: { status: 'loaded' | 'mismatch' | 'parse_error' | 'absent'; line: string } | null;
+  bds: { status: 'loaded' | 'accepted' | 'mismatch' | 'parse_error' | 'absent'; line: string } | null;
   suggestions: string[];
   panel_port: number;
   message?: string;

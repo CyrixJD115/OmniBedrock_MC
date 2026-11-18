@@ -72,7 +72,7 @@
     if (!status) return null;
     const st = status.state;
     if (!st.settings.enabled) return { cls: 'badge-info', text: 'off' };
-    if (status.bds?.status === 'loaded') return { cls: 'badge-running', text: 'active' };
+    if (status.bds?.status === 'loaded' || status.bds?.status === 'accepted') return { cls: 'badge-running', text: 'active' };
     if (status.bds?.status === 'mismatch') return { cls: 'badge-stopped', text: 'BDS: mismatch' };
     if (status.bds?.status === 'parse_error') return { cls: 'badge-stopped', text: 'BDS: parse error' };
     if (st.config_present && st.uncovered.length === 0) return { cls: 'badge-warn', text: 'ready — restart server' };

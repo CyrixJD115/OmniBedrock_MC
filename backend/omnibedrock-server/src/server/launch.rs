@@ -323,10 +323,10 @@ pub(super) async fn wait_ports_free(port: u16, console: &Console) -> anyhow::Res
     let deadline = Instant::now() + BUDGET;
     let mut announced = false;
     loop {
-        if crate::instances::port_bindable(port).await
-            && crate::instances::port_bindable(port + 1).await
-            && crate::instances::tcp_port_bindable(port).await
-        {
+        let udp = crate::instances::port_bindable(port).await;
+        let udp6 = crate::instances::port_bindable(port + 1).await;
+        let tcp = crate::instances::tcp_port_bindable(port).await;
+        if udp && udp6 && tcp {
             return Ok(());
         }
         if !announced {
@@ -344,13 +344,105 @@ pub(super) async fn wait_ports_free(port: u16, console: &Console) -> anyhow::Res
             announced = true;
         }
         if Instant::now() >= deadline {
+            // Name exactly what is busy and who holds it, so the next
+            // occurrence is diagnosable from the console alone.
+            let mut busy = Vec::new();
+            if !udp {
+                busy.push(format!("UDP {port}"));
+            }
+            if !udp6 {
+                busy.push(format!("UDP {}", port + 1));
+            }
+            if !tcp {
+                busy.push(format!("TCP {port}"));
+            }
+            let mut holders = port_holders(port);
+            holders.extend(port_holders(port + 1));
+            holders.sort();
+            holders.dedup();
+            let held_by = if holders.is_empty() {
+                String::new()
+            } else {
+                format!(" (held by {})", holders.join(", "))
+            };
             bail!(
-                "UDP ports {port}/{} or TCP {port} are still in use after {}s — stop \
-                 whatever holds them (or pick another port) and start again",
-                port + 1,
+                "{} still in use after {}s{held_by} — stop whatever holds it (or pick another \
+                 port) and start again",
+                busy.join(" + "),
                 BUDGET.as_secs()
             );
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+/// Processes holding `port` on any TCP/UDP socket, as `"name (pid N)"`,
+/// read from /proc on Linux; empty elsewhere or without permission.
+fn port_holders(port: u16) -> Vec<String> {
+    #[cfg(target_os = "linux")]
+    {
+        let wanted = format!(":{port:04X}");
+        let mut inodes = std::collections::HashSet::new();
+        for table in ["tcp", "tcp6", "udp", "udp6"] {
+            let Ok(text) = std::fs::read_to_string(format!("/proc/net/{table}")) else {
+                continue;
+            };
+            for line in text.lines().skip(1) {
+                let cols: Vec<&str> = line.split_whitespace().collect();
+                if cols.len() > 9 && cols[1].ends_with(&wanted) && cols[9] != "0" {
+                    inodes.insert(format!("socket:[{}]", cols[9]));
+                }
+            }
+        }
+        if inodes.is_empty() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        let Ok(procs) = std::fs::read_dir("/proc") else {
+            return out;
+        };
+        for proc_entry in procs.flatten().take(4096) {
+            let name = proc_entry.file_name();
+            let Some(pid) = name
+                .to_str()
+                .filter(|n| n.chars().all(|c| c.is_ascii_digit()))
+            else {
+                continue;
+            };
+            let Ok(fds) = std::fs::read_dir(proc_entry.path().join("fd")) else {
+                continue;
+            };
+            let holds = fds.flatten().any(|fd| {
+                std::fs::read_link(fd.path())
+                    .is_ok_and(|target| inodes.contains(target.to_string_lossy().as_ref()))
+            });
+            if holds {
+                let comm = std::fs::read_to_string(proc_entry.path().join("comm"))
+                    .map(|c| c.trim().to_owned())
+                    .unwrap_or_else(|_| "?".into());
+                out.push(format!("{comm} (pid {pid})"));
+            }
+        }
+        out
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = port;
+        Vec::new()
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod port_holder_tests {
+    #[test]
+    fn finds_this_process_holding_a_port() {
+        let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let port = socket.local_addr().unwrap().port();
+        let holders = super::port_holders(port);
+        let me = std::process::id().to_string();
+        assert!(
+            holders.iter().any(|h| h.contains(&format!("pid {me}"))),
+            "{holders:?}"
+        );
     }
 }
