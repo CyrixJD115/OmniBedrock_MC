@@ -71,8 +71,11 @@ pub(super) async fn broadcaster(
             let running_build = running.as_ref().map(|(b, _)| b.clone());
             let installed = omnibedrock_server::broadcaster::update::installed_build(&jar).await;
             let current = installed.clone().or(running_build.clone());
+            // An unknown current build (fresh panel, jar never booted under
+            // it) still offers the latest release instead of hiding it.
             let update_available = match (&latest, &current) {
                 (Ok(l), Some(c)) => l.tag.parse::<u64>().ok() > c.parse::<u64>().ok(),
+                (Ok(_), None) => jar.exists(),
                 _ => false,
             };
             json!({

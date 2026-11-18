@@ -80,7 +80,15 @@ impl Broadcaster {
             .tail(4000)
             .iter()
             .rev()
-            .find_map(|e| super::update::parse_boot_banner(&e.line));
+            .find_map(|e| super::update::parse_boot_banner(&e.line))
+            .or_else(|| {
+                // After a panel restart the RAM ring is empty; the jar's own
+                // log starts with the boot banner of the run that last booted.
+                let log = config.broadcaster_dir.join("logs").join("latest.log");
+                let text = std::fs::read(log).ok()?;
+                let head = String::from_utf8_lossy(&text[..text.len().min(16 * 1024)]).into_owned();
+                head.lines().find_map(super::update::parse_boot_banner)
+            });
         let (build_tx, jar_build) = watch::channel(seeded);
         let (control, control_rx) = mpsc::channel(16);
         let manager = Self {
