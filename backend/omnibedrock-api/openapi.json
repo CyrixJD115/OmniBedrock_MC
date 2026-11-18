@@ -845,6 +845,50 @@
     }
    }
   },
+  "/addons/cdn": {
+   "get": {
+    "tags": [
+     "addons"
+    ],
+    "summary": "Optional pack CDN status: settings, cdn_config.json coverage, what BDS logged about it, suggested public base URLs",
+    "x-permission": "ADDONS_VIEW",
+    "responses": {
+     "200": {
+      "description": "{state:{settings,bucket,world,config_present,config_owned,uncovered,files,total_bytes}, bds:{status,line}|null, suggestions, panel_port}"
+     }
+    }
+   },
+   "put": {
+    "tags": [
+     "addons"
+    ],
+    "summary": "Enable/disable the pack CDN; builds pack zips and writes cdn_config.json (restart the server to apply)",
+    "x-permission": "ADDONS_MANAGE",
+    "x-body": {
+     "enabled": "bool",
+     "base_url": "public http(s) origin clients reach the panel at"
+    },
+    "responses": {
+     "200": {
+      "description": "status + {build, message}"
+     }
+    }
+   }
+  },
+  "/addons/cdn/test": {
+   "post": {
+    "tags": [
+     "addons"
+    ],
+    "summary": "Fetch one pack zip through the configured public URL from the server and check status, Content-Type and Content-Length",
+    "x-permission": "ADDONS_MANAGE",
+    "responses": {
+     "200": {
+      "description": "{url, ok, status, content_type, content_length, expected_length, detail}"
+     }
+    }
+   }
+  },
   "/addons/upload": {
    "post": {
     "tags": [

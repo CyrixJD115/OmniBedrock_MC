@@ -7,6 +7,7 @@
 //! traversal entries.
 
 mod archive;
+pub mod cdn;
 mod classify;
 mod delivery;
 mod install;

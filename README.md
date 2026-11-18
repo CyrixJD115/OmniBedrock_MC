@@ -187,6 +187,12 @@ When a Microsoft account needs authentication, the panel parses the device-code 
 
 
 
+## Console players and pack downloads (optional Pack CDN)
+
+Clients keep server resource packs by uuid+version, and the panel never changes pack versions on start. Consoles, however, reportedly clear their server-pack cache whenever Minecraft is fully closed (Xbox/Switch; PlayStation keeps them under Settings → Storage → Cached Data), so console players often download the whole stack again after restarting their game. Mojang does not document this, and no cache size limit is documented either.
+
+The Mods page shows what a joining client downloads (**Client download**: sizes, packs no active behavior pack uses, version-pin drift) and offers an opt-in **Pack CDN**. BDS reads an optional `cdn_config.json` (`"<uuid>_<version>": "<url of the pack zip>"`; present in the 1.26.65 binary, community-documented) and lets clients fetch each pack over HTTP(S) instead of the in-game transfer. When enabled, the panel builds deterministic zips (manifest at the root), serves them publicly at `<base-url>/packs/<bucket>/<uuid>_<version>.zip` on its existing port with exact `Content-Length` and `Content-Type: application/zip` (never gzip-encoded), and writes `cdn_config.json` only when every active resource pack is covered (a partial file is ignored by BDS). Zips are rebuilt on each server start when a pack changed. The page reports what BDS logged about the file and can test the URL from the server. The base URL must be reachable by players from the internet: put a reverse proxy or tunnel in front that forwards only `/packs/` rather than exposing the panel login. Turning it off removes the panel-written file (a hand-made `cdn_config.json` is never touched) and the zips. It makes downloads faster; it does not change how long a console keeps the packs.
+
 ## API keys
 
 Scripts and integrations use the panel's existing URL and port — no extra listener. Create a key under **Settings → API Keys** (the plaintext is shown once; only a hash is stored), then send it with your username:

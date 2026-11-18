@@ -1,4 +1,4 @@
-import type { ServerStatus, ServerActionResponse, Backup, AddonList, Addon, Player, PropertyEntry, WorldInfo, BackupSettings, SchedulerConfig, CommandEntry, IncludeItem, FolderEntry, BackendInfo, VersionRegistry, EndstoneRegistry, BroadcasterStatus, CfProject, StoreSearchResponse, StoreMeta, StoreFilesResponse, StoreInstallResponse, Instance, HostInfo, PluginFile, ExplorerListing, ApiKeyRecord, PackDelivery, BroadcasterJarInfo } from '$types/index';
+import type { ServerStatus, ServerActionResponse, Backup, AddonList, Addon, Player, PropertyEntry, WorldInfo, BackupSettings, SchedulerConfig, CommandEntry, IncludeItem, FolderEntry, BackendInfo, VersionRegistry, EndstoneRegistry, BroadcasterStatus, CfProject, StoreSearchResponse, StoreMeta, StoreFilesResponse, StoreInstallResponse, Instance, HostInfo, PluginFile, ExplorerListing, ApiKeyRecord, PackDelivery, BroadcasterJarInfo, PackCdnStatus, PackCdnTest } from '$types/index';
 
 const API_BASE = '/api/v1';
 let authToken = '';
@@ -213,6 +213,13 @@ export const api = {
   deleteUser: (username: string) =>
     request<{ success: boolean }>(`/auth/users/${username}`, { method: 'DELETE' }),
 
+  getPackCdn: () => request<PackCdnStatus>('/addons/cdn'),
+  savePackCdn: (enabled: boolean, baseUrl: string) =>
+    request<PackCdnStatus>('/addons/cdn', {
+      method: 'PUT',
+      body: JSON.stringify({ enabled, base_url: baseUrl }),
+    }),
+  testPackCdn: () => request<PackCdnTest>('/addons/cdn/test', { method: 'POST' }),
   getPackDelivery: (world: string) =>
     request<PackDelivery>(`/addons/delivery?world=${encodeURIComponent(world)}`),
 

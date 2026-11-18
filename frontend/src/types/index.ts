@@ -613,3 +613,32 @@ export interface BroadcasterJarInfo {
   latest_error: string | null;
   update_available: boolean;
 }
+
+/** GET /addons/cdn — optional pack CDN (cdn_config.json) status. */
+export interface PackCdnStatus {
+  state: {
+    settings: { enabled: boolean; base_url: string };
+    bucket: string;
+    world: string;
+    config_present: boolean;
+    config_owned: boolean;
+    uncovered: string[];
+    files: number;
+    total_bytes: number;
+  };
+  /** What BDS logged about cdn_config.json during this run. */
+  bds: { status: 'loaded' | 'mismatch' | 'parse_error' | 'absent'; line: string } | null;
+  suggestions: string[];
+  panel_port: number;
+  message?: string;
+}
+
+export interface PackCdnTest {
+  url: string;
+  ok: boolean;
+  status: number | null;
+  content_type: string | null;
+  content_length: number | null;
+  expected_length: number;
+  detail: string;
+}

@@ -12,6 +12,7 @@ mod explorer;
 mod helpers;
 mod instances;
 mod middleware;
+mod packs;
 mod players;
 mod plugins;
 mod properties;

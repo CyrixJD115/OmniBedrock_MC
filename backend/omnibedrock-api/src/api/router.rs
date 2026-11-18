@@ -10,7 +10,14 @@ use axum::{
     routing::{any, get},
 };
 use serde_json::json;
-use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
+use tower_http::{
+    compression::{
+        CompressionLayer,
+        predicate::{DefaultPredicate, NotForContentType, Predicate},
+    },
+    cors::CorsLayer,
+    trace::TraceLayer,
+};
 
 use super::dispatch::dispatch;
 use super::docs;
@@ -90,6 +97,9 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         // root (outside the configurable prefix) at stable, linkable URLs.
         .route("/openapi.json", get(|| async { openapi_doc() }))
         .route("/api-docs", get(docs::api_docs))
+        // Optional pack CDN: resource-pack zips BDS points clients at via
+        // cdn_config.json. Public by design; see api/packs.rs.
+        .route("/packs/{bucket}/{file}", get(super::packs::serve))
         .nest(&prefix, api)
         // Everything that is not the API serves the embedded panel UI.
         .fallback(crate::bundle::serve)
@@ -105,7 +115,11 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         // in every request-scoped log line) and inside compression (so the
         // envelope rewrites the raw JSON before it is compressed).
         .layer(middleware::from_fn(envelope::request_context))
-        .layer(CompressionLayer::new())
+        // Zips are already compressed, and BDS clients need the exact
+        // Content-Length of the pack-CDN files, so they are never re-encoded.
+        .layer(CompressionLayer::new().compress_when(
+            DefaultPredicate::new().and(NotForContentType::const_new("application/zip")),
+        ))
         .layer(
             TraceLayer::new_for_http().make_span_with(|request: &Request| {
                 tracing::info_span!(

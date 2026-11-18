@@ -4,18 +4,19 @@
 //!
 //! Bedrock clients cache server packs by (uuid, version). The panel never
 //! rewrites pack versions or manifests on start, so a pack only re-downloads
-//! when its version changes — or when the client cannot keep it: console
-//! clients (Xbox, PlayStation, Switch) hold server packs in a small,
-//! platform-managed cache, and a large stack is evicted between sessions.
-//! This report makes the payload visible so it can be trimmed.
+//! when its version changes — or when the client dropped its server-pack
+//! cache. Consoles reportedly clear that cache when the game is fully closed
+//! (Xbox/Switch; not documented by Mojang), so console players re-download
+//! after a game restart. This report makes the payload visible so it can be
+//! trimmed, and the optional pack CDN (`cdn`) makes the download itself fast.
 
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-/// A large stack on consoles: above this, re-downloads on every join are
-/// the expected console behavior rather than a server fault.
+/// Payload size above which repeated console downloads become painful
+/// enough to call out (a judgment threshold, not a platform limit).
 pub const CONSOLE_HEAVY_BYTES: u64 = 100 * 1024 * 1024;
 
 #[derive(Debug, Serialize, PartialEq)]

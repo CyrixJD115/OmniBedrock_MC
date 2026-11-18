@@ -115,6 +115,47 @@ pub(super) async fn launch(
                 .await;
         }
     }
+    // Optional pack CDN: refresh the zips + cdn_config.json for the active
+    // world before BDS reads it at boot (or drop a stale panel-written one).
+    {
+        let server_dir = config.bedrock_server_dir.clone();
+        let cache_dir = config.cache_dir.clone();
+        let outcome = tokio::task::spawn_blocking(move || {
+            let settings = crate::addons::cdn::load_settings(&server_dir);
+            if settings.enabled {
+                Some(crate::addons::cdn::build(
+                    &server_dir,
+                    &cache_dir,
+                    &settings,
+                ))
+            } else {
+                crate::addons::cdn::remove_owned_config(&server_dir);
+                None
+            }
+        })
+        .await
+        .ok()
+        .flatten();
+        let line = match outcome {
+            Some(Ok(report)) if report.written => Some(format!(
+                "[LOCAL] Pack CDN: {} resource packs ({:.1} MB, {} rebuilt) offered for HTTP download via cdn_config.json",
+                report.files.len(),
+                report.total_bytes as f64 / 1_048_576.0,
+                report.rebuilt
+            )),
+            Some(Ok(report)) => Some(format!(
+                "[LOCAL] Pack CDN: NOT active — {} pack(s) in world_resource_packs.json are missing on disk, so packs are sent in-game",
+                report.missing.len()
+            )),
+            Some(Err(e)) => Some(format!(
+                "[LOCAL] Pack CDN: build failed ({e:#}); packs are sent in-game"
+            )),
+            None => None,
+        };
+        if let Some(line) = line {
+            console.publish(line, "panel", false).await;
+        }
+    }
     match ctx.deployment {
         Deployment::Native => {
             let base_argv = match settings.backend {

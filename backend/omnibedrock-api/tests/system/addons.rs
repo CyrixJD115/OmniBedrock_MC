@@ -226,3 +226,52 @@ async fn addon_upload_icon_delete_round_trip() {
 
     s.server.shutdown().await.ok();
 }
+
+#[tokio::test]
+async fn pack_cdn_route_serves_exact_uncompressed_zips() {
+    use axum::{
+        body::{Body, to_bytes},
+        http::Request,
+    };
+    use tower::ServiceExt;
+    let (_dir, s, app, _token) = crate::harness::state().await;
+    let bucket = "0123456789abcdef";
+    let file = "aaaaaaaa-1111-2222-3333-444444444444_1.0.86.zip";
+    let dir = s.config.cache_dir.join("pack-cdn").join(bucket);
+    tokio::fs::create_dir_all(&dir).await.unwrap();
+    let body = vec![b'a'; 64 * 1024];
+    tokio::fs::write(dir.join(file), &body).await.unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/packs/{bucket}/{file}"))
+                .header("Accept-Encoding", "gzip, br")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let headers = response.headers().clone();
+    assert_eq!(headers["content-type"], "application/zip");
+    assert_eq!(headers["content-length"], body.len().to_string());
+    assert!(
+        headers.get("content-encoding").is_none(),
+        "zips must never be re-encoded"
+    );
+    let bytes = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+    assert_eq!(bytes.len(), body.len());
+    for bad in [
+        format!("/packs/{bucket}/..%2F..%2Fjwt_secret"),
+        format!("/packs/{bucket}/{file}.src"),
+        format!("/packs/not-a-bucket/{file}"),
+        format!("/packs/{bucket}/bbbbbbbb-1111-2222-3333-444444444444_1.0.0.zip"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(Request::get(&bad).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 404, "{bad}");
+    }
+}

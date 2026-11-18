@@ -24,6 +24,7 @@
   import AvailableTab from '$lib/components/addons/AvailableTab.svelte';
   import DetailsTab from '$lib/components/addons/DetailsTab.svelte';
   import PackDeliveryCard from '$lib/components/addons/PackDeliveryCard.svelte';
+  import PackCdnCard from '$lib/components/addons/PackCdnCard.svelte';
   import PreviewDrawer from '$lib/components/addons/PreviewDrawer.svelte';
   import ManifestEditorModal from '$lib/components/addons/ManifestEditorModal.svelte';
   import VersionEditorModal from '$lib/components/addons/VersionEditorModal.svelte';
@@ -732,6 +733,7 @@
     {#if selWorld && selWorld !== ALL_WORLDS}
       <PackDeliveryCard world={selWorld} />
     {/if}
+    <PackCdnCard canManage={canManage} instanceId={$activeInstance?.id ?? 'default'} />
 
     <!-- tabs: Minecraft-client style dual tab -->
     <div class="flex gap-1 border-b border-deep-600/30 pb-px">

@@ -4,8 +4,8 @@
    * packs, their sizes, and what makes every join heavier than it needs to
    * be. Clients cache server packs by uuid+version and the panel never bumps
    * those on start, so repeat downloads mean either a changed version or a
-   * client that cannot keep the stack — console clients have a small,
-   * platform-managed pack cache.
+   * client that dropped its server-pack cache (consoles reportedly clear it
+   * whenever the game is fully closed — not documented by Mojang).
    */
   import { api } from '$lib/api/client';
   import type { PackDelivery } from '$types/index';
@@ -55,11 +55,12 @@
           <p class="flex items-start gap-2 text-yellow-300/90 leading-snug">
             <TriangleAlert size={13} class="shrink-0 mt-0.5" />
             <span>
-              Every new client downloads about {mb(report.total_bytes)}. PC and mobile keep server packs cached by
-              version, but Xbox, PlayStation, and Switch hold them in a small platform cache, so a stack this size is
-              usually evicted and downloaded again on the next join. The panel never changes pack versions on start.
-              To make console joins lighter, remove unused packs (especially <b>unpaired</b> ones below) or ship
-              smaller texture variants.
+              Every client without these packs downloads about {mb(report.total_bytes)}. Clients keep server packs
+              by version and the panel never changes versions on start, but consoles are reported to drop the server
+              pack cache when the game is fully closed (Xbox/Switch) — so console players often download again after
+              a restart of their game. Ways to soften it: turn on the optional <b>Pack CDN</b> below (fast HTTP download
+              instead of in-game transfer), remove packs nothing uses (<b>unpaired</b> below), and ask console
+              players to leave and rejoin without closing Minecraft.
             </span>
           </p>
         {/if}

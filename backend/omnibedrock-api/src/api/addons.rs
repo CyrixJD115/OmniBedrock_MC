@@ -297,6 +297,86 @@ pub(super) async fn addons(
                     .map_err(anyhow::Error::from)?;
             serde_json::to_value(report).map_err(anyhow::Error::from)?
         }
+        // Optional pack CDN (cdn_config.json): status / configure / self-test.
+        ["addons", "cdn"] if read => cdn_status(s, svc).await?,
+        ["addons", "cdn"] if *m == Method::PUT => {
+            use omnibedrock_server::addons::cdn;
+            let enabled = b["enabled"].as_bool().unwrap_or(false);
+            let raw_url = b["base_url"].as_str().unwrap_or_default();
+            let base_url = if raw_url.trim().is_empty() {
+                if enabled {
+                    return Err(ApiError::bad(
+                        "A public base URL is required to enable the pack CDN",
+                    ));
+                }
+                String::new()
+            } else {
+                cdn::normalize_base_url(raw_url).map_err(|e| ApiError::bad(e.to_string()))?
+            };
+            let settings = cdn::CdnSettings { enabled, base_url };
+            let server_dir = svc.config.bedrock_server_dir.clone();
+            let cache_dir = svc.config.cache_dir.clone();
+            let saved = settings.clone();
+            let build =
+                tokio::task::spawn_blocking(move || -> anyhow::Result<Option<cdn::CdnBuild>> {
+                    cdn::save_settings(&server_dir, &saved)?;
+                    if saved.enabled {
+                        cdn::build(&server_dir, &cache_dir, &saved).map(Some)
+                    } else {
+                        cdn::disable(&server_dir, &cache_dir);
+                        Ok(None)
+                    }
+                })
+                .await
+                .map_err(anyhow::Error::from)?
+                .map_err(|e| ApiError::bad(format!("{e:#}")))?;
+            let mut status = cdn_status(s, svc).await?;
+            status["build"] = json!(build);
+            status["message"] = json!(match &build {
+                Some(b) if b.written => format!(
+                    "Pack CDN ready: {} packs. Restart the server so BDS loads cdn_config.json.",
+                    b.files.len()
+                ),
+                Some(b) => format!(
+                    "Saved, but {} pack(s) are missing on disk, so no cdn_config.json was written.",
+                    b.missing.len()
+                ),
+                None => "Pack CDN disabled; restart the server to apply.".into(),
+            });
+            status
+        }
+        ["addons", "cdn", "test"] if create => {
+            use omnibedrock_server::addons::cdn;
+            let server_dir = svc.config.bedrock_server_dir.clone();
+            let settings = cdn::load_settings(&server_dir);
+            if !settings.enabled {
+                return Err(ApiError::bad("Enable the pack CDN first"));
+            }
+            let base = cdn::normalize_base_url(&settings.base_url)
+                .map_err(|e| ApiError::bad(e.to_string()))?;
+            let dir = cdn::bucket_dir(&svc.config.cache_dir, &cdn::bucket(&server_dir));
+            let mut zips: Vec<(String, u64)> = std::fs::read_dir(&dir)
+                .map(|entries| {
+                    entries
+                        .flatten()
+                        .filter_map(|e| {
+                            let name = e.file_name().to_string_lossy().into_owned();
+                            name.ends_with(".zip")
+                                .then(|| (name, e.metadata().map_or(0, |m| m.len())))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            // Smallest file: the check is about reachability and headers.
+            zips.sort_by_key(|(_, size)| *size);
+            let Some((name, size)) = zips.into_iter().next() else {
+                return Err(ApiError::bad(
+                    "No pack zips built yet; save the settings first",
+                ));
+            };
+            let url = format!("{base}/packs/{}/{name}", cdn::bucket(&server_dir));
+            json!(cdn::self_test(&url, size).await)
+        }
         ["addons", "order", world, pack_type] if read || *m == Method::PUT => {
             component(world)?;
             if !["behavior_packs", "resource_packs"].contains(pack_type) {
@@ -385,4 +465,51 @@ async fn write_manifest(path: &FsPath, value: &Value) -> Result<()> {
     )
     .await?;
     Ok(())
+}
+
+/// Pack CDN status for the Mods page: settings, coverage, what BDS said
+/// about cdn_config.json at the last boot, and address suggestions.
+async fn cdn_status(s: &AppState, svc: &Arc<Instance>) -> Result<Value> {
+    use omnibedrock_server::addons::cdn;
+    let server_dir = svc.config.bedrock_server_dir.clone();
+    let cache_dir = svc.config.cache_dir.clone();
+    let state = tokio::task::spawn_blocking(move || cdn::state(&server_dir, &cache_dir))
+        .await
+        .map_err(anyhow::Error::from)?;
+    // The newest BDS verdict about the CDN config in this run's console.
+    let bds = svc.server.console.tail(4000).iter().rev().find_map(|e| {
+        let line = e.line.as_str();
+        if line.contains("CDN config packIdVersions") {
+            Some(("loaded", line.to_owned()))
+        } else if line.contains("Mismatch detected between CDN config") {
+            Some(("mismatch", line.to_owned()))
+        } else if line.contains("Failed to parse CDN config") {
+            Some(("parse_error", line.to_owned()))
+        } else if line.contains("No CDN config file found") {
+            Some(("absent", line.to_owned()))
+        } else {
+            None
+        }
+    });
+    // A public address the operator already configured for joins.
+    let props = tokio::fs::read_to_string(svc.config.bedrock_server_dir.join("server.properties"))
+        .await
+        .unwrap_or_default();
+    let public_ip = props.lines().find_map(|l| {
+        let v = l.trim().strip_prefix("server-udp-ports=")?;
+        let entry = v.split(',').next()?.trim();
+        let parts: Vec<&str> = entry.rsplitn(3, ':').collect();
+        (parts.len() == 3 && !parts[2].is_empty()).then(|| parts[2].to_owned())
+    });
+    let port = s.config.port;
+    let suggestions: Vec<String> = public_ip
+        .iter()
+        .map(|ip| format!("http://{ip}:{port}"))
+        .collect();
+    Ok(json!({
+        "state": state,
+        "bds": bds.map(|(kind, line)| json!({"status": kind, "line": line})),
+        "suggestions": suggestions,
+        "panel_port": port,
+    }))
 }
