@@ -52,6 +52,15 @@ pub(super) async fn dispatch_authenticated(
         // Short-lived token for browser flows that cannot set the
         // Authorization header (downloads, images, WebSocket upgrades).
         ["auth", "download-token"] if create => s.auth.issue_download_token(u).await?,
+        // Personal API keys: list own (or all with ?all=1 for user managers),
+        // create (plaintext returned once), revoke.
+        ["auth", "api-keys"] if read => {
+            s.auth
+                .list_api_keys(u, q.get("all").is_some_and(|v| v == "1" || v == "true"))
+                .await?
+        }
+        ["auth", "api-keys"] if create => s.auth.create_api_key(u, b).await?,
+        ["auth", "api-keys", id] if delete => s.auth.revoke_api_key(u, id).await?,
         ["auth", "users"] if read => {
             s.auth.require(u, "USERS_VIEW").await?;
             s.auth.users().await

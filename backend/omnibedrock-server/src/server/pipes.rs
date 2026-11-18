@@ -70,6 +70,11 @@ pub(super) async fn read_pipe_advised<R: AsyncRead + Unpin>(
                 }
             }
             let line = String::from_utf8_lossy(&pending).into_owned();
+            // BDS's empty content-log trailer lines carry nothing; skip them.
+            if complete && crate::server::is_blank_tagged_line(&line) {
+                pending.clear();
+                continue;
+            }
             console.publish(line.clone(), source, !complete).await;
             // A held game port kills the boot with exit code 1 moments after
             // this line; answer it with the fix while the cause is on screen.

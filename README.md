@@ -62,11 +62,11 @@ Open **http://localhost:17755**. Compose builds the Rust API and Node frontend, 
 The multi-stage root Dockerfile has two runtime targets:
 
 - `runtime`: binary and C runtime, for an externally provided standalone Endstone executable.
-- `endstone` (default): includes Endstone 0.11.14 in its own Python environment plus a headless JRE for the optional MCXboxBroadcast integration — drop `MCXboxBroadcastStandalone.jar` into the `broadcaster` volume. Compose pins this version; set `ENDSTONE_VERSION` deliberately to upgrade. Endstone may download Bedrock on first server start; alternatively install vanilla BDS from Settings → Server backend.
+- `endstone` (default): includes Endstone 0.11.16 (Minecraft Bedrock 1.26.65) in its own Python environment plus a headless JRE for the optional MCXboxBroadcast integration — drop `MCXboxBroadcastStandalone.jar` into the `broadcaster` volume. Compose pins this version; set `ENDSTONE_VERSION` deliberately to upgrade. Endstone may download Bedrock on first server start; alternatively install vanilla BDS from Settings → Server backend.
 
 ```bash
 docker build --target runtime -t omnibedrock-api .
-docker build --target endstone --build-arg ENDSTONE_VERSION=0.11.14 -t omnibedrock .
+docker build --target endstone --build-arg ENDSTONE_VERSION=0.11.16 -t omnibedrock .
 ```
 
 The Endstone image targets `linux/amd64`. Named volumes are initialized for UID 1000; if replacing them with bind mounts, give that UID write access. The health check tests the panel API, so the panel remains healthy while the game server is stopped.
@@ -171,7 +171,7 @@ The panel supervises either an Endstone launcher or the official `bedrock_server
 
 Vanilla installs are managed in the panel: the version registry and SHA256 checksums come from [EndstoneMC/bedrock-server-data](https://github.com/EndstoneMC/bedrock-server-data) (MIT), and the archives themselves download from the official `minecraft.net` CDN URLs that registry provides — the panel never executes an archive whose hash does not match. Pick `latest` to track the newest release or pin any registry version (release or preview). Installing extracts to a staging copy first, refuses symlink entries, replaces upstream files, preserves your user data, marks the binary executable, and records the applied version in `data/bds_version.json`. Install progress streams both into the game console and the backend status endpoint. Vanilla BDS accepts the same console commands, backups, and properties tooling as Endstone; TPS is only reported when the backend prints it.
 
-New instances get a minimal `server.properties` seeded with `transport=raknet`, `allow-list=false`, and the instance's `server-port`/`server-portv6` pair; every start re-pins the ports and adds any of those keys that are missing. The explicit values matter because modern BDS fills unset keys with defaults that break panel-managed servers: `transport=nethernet` ignores `server-port` entirely (clients can never reach the advertised port), and `allow-list=true` with an empty list spams a warning every boot and rejects joins. Deliberately chosen values always win, and a non-raknet `transport` logs a loud console warning at start so a silent port mismatch can't hide.
+New instances get a minimal `server.properties` seeded with `transport=nethernet`, `allow-list=false`, the instance's `server-port`/`server-portv6` pair, and a `server-udp-ports` mapping; every start re-pins the ports and adds any of those keys that are missing. Fully updated Bedrock clients (1.26.60+) no longer speak RakNet, so NetherNet is the only transport current players can join. With Endstone 0.11.15+ NetherNet is multiplexed onto one port: forward **TCP and UDP** on `server-port`, and prefix `server-udp-ports` with an address your players can reach (`<public-ip>:<port>:<port>`, or the tailnet IP for Tailscale joins). Vanilla BDS NetherNet needs one UDP port per player slot instead. `allow-list=true` with an empty list (the BDS default) spams a warning every boot and rejects joins, so it is pinned off. Deliberately chosen values always win, and the console prints a one-line transport note at every start stating exactly what to forward.
 
 ## MCXboxBroadcast integration
 
@@ -181,9 +181,24 @@ Home directories: the migrated `default` instance keeps the panel-level `BROADCA
 
 **Join address gotcha:** `session.session-info.ip` must be an address **joining clients** can reach. The broadcaster's Xbox LIVE session hands friends to the broadcaster over NetherNet, and after that fake handshake the client is told (Bedrock `TransferPacket`) to connect to exactly `session-info.ip:port` over plain RakNet — the broadcaster never proxies gameplay, it only logs "Transferred bedrock client …". So: friends joining over the internet need your **public/WAN IP** here (with the gameplay port forwarded as UDP on the router to the server machine); a LAN IP only works for players on the same network; a VPN IP (Tailscale, ZeroTier, …) works for VPN members. If the address is unreachable there is exactly one failure shape: the broadcaster logs "Transferred bedrock client … to target server", the client errors out (e.g. InitialConnection-13), and the game server never logs the player. `session.ice-port-range` pins the WebRTC ICE ports (one per in-progress join) so only that small UDP range needs opening/forwarding alongside the gameplay port.
 
+**Query health:** while the broadcaster runs, the panel probes the relay target the same way the jar does — NetherNet HTTP signaling (`GET /v1/join` on TCP server-port, what `transport=nethernet` servers answer) first, then RakNet on UDP. A NetherNet server never answers RakNet, so the older RakNet-only probe flagged every healthy modern server as unreachable. The banner now needs two consecutive failures, pauses while the game server is stopped or booting, and shows which protocol answered plus the live name, version, and player count. The status endpoint also reports `config.yml` drift against `server.properties` (relay port vs `server-port`, fallback name/level/max-players), and config saves carry an ETag so an edit made against a stale copy is refused instead of overwriting the file on disk.
+
 When a Microsoft account needs authentication, the panel parses the device-code prompt from the log stream (`open the page <url> and enter the code <code>`) and surfaces each account's code and verification URL in the UI — including sub-session accounts (`accounts add <id>`), which the panel proxies to the broadcaster console. Extra accounts persist in the broadcaster's own `cache/sub_sessions.json`; per-account screenshots are written next to each token cache. Commands (`accounts list`, `restart`, `dumpsession`, …) can be sent from the page or `POST /api/v1/broadcaster/command`; everything is also visible on `WS /api/v1/broadcaster/ws`.
 
 
+
+## API keys
+
+Scripts and integrations use the panel's existing URL and port — no extra listener. Create a key under **Settings → API Keys** (the plaintext is shown once; only a hash is stored), then send it with your username:
+
+```bash
+curl -s http://<panel-host>:17754/api/v1/server/status \
+  -H "X-API-User: Admin" \
+  -H "X-API-Key: omb_xxxxxxxxxxxx_…" \
+  -H "X-Instance: furralis-craft"   # optional: which server
+```
+
+`Authorization: Bearer omb_…` is accepted as well. A key acts with its owner's permissions and never more; **read-only** keys are limited to `GET`; keys can expire, are revoked instantly, and die with their account. A request authenticated by a key cannot create, list, or revoke keys. WebSockets take a short-lived `?dt=` token from `POST /api/v1/auth/download-token` (callable with a key). Endpoints: `GET/POST /api/v1/auth/api-keys`, `DELETE /api/v1/auth/api-keys/{id}`; the full list is at `/api-docs` and `/openapi.json`.
 
 ## Console protocol and reliability
 

@@ -647,6 +647,7 @@ async fn plugins_and_explorer_enforce_permissions() {
                 created_at: String::new(),
                 last_login: String::new(),
                 quotas: Default::default(),
+                key_scope: None,
             },
             "viewer",
             Some(json!({"password": "viewer-password", "role": "viewer"})),

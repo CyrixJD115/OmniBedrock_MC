@@ -49,6 +49,8 @@ pub struct DeviceCode {
 pub struct RelayTarget {
     /// Rendered `ip:port` after resolving `auto` the way the jar does.
     pub text: String,
+    /// The resolved port alone (for the server-port cross-check).
+    pub port: u16,
     /// True when the address is globally routable — on this panel the
     /// broadcaster always shares the host with the server, so a public relay
     /// target is the classic hairpin-NAT join failure.
@@ -64,6 +66,12 @@ pub struct RelayAnalysis {
     pub query_server: bool,
     pub relay: Option<RelayTarget>,
     pub legacy: Option<RelayTarget>,
+    /// The instance's server-port the relay should point at.
+    pub server_port: u16,
+    /// True when the operational relay port (the relay target, else the
+    /// legacy address) is not this instance's server-port — the classic
+    /// "copied the config from another instance" drift.
+    pub port_mismatch: bool,
 }
 
 impl RelayAnalysis {
@@ -72,19 +80,47 @@ impl RelayAnalysis {
             query_server: true,
             relay: None,
             legacy: None,
+            server_port: 0,
+            port_mismatch: false,
         }
     }
 }
 
+/// What the server answered to the panel's probe.
+#[derive(Clone, Debug, Serialize, Default, PartialEq)]
+pub struct PongInfo {
+    pub name: String,
+    pub version: String,
+    pub level: String,
+    pub players: Option<u32>,
+    pub max_players: Option<u32>,
+}
+
 /// Panel-side health of the broadcaster's query ping against the server.
-/// `ok: None` means no verdict yet (broadcaster stopped, or query-server
-/// disabled so pings are not part of the deal).
+/// `ok: None` means no verdict (broadcaster stopped, game server offline or
+/// still booting, or query-server disabled so pings are not part of the
+/// deal) — the UI must only warn on an explicit `ok: Some(false)`.
 #[derive(Clone, Debug, Serialize, Default, PartialEq)]
 pub struct PingHealth {
     pub target: Option<String>,
     pub ok: Option<bool>,
     pub failing_since: Option<f64>,
     pub last_checked: Option<f64>,
+    /// Which protocol answered: "nethernet" (HTTP signaling on TCP
+    /// server-port, BDS 1.26.60+ transport=nethernet) or "raknet" (UDP).
+    pub protocol: Option<String>,
+    /// The server's `transport` from server.properties.
+    pub transport: Option<String>,
+    pub latency_ms: Option<u64>,
+    /// Name/version/players the server reported.
+    pub server: Option<PongInfo>,
+    /// Why the last probe failed (every protocol tried).
+    pub error: Option<String>,
+    /// False while the instance's game server is not running; probing is
+    /// paused then, because "unreachable" would be a false alarm.
+    pub server_running: Option<bool>,
+    /// Consecutive failed probes; the banner needs two to avoid flapping.
+    pub consecutive_failures: u32,
 }
 
 /// A broadcaster process for this instance that the panel did not spawn.

@@ -53,7 +53,7 @@ ENTRYPOINT ["omnibedrock"]
 # Java is included for the optional MCXboxBroadcast standalone integration.
 FROM runtime AS endstone
 USER root
-ARG ENDSTONE_VERSION=0.11.14
+ARG ENDSTONE_VERSION=0.11.16
 RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv libcurl4 default-jre-headless \
     && rm -rf /var/lib/apt/lists/* \
     && python3 -m venv /opt/endstone \

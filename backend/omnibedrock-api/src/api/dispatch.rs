@@ -49,6 +49,67 @@ fn instance_scoped(segments: &[&str]) -> bool {
     }
 }
 
+/// Credentials a request may carry: the login bearer JWT, or a personal API
+/// key (`X-API-User` + `X-API-Key`, or `Authorization: Bearer omb_…`). API
+/// keys ride the same URL and port as everything else — no extra listener.
+struct Credentials {
+    bearer: Option<String>,
+    api_user: Option<String>,
+    api_key: Option<String>,
+    ip: String,
+    method: Method,
+}
+
+impl Credentials {
+    fn from_headers(headers: &axum::http::HeaderMap, ip: &str, method: &Method) -> Self {
+        let text = |name: &str| {
+            headers
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(str::to_owned)
+        };
+        let bearer = headers
+            .get(header::AUTHORIZATION)
+            .and_then(|h| h.to_str().ok())
+            .and_then(|s| s.strip_prefix("Bearer "))
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty());
+        Self {
+            bearer,
+            api_user: text("x-api-user"),
+            api_key: text("x-api-key"),
+            ip: ip.to_owned(),
+            method: method.clone(),
+        }
+    }
+
+    /// Resolve the acting user. An API key wins over a bearer JWT; a key
+    /// presented as the bearer value is recognized by its `omb_` shape.
+    /// Read-only keys are refused on anything but GET.
+    async fn resolve(&self, state: &AppState) -> Result<crate::auth::User> {
+        let key = self.api_key.as_deref().or_else(|| {
+            self.bearer
+                .as_deref()
+                .filter(|b| crate::auth::looks_like_api_key(b))
+        });
+        let Some(key) = key else {
+            return state.auth.resolve_user(self.bearer.as_deref()).await;
+        };
+        let user = state
+            .auth
+            .resolve_api_key(self.api_user.as_deref(), key, &self.ip)
+            .await?;
+        if user.key_scope == Some(crate::auth::KeyScope::ReadOnly) && self.method != Method::GET {
+            return Err(ApiError::forbidden(
+                "This API key is read-only; only GET requests are allowed",
+            ));
+        }
+        Ok(user)
+    }
+}
+
 pub(super) async fn dispatch(
     State(state): State<AppState>,
     Path(path): Path<String>,
@@ -81,16 +142,11 @@ pub(super) async fn dispatch(
         .filter(|v| !v.is_empty())
         .map(str::to_owned)
         .or_else(|| query.get("instance").cloned());
-    let header_token = request
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .map(str::to_owned);
+    let creds = Credentials::from_headers(request.headers(), &ip, &method);
     // Addon archives stream straight to a temp file so large .mcpack/.mcaddon
     // uploads never sit whole in memory.
     if path == "addons/upload" && method == Method::POST {
-        let user = state.auth.resolve_user(header_token.as_deref()).await?;
+        let user = creds.resolve(&state).await?;
         let svc = state
             .resolve_instance(instance_id.as_deref(), &user)
             .await?;
@@ -111,7 +167,7 @@ pub(super) async fn dispatch(
             _ => None,
         };
         if let Some((permission, id)) = upload {
-            let user = state.auth.resolve_user(header_token.as_deref()).await?;
+            let user = creds.resolve(&state).await?;
             let svc = state.resolve_instance(Some(id), &user).await?;
             state.require_for(&user, permission, &svc).await?;
             let multipart = Multipart::from_request(request, &())
@@ -130,7 +186,7 @@ pub(super) async fn dispatch(
     // Screenshot uploads are raw image bytes, not the JSON envelope every other
     // endpoint uses, so they are handled before the generic body parse.
     if path == "broadcaster/screenshot" && method == Method::PUT {
-        let user = state.auth.resolve_user(header_token.as_deref()).await?;
+        let user = creds.resolve(&state).await?;
         let svc = state
             .resolve_instance(instance_id.as_deref(), &user)
             .await?;
@@ -223,7 +279,7 @@ pub(super) async fn dispatch(
     let user = if query_allowed && let Some(dt) = query.get("dt").filter(|t| !t.trim().is_empty()) {
         state.auth.resolve_download_user(dt).await?
     } else {
-        state.auth.resolve_user(header_token.as_deref()).await?
+        creds.resolve(&state).await?
     };
     // Resolve the scoped instance only for routes that actually consume it
     // (`instance_scoped`): strict 404 on an unknown id belongs there alone.

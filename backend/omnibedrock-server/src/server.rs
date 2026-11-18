@@ -30,7 +30,7 @@ mod types;
 mod unit;
 
 pub use console::{Console, Replay};
-pub use helpers::{detect_level, now};
+pub use helpers::{detect_level, is_blank_tagged_line, now};
 pub use manager::ServerManager;
 pub use types::{
     Backend, ConsoleEvent, ErrorStat, LaunchContext, ServerPaths, ServerSettings, Snapshot, Status,

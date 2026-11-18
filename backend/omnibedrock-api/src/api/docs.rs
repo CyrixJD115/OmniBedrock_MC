@@ -33,7 +33,11 @@ const TEMPLATE: &str = r#"<!doctype html>
 <p>
   REST API for instances, console, backups, addons, store, and broadcaster.
   Authentication: <code>Authorization: Bearer &lt;token&gt;</code> from
-  <code>POST __PREFIX__/auth/login</code> (instance-scoped calls add
+  <code>POST __PREFIX__/auth/login</code>, or a personal API key from
+  Settings &rarr; API keys sent as <code>X-API-User: &lt;username&gt;</code> +
+  <code>X-API-Key: omb_&hellip;</code> on this same URL and port (WebSockets: mint a
+  short-lived token with <code>POST __PREFIX__/auth/download-token</code> and pass it as
+  <code>?dt=</code>) (instance-scoped calls add
   <code>X-Instance: &lt;id&gt;</code>). Every response carries an
   <code>X-Request-Id</code> header; JSON objects also carry
   <code>"ok"</code>, and errors add <code>"error": {"code", "message"}</code>.

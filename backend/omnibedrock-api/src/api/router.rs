@@ -120,7 +120,13 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
             CorsLayer::new()
                 .allow_origin(origins)
                 .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
-                .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+                .allow_headers([
+                    header::AUTHORIZATION,
+                    header::CONTENT_TYPE,
+                    header::HeaderName::from_static("x-api-key"),
+                    header::HeaderName::from_static("x-api-user"),
+                    header::HeaderName::from_static("x-instance"),
+                ])
                 .allow_credentials(true),
         )
         .with_state(state))

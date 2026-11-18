@@ -53,6 +53,9 @@ pub(super) fn audit_action(
             "broadcaster",
         ),
         ["broadcaster", "config"] => ("broadcaster.config_update".into(), detail, "broadcaster"),
+        ["broadcaster", "jar", "update"] => {
+            ("broadcaster.jar_update".into(), detail, "broadcaster")
+        }
         ["players", "action"] => (
             format!("player:{}", optional_string(b, "action", "unknown")),
             optional_string(b, "target", "").into(),
@@ -63,6 +66,16 @@ pub(super) fn audit_action(
             optional_string(b, "command", "").into(),
             "console",
         ),
+        ["auth", "api-keys"] => (
+            "auth.api_key_create".into(),
+            format!(
+                "{} ({})",
+                optional_string(b, "name", ""),
+                optional_string(b, "scope", "full")
+            ),
+            "auth",
+        ),
+        ["auth", "api-keys", id] => ("auth.api_key_revoke".into(), (*id).into(), "auth"),
         ["auth", "users", ..] => (
             format!(
                 "auth.user_{}",

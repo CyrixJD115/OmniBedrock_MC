@@ -268,6 +268,35 @@ pub(super) async fn addons(
             write_manifest(&path, &manifest).await?;
             success("UUID updated")
         }
+        // What a joining client downloads for the active (or ?world=) world:
+        // active resource packs with sizes, unpaired leftovers, and version
+        // pins that disagree with the manifests.
+        ["addons", "delivery"] if read => {
+            let props =
+                tokio::fs::read_to_string(svc.config.bedrock_server_dir.join("server.properties"))
+                    .await
+                    .unwrap_or_default();
+            let prop = |key: &str| {
+                props.lines().find_map(|l| {
+                    l.trim()
+                        .strip_prefix(key)
+                        .and_then(|v| v.strip_prefix('='))
+                        .map(|v| v.trim().to_owned())
+                })
+            };
+            let world = match q.get("world") {
+                Some(w) => w.clone(),
+                None => prop("level-name").unwrap_or_else(|| "Bedrock level".into()),
+            };
+            component(&world)?;
+            let world_dir = safe_path(&root, &PathBuf::from(&world)).await?;
+            let required = prop("texturepack-required").map(|v| v.eq_ignore_ascii_case("true"));
+            let report =
+                tokio::task::spawn_blocking(move || addons::delivery_report(&world_dir, required))
+                    .await
+                    .map_err(anyhow::Error::from)?;
+            serde_json::to_value(report).map_err(anyhow::Error::from)?
+        }
         ["addons", "order", world, pack_type] if read || *m == Method::PUT => {
             component(world)?;
             if !["behavior_packs", "resource_packs"].contains(pack_type) {

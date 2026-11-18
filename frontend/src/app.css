@@ -349,6 +349,50 @@
     outline-offset: 2px;
   }
 
+  /* Pixel checkboxes and radios: square, carved-in, with a solid accent
+     "block" when checked — the in-game toggle look. */
+  input[type='checkbox'],
+  input[type='radio'] {
+    appearance: none;
+    -webkit-appearance: none;
+    flex-shrink: 0;
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    display: inline-grid;
+    place-content: center;
+    background: rgb(var(--deep-900));
+    border: 2px solid rgb(var(--deep-500) / 0.9);
+    box-shadow: inset 1px 1px 0 rgb(0 0 0 / 0.35);
+    cursor: pointer;
+    vertical-align: middle;
+  }
+  input[type='checkbox']::before,
+  input[type='radio']::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    transform: scale(0);
+    transition: transform 80ms steps(2);
+    background: rgb(var(--bedrock-300));
+    box-shadow: 1px 1px 0 rgb(0 0 0 / 0.35);
+  }
+  input[type='checkbox']:checked,
+  input[type='radio']:checked {
+    background: rgb(var(--bedrock-600));
+    border-color: rgb(var(--bedrock-400));
+  }
+  input[type='checkbox']:checked::before,
+  input[type='radio']:checked::before {
+    transform: scale(1);
+    background: rgb(255 255 255 / 0.92);
+  }
+  input[type='checkbox']:disabled,
+  input[type='radio']:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
   ::-webkit-scrollbar { width: 10px; height: 10px; }
   ::-webkit-scrollbar-track { background: rgb(var(--deep-950)); }
   ::-webkit-scrollbar-thumb {
@@ -385,9 +429,15 @@
   }
 
   .card-header {
-    @apply mb-3 flex items-center gap-2 border-b pb-2 text-sm font-bold uppercase tracking-wider;
+    @apply mb-3 flex items-center gap-2 border-b-2 pb-2 text-sm font-bold uppercase tracking-wider;
     color: rgb(var(--color-strong));
     border-color: rgb(var(--deep-600) / 0.4);
+    /* Pixel-dashed separator, like the rows between GUI sections in-game. */
+    border-image: repeating-linear-gradient(
+      90deg,
+      rgb(var(--deep-500) / 0.55) 0 4px,
+      transparent 4px 6px
+    ) 2;
     text-shadow: 2px 2px 0 var(--mc-text-shadow);
   }
 
@@ -397,12 +447,20 @@
     @apply relative overflow-hidden px-5 py-2.5 font-body text-sm font-semibold uppercase tracking-wider transition-all duration-150
            disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none;
     color: #fff;
+    text-shadow: 1px 1px 0 rgb(0 0 0 / 0.45);
     box-shadow:
       inset 0 2px 0 var(--edge-top),
       inset 0 -3px 0 var(--edge-bottom),
       3px 3px 0 0 var(--shadow-block);
   }
   .btn:hover:not(:disabled) { filter: brightness(1.1); }
+  /* Minecraft highlights a hovered button with a bright outline. */
+  .btn-primary:hover:not(:disabled),
+  .btn-secondary:hover:not(:disabled),
+  .btn-danger:hover:not(:disabled),
+  .btn-success:hover:not(:disabled) {
+    border-color: rgb(255 255 255 / 0.7);
+  }
   .btn:active:not(:disabled) {
     transform: translate(2px, 2px);
     box-shadow:
@@ -443,6 +501,7 @@
   .btn-ghost {
     @apply btn;
     background: transparent;
+    text-shadow: none;
     color: rgb(var(--deep-300));
     border: 2px solid transparent;
     box-shadow: none;
@@ -508,6 +567,43 @@
     box-shadow:
       inset 2px 2px 0 rgb(255 255 255 / 0.04),
       inset -1px -1px 0 rgb(0 0 0 / 0.25);
+  }
+
+  /* Inventory slot: the sunken square every item sits in — dark fill, dark
+     top-left edge, light bottom-right edge (the inverse of a raised button). */
+  .mc-slot {
+    background: rgb(var(--deep-950) / 0.55);
+    border: 2px solid rgb(var(--deep-600) / 0.6);
+    box-shadow:
+      inset 2px 2px 0 rgb(0 0 0 / 0.35),
+      inset -2px -2px 0 rgb(255 255 255 / 0.05);
+  }
+
+  /* Advancement-style toast frame. */
+  .mc-toast {
+    border-top: 2px solid rgb(255 255 255 / 0.12);
+    border-right: 2px solid rgb(0 0 0 / 0.35);
+    border-bottom: 2px solid rgb(0 0 0 / 0.45);
+    box-shadow:
+      inset 1px 1px 0 rgb(255 255 255 / 0.08),
+      3px 3px 0 0 var(--shadow-block);
+    text-shadow: 1px 1px 0 rgb(0 0 0 / 0.35);
+  }
+
+  /* Experience-bar progress: segmented green fill on a dark trough. */
+  .mc-progress {
+    height: 8px;
+    background: rgb(var(--deep-950));
+    border: 2px solid rgb(0 0 0 / 0.5);
+    overflow: hidden;
+  }
+  .mc-progress > span {
+    display: block;
+    height: 100%;
+    background:
+      repeating-linear-gradient(90deg, transparent 0 9px, rgb(0 0 0 / 0.35) 9px 10px),
+      linear-gradient(rgb(128 255 32), rgb(75 170 10));
+    transition: width 300ms steps(12);
   }
 
   /* Pixel-dashed accent rule under page titles. */

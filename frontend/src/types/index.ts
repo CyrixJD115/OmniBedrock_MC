@@ -305,10 +305,26 @@ export interface BroadcasterStatus {
   ping: PingHealth;
   /** A broadcaster java for this instance the panel did not spawn. */
   external: ExternalBroadcaster | null;
+  /** Version tag of config.yml on disk; moves when the file changes. */
+  config_etag?: string;
+  /** server.properties facts the broadcaster session should mirror. */
+  server?: ServerFacts;
+  /** The instance's game server state (the ping only means something while running). */
+  server_status?: string;
+}
+
+export interface ServerFacts {
+  port: number;
+  transport: string;
+  server_name: string | null;
+  level_name: string | null;
+  max_players: number | null;
+  gamemode: string | null;
 }
 
 export interface RelayTarget {
   text: string;
+  port?: number;
   public: boolean;
 }
 
@@ -318,13 +334,47 @@ export interface RelayAnalysis {
   relay: RelayTarget | null;
   /** session-info.ip / port — legacy pre-v7 keys the jar migrates on load. */
   legacy: RelayTarget | null;
+  /** The instance's server-port. */
+  server_port?: number;
+  /** Relay port differs from the instance's server-port. */
+  port_mismatch?: boolean;
+}
+
+export interface PongInfo {
+  name: string;
+  version: string;
+  level: string;
+  players: number | null;
+  max_players: number | null;
 }
 
 export interface PingHealth {
   target: string | null;
+  /** null = no verdict (stopped, server offline/booting, or query disabled). */
   ok: boolean | null;
   failing_since: number | null;
   last_checked: number | null;
+  /** 'nethernet' (TCP signaling) or 'raknet' (UDP) — whichever answered. */
+  protocol?: string | null;
+  transport?: string | null;
+  latency_ms?: number | null;
+  server?: PongInfo | null;
+  error?: string | null;
+  server_running?: boolean | null;
+  consecutive_failures?: number;
+}
+
+export interface ApiKeyRecord {
+  id: string;
+  user: string;
+  name: string;
+  scope: 'full' | 'read_only';
+  prefix: string;
+  created_at: string;
+  last_used: string;
+  last_ip: string;
+  expires_at: string;
+  expired: boolean;
 }
 
 export interface ExternalBroadcaster {
@@ -528,4 +578,38 @@ export interface UserQuotas {
   max_instances: number | null;
   memory_mb: number | null;
   cpus: number | null;
+}
+
+export interface DeliveredPack {
+  uuid: string;
+  name: string;
+  folder: string;
+  version: number[];
+  bytes: number;
+  files: number;
+  subpacks: boolean;
+  unpaired: boolean;
+  version_mismatch: boolean;
+}
+
+/** GET /addons/delivery — what a joining client downloads for one world. */
+export interface PackDelivery {
+  world: string;
+  packs: DeliveredPack[];
+  total_bytes: number;
+  missing: string[];
+  console_heavy: boolean;
+  texturepack_required: boolean | null;
+}
+
+/** GET /broadcaster/jar */
+export interface BroadcasterJarInfo {
+  jar: string;
+  jar_exists: boolean;
+  running_build: string | null;
+  running_bedrock: string | null;
+  installed_build: string | null;
+  latest: { tag: string; published_at: string; size: number } | null;
+  latest_error: string | null;
+  update_available: boolean;
 }

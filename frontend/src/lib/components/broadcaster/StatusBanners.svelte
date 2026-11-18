@@ -86,20 +86,43 @@
   </div>
 {/if}
 
-{#if status?.ping?.ok === false}
+{#if status?.relay?.port_mismatch}
+  <div class="card border-yellow-500/40">
+    <div class="flex items-start gap-3">
+      <TriangleAlert size={18} class="text-yellow-400 mt-0.5 shrink-0" />
+      <div class="text-xs text-deep-300 space-y-1">
+        <p class="font-bold text-yellow-300 uppercase tracking-wider">Relay port does not match this server</p>
+        <p>
+          config.yml points at port
+          <span class="font-mono text-strong">{status.relay.relay?.port ?? status.relay.legacy?.port}</span>, but this
+          instance's server-port is <span class="font-mono text-strong">{status.relay.server_port}</span> — the
+          broadcaster would query and advertise a different server. Use
+          <span class="text-bedrock-300">Sync from server.properties</span> under config.yml, or set
+          <span class="font-mono">session.remote-port</span> to <span class="font-mono">auto</span>.
+        </p>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if status?.ping?.ok === false && status.ping.server_running !== false}
   <div class="card border-yellow-500/40">
     <div class="flex items-start gap-3">
       <TriangleAlert size={18} class="text-yellow-400 mt-0.5 shrink-0" />
       <div class="text-xs text-deep-300 space-y-1">
         <p class="font-bold text-yellow-300 uppercase tracking-wider">
-          Broadcaster cannot reach the server ping target
+          Server not answering the broadcaster's query
         </p>
         <p>
-          The query ping against <span class="font-mono text-strong">{status.ping.target ?? '—'}</span>
-          fails, so the session advertises stale player/world values
-          (<span class="font-mono">"Failed to ping server, falling back to config values"</span> in the console).
-          Check that the server is running and that the relay target points at this host's server-port.
+          Neither NetherNet (TCP signaling) nor RakNet (UDP) answered at
+          <span class="font-mono text-strong">{status.ping.target ?? '—'}</span>
+          {#if status.ping.consecutive_failures}({status.ping.consecutive_failures} probes in a row){/if}, so the Xbox
+          session shows the config fallback values instead of live player counts. Check that the relay
+          target is this host (<span class="font-mono">127.0.0.1</span>) with the instance's server-port.
         </p>
+        {#if status.ping.error}
+          <p class="font-mono text-[10px] text-deep-400 break-all">{status.ping.error}</p>
+        {/if}
         {#if status.ping.failing_since}
           <p class="text-deep-400">failing since {new Date(status.ping.failing_since * 1000).toLocaleTimeString()}</p>
         {/if}

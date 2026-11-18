@@ -4,7 +4,7 @@ services:
       context: .
       target: endstone
       args:
-        ENDSTONE_VERSION: ${ENDSTONE_VERSION:-0.11.14}
+        ENDSTONE_VERSION: ${ENDSTONE_VERSION:-0.11.16}
     platform: linux/amd64
     init: true
     restart: unless-stopped

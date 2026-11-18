@@ -311,9 +311,8 @@
                 <p class="text-deep-300">{$latestBackupEvent.message}</p>
               {/if}
               {#if $latestBackupEvent.percent !== undefined}
-                <div class="w-full h-2 bg-deep-700 rounded overflow-hidden mt-2">
-                  <div class="h-full bg-bedrock-500 transition-all duration-300 rounded"
-                       style="width: {$latestBackupEvent.percent}%"></div>
+                <div class="mc-progress w-full mt-2">
+                  <span style="width: {$latestBackupEvent.percent}%"></span>
                 </div>
                 <span class="text-deep-400">{$latestBackupEvent.percent}%</span>
               {/if}

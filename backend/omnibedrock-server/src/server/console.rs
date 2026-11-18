@@ -15,6 +15,14 @@ use uuid::Uuid;
 use super::helpers::{detect_level, now};
 use super::types::{ConsoleEvent, ErrorStat};
 
+/// The BDS boot line (`[… INFO]: Version: 1.26.65.1`); anchored on the
+/// prefix so add-on chatter like "Current Version: 2.20.3" never matches.
+static BDS_VERSION: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\[[^\]]*\]:?\s+Version:\s+(\d+(?:\.\d+){2,3})\s*$").unwrap());
+/// `This server is running Endstone version: 0.11.16 (Minecraft: 26.65)`.
+static ENDSTONE_VERSION: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"running Endstone version:\s*([0-9][0-9A-Za-z.+-]*)").unwrap());
+static ANSI: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\x1b\[[0-9;?]*[A-Za-z]").unwrap());
 static TPS: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)(tps|mspt)[:\s]*([0-9]+(?:\.[0-9]+)?)").unwrap());
 static DECIMAL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\d+(?:\.\d+)+").unwrap());
@@ -26,6 +34,8 @@ struct ConsoleState {
     sequence: u64,
     errors: BTreeMap<String, ErrorStat>,
     tps: Option<f64>,
+    /// Game version from the boot banner (plus the Endstone version).
+    version: Option<String>,
     /// The last panel advisory published via [`Console::publish_note`], so a
     /// boot retry loop does not re-print an unchanged NOTE on every attempt.
     last_note: Option<String>,
@@ -74,6 +84,7 @@ impl Console {
                 sequence: 0,
                 errors: BTreeMap::new(),
                 tps: None,
+                version: None,
                 last_note: None,
             })),
             stream_id,
@@ -117,6 +128,18 @@ impl Console {
         let level = detect_level(&line);
         let timestamp = now();
         let mut s = self.inner.lock().expect("console mutex poisoned");
+        let plain = ANSI.replace_all(&line, "");
+        if let Some(c) = BDS_VERSION.captures(&plain) {
+            s.version = Some(c[1].to_string());
+        } else if let Some(c) = ENDSTONE_VERSION.captures(&plain) {
+            let game = s.version.clone().unwrap_or_default();
+            let base = game.split(" · ").next().unwrap_or_default().to_string();
+            s.version = Some(if base.is_empty() {
+                format!("Endstone {}", &c[1])
+            } else {
+                format!("{base} · Endstone {}", &c[1])
+            });
+        }
         if let Some(c) = TPS.captures(&line)
             && let Ok(value) = c[2].parse::<f64>()
         {
@@ -241,6 +264,14 @@ impl Console {
         errors.sort_by_key(|s| std::cmp::Reverse(s.count));
         errors
     }
+    /// Game version announced by the running server's boot banner.
+    pub fn version(&self) -> Option<String> {
+        self.inner
+            .lock()
+            .expect("console mutex poisoned")
+            .version
+            .clone()
+    }
     pub fn tps(&self) -> Option<f64> {
         self.inner.lock().expect("console mutex poisoned").tps
     }
@@ -248,6 +279,7 @@ impl Console {
         let mut s = self.inner.lock().expect("console mutex poisoned");
         s.errors.clear();
         s.tps = None;
+        s.version = None;
         self.errors_changed.send_replace(s.sequence);
     }
 }

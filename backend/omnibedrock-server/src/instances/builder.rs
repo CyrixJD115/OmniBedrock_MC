@@ -113,6 +113,8 @@ pub(super) async fn build_instance(
         token.clone(),
         (record.id != DEFAULT_INSTANCE).then(|| config.broadcaster_dir.clone()),
         broadcaster_docker_spec(&record, config),
+        // The health probe pauses while the game server is down or booting.
+        Some(server.state.clone()),
     )?;
     let backups = if record.id == DEFAULT_INSTANCE {
         Backups::new(instance_config.clone(), server.clone(), token.clone()).await?

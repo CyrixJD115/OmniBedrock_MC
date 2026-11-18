@@ -11,7 +11,7 @@
     <!-- Success/error toasts sit on solid dark status colors (white text in
          both modes); info toasts follow the themed surface ramp instead. -->
     {#if toast.type === 'info'}
-      <div class="pointer-events-auto flex items-start gap-3 px-4 py-3 bg-deep-700 text-strong text-sm rounded-sm border-l-4 border-bedrock-400 shadow-block animate-slide-up">
+      <div class="pointer-events-auto flex items-start gap-3 px-4 py-3 bg-deep-700 text-strong text-sm rounded-sm border-l-4 border-bedrock-400 mc-toast animate-slide-up">
         <span class="flex-1">{toast.message}</span>
         {#if toast.action}
           <button onclick={() => { toast.action!.callback(); dismissToast(toast.id); }}
@@ -26,7 +26,7 @@
         </button>
       </div>
     {:else}
-      <div class={"pointer-events-auto flex items-start gap-3 px-4 py-3 text-white text-sm rounded-sm border-l-4 shadow-block animate-slide-up " +
+      <div class={"pointer-events-auto flex items-start gap-3 px-4 py-3 text-white text-sm rounded-sm border-l-4 mc-toast animate-slide-up " +
                   (toast.type === 'success' ? 'bg-teal-700 border-teal-400' : 'bg-red-700 border-red-400')}>
         <span class="flex-1">{toast.message}</span>
         {#if toast.action}

@@ -7,7 +7,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { collapseKey, collapseRuns, type FeedLine } from './console.ts';
+import { collapseKey, collapseRuns, detectLevel, type FeedLine } from './console.ts';
 import {
   broadcasterFeed,
   handleBroadcastEvent,
@@ -213,4 +213,19 @@ test('broadcaster: instance switch resets bookkeeping for both sides', () => {
   assert.equal(isReconnect(instA), false, 'returning to A after a switch is a fresh load');
   assert.equal(isReconnect(instB), true);
   assert.equal(resumeSuffix(instA), '', 'returning to A must replay from scratch');
+});
+
+test('detectLevel reads timestamped level tags before keywords', () => {
+  assert.equal(detectLevel('[01:35:28 WARNING]: [Scripting] alias in use'), 'warn');
+  assert.equal(detectLevel('[01:35:27 INFO]: Profiler config: success=1, errorMessage=(null)'), 'info');
+  assert.equal(detectLevel('[01:35:30 ERROR]: [Json] bad'), 'error');
+  assert.equal(detectLevel('[01:41:41.540 main/INFO] Starting'), 'info');
+  assert.equal(detectLevel('[01:56:44.942 MCXboxBroadcast Thread-1/ERROR] x'), 'error');
+  assert.equal(detectLevel('[LOCAL] note'), 'local');
+});
+
+test('detectLevel falls back to whole-word keywords and exception classes', () => {
+  assert.equal(detectLevel('Traceback (most recent call last):'), 'error');
+  assert.equal(detectLevel('RuntimeError: boom'), 'error');
+  assert.equal(detectLevel('0 errors, 0 warnings'), 'info');
 });

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { api, rawHeaders } from '$lib/api/client';
+  import { api, rawHeaders, getInstance } from '$lib/api/client';
   import { wsManager } from '$lib/websocket';
   import { addToast } from '$stores/toast';
   import { userPermissions } from '$stores/auth';
@@ -16,12 +16,12 @@
     markLoaded,
     resetFor,
   } from '$lib/broadcaster/console.ts';
-  import type { BroadcasterStatus, DeviceCode } from '$types/index';
-  import { normalize, overlayModel, visualDefaults } from '$lib/broadcaster/configModel';
+  import type { BroadcasterStatus, DeviceCode, BroadcasterJarInfo } from '$types/index';
+  import { normalize, overlayModel, visualDefaults, serverDrift } from '$lib/broadcaster/configModel';
   import type { BcVisualConfig } from '$lib/broadcaster/configModel';
   import { load as yamlLoad, dump as yamlDump } from 'js-yaml';
   import {
-    Radio, Save, Upload, RefreshCw, Settings2, FileText
+    Radio, Save, Upload, RefreshCw, Settings2, FileText, GitCompareArrows
   } from '@lucide/svelte';
   import StatusBanners from '$lib/components/broadcaster/StatusBanners.svelte';
   import ProcessCard from '$lib/components/broadcaster/ProcessCard.svelte';
@@ -42,6 +42,15 @@
   let cfg = $state<BcVisualConfig>(visualDefaults());
   let visualDirty = $state(false);
   let parsedDoc: Record<string, any> = {};
+  // Version tag of the config.yml this editor was loaded from. Saves send it
+  // back, and a status poll that reports a different tag means the file
+  // changed on disk (jar migration, hand edit, another tab).
+  let configEtag = '';
+  let diskChanged = $state(false);
+  let jarInfo = $state<BroadcasterJarInfo | null>(null);
+  // The instance the page currently shows; async work for any other
+  // instance (a poll still in flight across a switch) is discarded.
+  let currentId = $state<string>('');
   let busy = $state('');
   let newAccount = $state('');
   let screenshotAccount = $state('main');
@@ -104,14 +113,80 @@
   }
 
   function instanceId(): string {
-    return $activeInstance?.id || 'default';
+    // Before the instance list arrives, follow the id requests are already
+    // scoped to (the persisted selection) so the first load is not 'default'.
+    return $activeInstance?.id || getInstance() || 'default';
   }
 
   async function refresh() {
+    const forId = currentId;
     try {
-      status = await api.getBroadcasterStatus();
-      codes = status.device_codes;
+      const next = await api.getBroadcasterStatus();
+      // A response for an instance we already left would paint the other
+      // server's broadcaster here.
+      if (forId !== currentId) return;
+      status = next;
+      codes = next.device_codes;
+      if (next.config_etag && configEtag && next.config_etag !== configEtag) {
+        if (configDirty) {
+          diskChanged = true;
+        } else {
+          await loadConfig();
+          if (forId === currentId) addToast('config.yml changed on disk — editor reloaded', 'info');
+        }
+      }
     } catch { /* transient */ }
+  }
+
+  async function loadJarInfo(refreshLatest = false) {
+    const forId = currentId;
+    try {
+      const info = await api.getBroadcasterJar(refreshLatest);
+      if (forId === currentId) jarInfo = info;
+    } catch { /* optional */ }
+  }
+
+  async function updateJar() {
+    if (busy) return;
+    busy = 'jar';
+    try {
+      const r = await api.updateBroadcasterJar();
+      addToast(r.message, 'success');
+      await loadJarInfo(true);
+    } catch (e: any) {
+      addToast(`Jar update failed: ${e.message}`, 'error');
+    }
+    busy = '';
+  }
+
+  /** (Re)load config.yml into the editor and remember its version tag. */
+  async function loadConfig() {
+    const forId = currentId;
+    const loaded = await api.getBroadcasterConfig();
+    if (forId !== currentId) return;
+    configText = loaded.text;
+    configEtag = loaded.etag;
+    configDirty = false;
+    visualDirty = false;
+    diskChanged = false;
+    parseConfigToModel();
+  }
+
+  async function reloadFromDisk() {
+    try {
+      await loadConfig();
+      addToast('Reloaded config.yml from disk', 'success');
+    } catch (e: any) {
+      addToast(`Reload failed: ${e.message}`, 'error');
+    }
+  }
+
+  // config.yml vs server.properties drift (operational first).
+  const drift = $derived(serverDrift(cfg, status?.server));
+  function applyDrift(items: ReturnType<typeof serverDrift>) {
+    for (const item of items) item.apply(cfg);
+    markVisualDirty();
+    addToast(`Applied ${items.length} value${items.length === 1 ? '' : 's'} from server.properties — review and Save`, 'info');
   }
 
   /** (Re)load everything for the active instance: console stream, status, config. */
@@ -119,6 +194,7 @@
     for (const unsub of unsubs.splice(0)) unsub();
     // The WebSocket manager appends a fresh short-lived download token.
     const instance = instanceId();
+    currentId = instance;
     // Switching to a different instance resets the view and its replay
     // bookkeeping; returning to a page we were just on is a RECONNECT — the
     // module-level feed already holds that view, so the socket resumes with
@@ -141,19 +217,19 @@
         codes = data.codes as Record<string, DeviceCode>;
       }
     }));
+    configEtag = '';
+    jarInfo = null;
+    void loadJarInfo();
     await refresh();
-    configDirty = false;
-    visualDirty = false;
     try {
-      configText = await api.getBroadcasterConfig();
-      parseConfigToModel();
+      await loadConfig();
     } catch (e: any) {
       addToast(`Config load failed: ${e.message}`, 'error');
     }
   }
 
   onMount(() => {
-    poll = setInterval(refresh, 5000);
+    poll = setInterval(() => { if (!document.hidden) void refresh(); }, 5000);
   });
 
   // Every broadcaster is instance-scoped: switching instances swaps the
@@ -163,18 +239,20 @@
   // and reloading on every emission would reset the page while you use it.
   let loadedInstanceId: string | null = null;
   $effect(() => {
-    const id = $activeInstance?.id ?? 'default';
+    const id = $activeInstance?.id || getInstance() || 'default';
     if (id === loadedInstanceId) return;
     loadedInstanceId = id;
     void loadAll();
   });
 
-  async function loadPreview(account: string) {
+  async function loadPreview(account: string, instance: string) {
+    if (!instance) return;
     try {
       const r = await fetch(
-        `/api/v1/broadcaster/screenshot?account=${encodeURIComponent(account)}&instance=${encodeURIComponent($activeInstance?.id || 'default')}`,
+        `/api/v1/broadcaster/screenshot?account=${encodeURIComponent(account)}&instance=${encodeURIComponent(instance)}`,
         { headers: rawHeaders() },
       );
+      if (instance !== currentId) return;
       if (!r.ok) throw new Error(String(r.status));
       const blob = await r.blob();
       const url = URL.createObjectURL(blob);
@@ -186,8 +264,11 @@
     }
   }
 
+  // Keyed on the account and the instance id only. Reading the
+  // activeInstance store here re-ran this on every layout list refresh (a
+  // fresh object each poll) and re-fetched the screenshot every few seconds.
   $effect(() => {
-    void loadPreview(screenshotAccount);
+    void loadPreview(screenshotAccount, currentId);
   });
 
   onDestroy(() => {
@@ -203,6 +284,7 @@
       const r = await api.broadcasterAction(kind);
       addToast(r.message || kind, 'success');
       await refresh();
+      if (kind !== 'stop') setTimeout(() => void loadJarInfo(), 4000);
     } catch (e: any) { addToast(`${kind} failed: ${e.message}`, 'error'); }
     busy = '';
   }
@@ -223,11 +305,20 @@
       serializeModelToText();
     }
     try {
-      await api.saveBroadcasterConfig(configText);
+      const r = await api.saveBroadcasterConfig(configText, configEtag);
       configDirty = false;
+      diskChanged = false;
+      if (r.etag) configEtag = r.etag;
       parsedDoc = (yamlLoad(configText) as Record<string, any>) ?? {};
       addToast('Config saved; restart the broadcaster to apply', 'success');
-    } catch (e: any) { addToast(`Save failed: ${e.message}`, 'error'); }
+    } catch (e: any) {
+      if (String(e.message).includes('409')) {
+        diskChanged = true;
+        addToast('config.yml changed on disk since you opened it — reload, then re-apply your edit', 'error');
+      } else {
+        addToast(`Save failed: ${e.message}`, 'error');
+      }
+    }
   }
 
   async function accountAction(kind: 'add' | 'remove') {
@@ -247,7 +338,7 @@
     try {
       const r = await api.uploadBroadcasterScreenshot(screenshotAccount, file);
       addToast(r.message || 'Uploaded', 'success');
-      await loadPreview(screenshotAccount);
+      await loadPreview(screenshotAccount, currentId);
     } catch (e: any) { addToast(`Upload failed: ${e.message}`, 'error'); }
     (event.target as HTMLInputElement).value = '';
   }
@@ -286,7 +377,7 @@
 
   <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
     <!-- Status + controls -->
-    <ProcessCard {status} canManage={canManage} {busy} onaction={action} />
+    <ProcessCard {status} canManage={canManage} {busy} onaction={action} {jarInfo} onupdatejar={updateJar} />
 
     <!-- Device codes -->
     <DeviceCodesCard {codes} oncopy={copy} />
@@ -333,6 +424,47 @@
         </div>
       </div>
 
+      {#if diskChanged}
+        <div class="mb-3 flex items-center justify-between gap-3 border-2 border-yellow-500/40 bg-yellow-500/5 px-3 py-2 text-xs">
+          <span class="text-yellow-300">config.yml changed on disk while you were editing. Saving now is refused so the newer file is not overwritten.</span>
+          <button onclick={reloadFromDisk} class="btn-ghost flex items-center gap-1.5 text-xs shrink-0">
+            <RefreshCw size={12} /> Reload from disk
+          </button>
+        </div>
+      {/if}
+      {#if drift.length > 0 && configMode === 'visual'}
+        <div class="mb-3 border-2 border-bedrock-500/30 bg-bedrock-950/20 p-3 space-y-2">
+          <div class="flex items-center justify-between gap-2">
+            <p class="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-bedrock-300">
+              <GitCompareArrows size={12} /> Differs from server.properties
+            </p>
+            {#if canManage}
+              <button onclick={() => applyDrift(drift)} class="btn-ghost text-[11px] px-2 py-1">Sync from server.properties</button>
+            {/if}
+          </div>
+          <ul class="space-y-1">
+            {#each drift as item (item.key)}
+              <li class="flex items-center justify-between gap-2 text-[11px]">
+                <span class="text-deep-300">
+                  <span class="{item.kind === 'operational' ? 'text-yellow-300' : 'text-deep-400'}">{item.label}</span>:
+                  <span class="font-mono text-strong">{item.config}</span>
+                  <span class="text-deep-400">→</span>
+                  <span class="font-mono text-teal-300">{item.server}</span>
+                  {#if item.kind === 'fallback'}<span class="text-deep-500"> (fallback only)</span>{/if}
+                </span>
+                {#if canManage}
+                  <button onclick={() => applyDrift([item])} class="text-bedrock-400 hover:underline shrink-0">apply</button>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+          <p class="text-[10px] text-deep-400 leading-snug">
+            With query-server on, the Xbox session shows the server's live name, level, and player count;
+            the session-info values here only appear when the query cannot answer. Applying only changes
+            the form — review, then Save.
+          </p>
+        </div>
+      {/if}
       {#if configMode === 'visual'}
         <VisualConfigEditor bind:cfg visualDirty={visualDirty} canManage={canManage} onmarkdirty={markVisualDirty} />
       {:else}
@@ -344,7 +476,8 @@
       <p class="text-[10px] text-deep-400 mt-2 leading-relaxed">
         <span class="text-yellow-400 uppercase tracking-wider">Relay target:</span>
         <span class="font-mono text-deep-400">session.remote-address</span> is where join offers are
-        relayed to, and it doubles as the address the query ping checks. Because the panel runs the
+        relayed to, and it doubles as the address the query ping checks (NetherNet HTTP signaling on
+        TCP server-port first, RakNet on UDP as fallback). Because the panel runs the
         broadcaster on the same host as the server, keep it at
         <span class="font-mono text-strong">127.0.0.1</span> with the instance's server-port — Endstone
         advertises its own public address to clients. A public IP here sends every relay through the

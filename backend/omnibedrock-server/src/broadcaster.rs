@@ -27,11 +27,13 @@
 //! - [`consts`]: shared constants and the seeded config template
 //! - [`helpers`]: jar resolution and instance-port lookup
 //! - [`config`]: config.yml relay-target parsing, validation, announcements
-//! - [`health`]: RakNet ping health checking and console-line mirroring
+//! - [`health`]: query-target health (NetherNet HTTP + RakNet probes) and
+//!   console-line mirroring
 //! - [`external`]: /proc detection of foreign broadcasters and takeover
 //! - [`process`]: process spawn/teardown plumbing and java detection
 //! - [`lifecycle`]: the supervisor event loop and pidfile bookkeeping
 //! - [`handle`]: the per-instance `Broadcaster` handle and device-code watcher
+//! - [`update`]: latest-release lookup and verified jar installs
 
 mod config;
 mod consts;
@@ -42,12 +44,13 @@ mod helpers;
 mod lifecycle;
 mod process;
 mod types;
+pub mod update;
 
 pub use consts::{DEFAULT_CONFIG, JAR_NAME};
 pub use external::find_external;
-pub use handle::Broadcaster;
+pub use handle::{Broadcaster, config_etag_of};
 pub use process::detect_java;
 pub use types::{
-    BcSnapshot, BcStatus, DeviceCode, DockerSpec, ExternalBroadcaster, PingHealth, RelayAnalysis,
-    RelayTarget,
+    BcSnapshot, BcStatus, DeviceCode, DockerSpec, ExternalBroadcaster, PingHealth, PongInfo,
+    RelayAnalysis, RelayTarget,
 };

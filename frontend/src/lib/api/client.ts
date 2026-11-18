@@ -1,4 +1,4 @@
-import type { ServerStatus, ServerActionResponse, Backup, AddonList, Addon, Player, PropertyEntry, WorldInfo, BackupSettings, SchedulerConfig, CommandEntry, IncludeItem, FolderEntry, BackendInfo, VersionRegistry, EndstoneRegistry, BroadcasterStatus, CfProject, StoreSearchResponse, StoreMeta, StoreFilesResponse, StoreInstallResponse, Instance, HostInfo, PluginFile, ExplorerListing } from '$types/index';
+import type { ServerStatus, ServerActionResponse, Backup, AddonList, Addon, Player, PropertyEntry, WorldInfo, BackupSettings, SchedulerConfig, CommandEntry, IncludeItem, FolderEntry, BackendInfo, VersionRegistry, EndstoneRegistry, BroadcasterStatus, CfProject, StoreSearchResponse, StoreMeta, StoreFilesResponse, StoreInstallResponse, Instance, HostInfo, PluginFile, ExplorerListing, ApiKeyRecord, PackDelivery, BroadcasterJarInfo } from '$types/index';
 
 const API_BASE = '/api/v1';
 let authToken = '';
@@ -213,6 +213,21 @@ export const api = {
   deleteUser: (username: string) =>
     request<{ success: boolean }>(`/auth/users/${username}`, { method: 'DELETE' }),
 
+  getPackDelivery: (world: string) =>
+    request<PackDelivery>(`/addons/delivery?world=${encodeURIComponent(world)}`),
+
+  // Personal API keys (same URL/port; X-API-User + X-API-Key headers)
+  listApiKeys: (all = false) => request<ApiKeyRecord[]>(`/auth/api-keys${all ? '?all=1' : ''}`),
+  createApiKey: (data: { name: string; scope: 'full' | 'read_only'; expires_days?: number; user?: string }) =>
+    request<{ key: string; record: ApiKeyRecord }>('/auth/api-keys', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  revokeApiKey: (id: string) =>
+    request<{ success: boolean; message: string }>(`/auth/api-keys/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+
   // Instances & host
   listInstances: () => request<Instance[]>('/instances'),
   getInstanceDetail: (id: string) => request<Instance>(`/instances/${encodeURIComponent(id)}`),
@@ -288,15 +303,22 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ command }),
     }),
+  getBroadcasterJar: (refresh = false) =>
+    request<BroadcasterJarInfo>(`/broadcaster/jar${refresh ? '?refresh=1' : ''}`),
+  updateBroadcasterJar: () =>
+    request<{ success: boolean; message: string; build: string }>('/broadcaster/jar/update', { method: 'POST' }),
+  /** config.yml text plus its version tag (sent back on save). */
   getBroadcasterConfig: () =>
-    fetch(`${API_BASE}/broadcaster/config`, { headers: rawHeaders() }).then(r => {
+    fetch(`${API_BASE}/broadcaster/config`, { headers: rawHeaders(), cache: 'no-store' }).then(async r => {
       if (!r.ok) throw new Error(`API Error ${r.status}`);
-      return r.text();
+      const etag = (r.headers.get('ETag') ?? '').replace(/"/g, '');
+      return { text: await r.text(), etag };
     }),
-  saveBroadcasterConfig: (text: string) =>
-    request<{ success: boolean }>('/broadcaster/config', {
+  /** Save config.yml; a stale `baseEtag` is refused with 409 instead of clobbering disk. */
+  saveBroadcasterConfig: (text: string, baseEtag = '') =>
+    request<{ success: boolean; message: string; etag?: string }>('/broadcaster/config', {
       method: 'PUT',
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, base_etag: baseEtag }),
     }),
   broadcasterAccount: (action: 'add' | 'remove', id: string) =>
     request<{ success: boolean; message: string }>('/broadcaster/accounts', {

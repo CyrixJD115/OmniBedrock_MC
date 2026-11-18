@@ -8,6 +8,7 @@
   import { setToken } from '$lib/api/client';
   import { currentUser, authToken as authTokenStore } from '$stores/auth';
   import { activeInstance } from '$stores/instances';
+  import ApiKeysCard from '$lib/components/settings/ApiKeysCard.svelte';
   import { THEMES, THEME_MODES, theme, themeMode, customAccent, uiDensity, uiFontScale, isHexColor } from '$lib/theme';
 
   // Custom accent: the color input emits #rrggbb live while dragging.
@@ -72,7 +73,13 @@
     try { cfSettings = await api.getCurseForgeSettings(); } catch { /* silent */ }
     await loadRegistry();
     void loadEndstoneRegistry();
+    // Fast (800 ms) only while an install runs; otherwise every ~5 s, and
+    // never from a background tab.
+    let tick = 0;
     poll = setInterval(async () => {
+      tick += 1;
+      if (document.hidden) return;
+      if (!anyInstalling && tick % 6 !== 0) return;
       await refreshBackend();
       if (installing && backend) {
         // keep the selected version synced with what is being installed
@@ -363,9 +370,8 @@
             </span>
             <span class="font-mono text-strong">{backend.install.detail ?? ''} {pct(backend)}</span>
           </div>
-          <div class="h-2 bg-deep-800 overflow-hidden">
-            <div class="h-full bg-bedrock-500 transition-all duration-300"
-                 style="width: {typeof backend.install.progress === 'number' ? Math.round(backend.install.progress * 100) : 10}%"></div>
+          <div class="mc-progress">
+            <span style="width: {typeof backend.install.progress === 'number' ? Math.round(backend.install.progress * 100) : 10}%"></span>
           </div>
           <p class="text-[10px] text-deep-400 mt-2">User data (worlds, server.properties, allowlist) is preserved; progress is also logged to the console.</p>
         </div>
@@ -379,9 +385,8 @@
             </span>
             <span class="font-mono text-strong">{backend.endstone.install.detail ?? ''} {pctEndstone()}</span>
           </div>
-          <div class="h-2 bg-deep-800 overflow-hidden">
-            <div class="h-full bg-teal-500 transition-all duration-300"
-                 style="width: {typeof backend.endstone.install.progress === 'number' ? Math.round(backend.endstone.install.progress * 100) : 10}%"></div>
+          <div class="mc-progress">
+            <span style="width: {typeof backend.endstone.install.progress === 'number' ? Math.round(backend.endstone.install.progress * 100) : 10}%"></span>
           </div>
           <p class="text-[10px] text-deep-400 mt-2">
             Downloading uv, a managed CPython, and Endstone into the panel data dir — no system Python needed. Progress is also logged to the console.
@@ -606,6 +611,9 @@
       </p>
     </div>
   </div>
+
+  <!-- Personal API keys (same URL/port, X-API-User + X-API-Key) -->
+  <ApiKeysCard />
 
   <!-- Application info -->
   <div class="card">

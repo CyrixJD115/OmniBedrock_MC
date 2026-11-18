@@ -138,6 +138,7 @@ async fn upgraded_installs_gain_new_builtin_roles() {
         created_at: String::new(),
         last_login: String::new(),
         quotas: Default::default(),
+        key_scope: None,
     };
     let created = auth
         .mutate_user(
@@ -502,6 +503,7 @@ async fn concurrent_role_and_user_mutations_are_serialized() {
         created_at: String::new(),
         last_login: String::new(),
         quotas: Default::default(),
+        key_scope: None,
     };
     // Seed three roles and one user up front.
     for name in ["alpha", "beta", "gamma"] {

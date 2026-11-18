@@ -4,15 +4,55 @@
    * relay target, ping, dir, jar) and the start/stop/restart controls, plus
    * the external-broadcaster hint. Actions are delegated to the page.
    */
-  import { Play, RotateCw, Square } from '@lucide/svelte';
-  import type { BroadcasterStatus } from '$types/index';
+  import { Play, RotateCw, Square, ArrowUpCircle } from '@lucide/svelte';
+  import type { BroadcasterStatus, BroadcasterJarInfo } from '$types/index';
 
-  let { status, canManage, busy, onaction }: {
+  let { status, canManage, busy, onaction, jarInfo = null, onupdatejar }: {
     status: BroadcasterStatus | null;
     canManage: boolean;
     busy: string;
     onaction: (kind: 'start' | 'stop' | 'restart' | 'takeover') => void;
+    jarInfo?: BroadcasterJarInfo | null;
+    onupdatejar?: () => void;
   } = $props();
+
+  const jarText = $derived.by(() => {
+    if (!jarInfo) return '—';
+    const current = jarInfo.installed_build ?? jarInfo.running_build;
+    const base = current ? `build ${current}` : 'unknown build';
+    const bedrock = jarInfo.running_bedrock ? ` · Bedrock ${jarInfo.running_bedrock}` : '';
+    const pending = jarInfo.installed_build && jarInfo.running_build && jarInfo.installed_build !== jarInfo.running_build
+      ? ' (restart to run it)' : '';
+    return base + bedrock + pending;
+  });
+
+  // The query verdict, in words: which transport answered and what the
+  // server reported, or why there is no verdict (never a bare "failing"
+  // while the game server is simply stopped or booting).
+  const ping = $derived(status?.ping);
+  const pingText = $derived.by(() => {
+    if (!status || status.status.status !== 'running') return '—';
+    if (!status.relay?.query_server) return 'disabled (query-server: false)';
+    if (ping?.server_running === false) return 'game server offline';
+    if (ping?.ok === true) {
+      const via = ping.protocol === 'nethernet' ? 'NetherNet' : ping.protocol === 'raknet' ? 'RakNet' : 'ok';
+      const s = ping.server;
+      const players = s && s.players != null ? ` · ${s.players}/${s.max_players ?? '?'}` : '';
+      const version = s?.version ? ` · ${s.version}` : '';
+      return `ok via ${via}${version}${players}`;
+    }
+    if (ping?.ok === false) return 'not answering';
+    if ((ping?.consecutive_failures ?? 0) > 0) return 'retrying…';
+    return 'checking…';
+  });
+  const pingClass = $derived(
+    ping?.ok === false && ping?.server_running !== false ? 'text-red-400'
+      : ping?.ok === true ? 'text-teal-400' : 'text-deep-300',
+  );
+  const pingTitle = $derived(
+    [ping?.target ? `target ${ping.target}` : '', ping?.latency_ms != null ? `${ping.latency_ms} ms` : '',
+     ping?.transport ? `transport=${ping.transport}` : '', ping?.error ?? ''].filter(Boolean).join(' · '),
+  );
 
   function fmtUptime(s: number): string {
     if (s < 60) return `${Math.floor(s)}s`;
@@ -39,9 +79,14 @@
           {status.relay?.relay?.text ?? 'auto (127.0.0.1)'}
           {#if status.relay?.relay?.public}<span class="text-red-400"> public!</span>{/if}
         </span>
-        <span class="text-deep-400">Ping</span>
-        <span class="font-mono {status.ping?.ok === false ? 'text-red-400' : status.ping?.ok === true ? 'text-teal-400' : 'text-strong'}">
-          {status.ping?.ok === true ? 'ok' : status.ping?.ok === false ? 'failing' : '—'}
+        <span class="text-deep-400">Server query</span>
+        <span class="font-mono truncate {pingClass}" title={pingTitle}>{pingText}</span>
+        <span class="text-deep-400">Jar build</span>
+        <span class="font-mono text-strong flex items-center gap-2 min-w-0">
+          <span class="truncate" title={jarInfo?.latest ? `latest release: build ${jarInfo.latest.tag} (${jarInfo.latest.published_at.slice(0, 10)})` : (jarInfo?.latest_error ?? '')}>{jarText}</span>
+          {#if jarInfo?.update_available && jarInfo.latest}
+            <span class="badge-warn !text-[9px] !py-0 shrink-0">{jarInfo.latest.tag} available</span>
+          {/if}
         </span>
         <span class="text-deep-400">Dir</span>
         <span class="font-mono text-deep-300 break-all" title={status.dir}>{status.dir}</span>
@@ -66,6 +111,13 @@
           <RotateCw size={13} />
         </button>
       </div>
+      {#if jarInfo?.update_available && jarInfo.latest && onupdatejar}
+        <button onclick={onupdatejar} disabled={!!busy}
+                class="btn-secondary w-full flex items-center justify-center gap-1.5 text-xs"
+                title="Download the latest MCXboxBroadcastStandalone.jar from GitHub (SHA-256 verified; the old jar is kept as .bak)">
+          <ArrowUpCircle size={13} /> {busy === 'jar' ? 'Downloading…' : `Update jar to build ${jarInfo.latest.tag}`}
+        </button>
+      {/if}
       {#if status?.external && status.status.status !== 'running'}
         <p class="text-[10px] text-yellow-400 leading-snug">
           An external broadcaster (PID {status.external.pid}) is running — use the banner above

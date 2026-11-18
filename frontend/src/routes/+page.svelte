@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { serverStatus, metrics, isServerRunning } from '$stores/index';
-  import { api } from '$lib/api/client';
+  import { api, getInstance } from '$lib/api/client';
   import { addToast } from '$stores/toast';
   import { userPermissions } from '$stores/auth';
   import { activeInstance } from '$stores/instances';
@@ -11,6 +11,11 @@
   let loading = $state(true);
   let acting = $state<string | null>(null);
   let broadcaster = $state<BroadcasterStatus | null>(null);
+  // Which instance `broadcaster` describes: a status fetched before an
+  // instance switch must never raise a banner on the new one.
+  let broadcasterFor = $state('');
+  const currentInstanceId = $derived($activeInstance?.id || getInstance() || 'default');
+  const bc = $derived(broadcasterFor === currentInstanceId ? broadcaster : null);
   let bcPoll: ReturnType<typeof setInterval> | undefined;
 
   function formatUptime(seconds: number): string {
@@ -20,6 +25,23 @@
     return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   }
 
+  async function pollBc() {
+    if (document.hidden) return;
+    const forId = getInstance() || 'default';
+    try {
+      const next = await api.getBroadcasterStatus();
+      if (forId !== (getInstance() || 'default')) return;
+      broadcaster = next;
+      broadcasterFor = forId;
+    } catch { /* transient */ }
+  }
+
+  // Re-check right away on an instance switch instead of after a poll gap.
+  $effect(() => {
+    void currentInstanceId;
+    void pollBc();
+  });
+
   onMount(async () => {
     try {
       const s = await api.getServerStatus();
@@ -28,14 +50,8 @@
       addToast('Could not reach backend', 'error');
     }
     loading = false;
-    // Surface a broadcaster that cannot reach its ping target (Bug 4: the
-    // jar only logs an ERROR every 30s, nothing else tells the user).
-    const pollBc = async () => {
-      try {
-        broadcaster = await api.getBroadcasterStatus();
-      } catch { /* transient */ }
-    };
-    void pollBc();
+    // Surface a broadcaster whose server does not answer its query (the jar
+    // only logs an ERROR every 30s); the first fetch runs from the effect.
     bcPoll = setInterval(pollBc, 10000);
   });
 
@@ -88,26 +104,28 @@
     {/if}
   </div>
 
-  {#if broadcaster?.ping?.ok === false}
+  {#if bc?.ping?.ok === false && bc.ping.server_running !== false && bc.status.status === 'running'}
     <div class="card border-yellow-500/40">
       <div class="flex items-start gap-3">
         <Radio size={18} class="text-yellow-400 mt-0.5 shrink-0" />
         <div class="text-xs text-deep-300 space-y-1">
           <p class="font-bold text-yellow-300 uppercase tracking-wider">
-            Broadcaster cannot reach the server ping target
+            Server not answering the broadcaster's query
           </p>
           <p>
-            The broadcaster for <span class="text-strong">{$activeInstance?.name ?? $activeInstance?.id ?? 'default'}</span> cannot ping
-            <span class="font-mono text-strong">{broadcaster.ping.target ?? 'its configured target'}</span>,
-            so the Xbox session advertises stale player/world values. Check that the server is
-            running and that <span class="font-mono">session.remote-address</span> points at this
-            host's server-port (127.0.0.1 for a co-located broadcaster).
+            Neither NetherNet (TCP) nor RakNet (UDP) answered for
+            <span class="text-strong">{$activeInstance?.name ?? $activeInstance?.id ?? 'default'}</span> at
+            <span class="font-mono text-strong">{bc.ping.target ?? 'its configured target'}</span>
+            ({bc.ping.consecutive_failures ?? 2}+ probes in a row), so the Xbox session shows fallback
+            values. Check that <span class="font-mono">session.remote-address</span> is this host
+            (127.0.0.1) with the instance's server-port — the Broadcaster page shows the details.
           </p>
+          {#if bc.ping.error}<p class="font-mono text-[10px] text-deep-400 break-all">{bc.ping.error}</p>{/if}
         </div>
       </div>
     </div>
   {/if}
-  {#if broadcaster?.relay && (broadcaster.relay.relay?.public || broadcaster.relay.legacy?.public)}
+  {#if bc?.relay && (bc.relay.relay?.public || bc.relay.legacy?.public)}
     <div class="card border-red-500/40">
       <div class="flex items-start gap-3">
         <TriangleAlert size={18} class="text-red-400 mt-0.5 shrink-0" />
@@ -157,7 +175,7 @@
         <Cpu size={16} class="text-teal-400" />
       </div>
       <p class="text-xl font-bold text-strong font-mono">{$metrics?.cpu_percent?.toFixed(1) ?? '--'}</p>
-      <div class="mt-2 h-1.5 bg-deep-900 rounded overflow-hidden">
+      <div class="mt-2 h-2 mc-slot overflow-hidden">
         <div class="h-full bg-teal-500 transition-all duration-500" style="width: {Math.min($metrics?.cpu_percent ?? 0, 100)}%"></div>
       </div>
     </div>
@@ -168,7 +186,7 @@
         <Activity size={16} class="text-bedrock-400" />
       </div>
       <p class="text-xl font-bold text-strong font-mono">{$metrics?.memory_mb ? $metrics.memory_mb.toFixed(0) + ' MB' : '--'}</p>
-      <div class="mt-2 h-1.5 bg-deep-900 rounded overflow-hidden">
+      <div class="mt-2 h-2 mc-slot overflow-hidden">
         <div class="h-full bg-bedrock-500 transition-all duration-500" style="width: {Math.min($metrics?.memory_percent ?? 0, 100)}%"></div>
       </div>
     </div>

@@ -18,7 +18,7 @@ use super::config::analyze_relay_config;
 use super::consts::DEFAULT_CONFIG;
 use super::external::find_external;
 use super::health::{ping_poller, watch_ping_failures};
-use super::helpers::{instance_port, resolve_jar};
+use super::helpers::{instance_port, resolve_jar, server_facts};
 use super::lifecycle::supervise;
 use super::process::detect_java;
 use super::types::{
@@ -43,6 +43,8 @@ pub struct Broadcaster {
     pub java: watch::Receiver<Option<String>>,
     /// Panel-side query-ping health against the relay target.
     pub ping: watch::Receiver<PingHealth>,
+    /// (build, bedrock version) from the jar's last boot banner.
+    pub jar_build: watch::Receiver<Option<(String, Option<String>)>>,
     config: Arc<Config>,
     /// Panel-level broadcaster directory used to resolve the jar when this
     /// instance's own dir has none. `None` for the default instance, whose
@@ -58,6 +60,7 @@ impl Broadcaster {
         shutdown: CancellationToken,
         jar_home: Option<PathBuf>,
         docker: Option<DockerSpec>,
+        game: Option<watch::Receiver<crate::server::Snapshot>>,
     ) -> anyhow::Result<Self> {
         let console = Console::with_journal_root(
             config.logs_dir.join("broadcaster-console"),
@@ -71,6 +74,14 @@ impl Broadcaster {
         let (ping_tx, _) = watch::channel(PingHealth::default());
         let ping_tx = Arc::new(ping_tx);
         let (docker_tx, docker_rx) = watch::channel(docker);
+        // Seed the running build from the journal so a panel restart still
+        // knows which jar build last booted.
+        let seeded = console
+            .tail(4000)
+            .iter()
+            .rev()
+            .find_map(|e| super::update::parse_boot_banner(&e.line));
+        let (build_tx, jar_build) = watch::channel(seeded);
         let (control, control_rx) = mpsc::channel(16);
         let manager = Self {
             control,
@@ -79,6 +90,7 @@ impl Broadcaster {
             device_codes,
             java: java.clone(),
             ping: ping_tx.subscribe(),
+            jar_build,
             config: config.clone(),
             jar_home: jar_home.clone(),
             docker: docker_tx,
@@ -105,13 +117,14 @@ impl Broadcaster {
                 }
             }
         });
-        tokio::spawn(watch_device_codes(console.clone(), codes_tx));
+        tokio::spawn(watch_device_codes(console.clone(), codes_tx, build_tx));
         // Ping failures are only an ERROR line in the jar's output — surface
         // them as structured health so the UI can raise a banner (Bug 4).
         tokio::spawn(watch_ping_failures(console.clone(), ping_tx.clone()));
         tokio::spawn(ping_poller(
             config.clone(),
             status.clone(),
+            game,
             ping_tx,
             shutdown.clone(),
         ));
@@ -240,6 +253,31 @@ impl Broadcaster {
             Err(e) => Err(e.into()),
         }
     }
+    /// Content fingerprint of config.yml as it is on disk right now (empty
+    /// when missing). The page sends it back on save so an edit made against
+    /// a stale copy — the jar migrating the file, another tab, a hand edit —
+    /// is refused instead of silently overwriting what is on disk.
+    pub async fn config_etag(&self) -> String {
+        match tokio::fs::read(self.config_path()).await {
+            Ok(bytes) => config_etag_of(&bytes),
+            Err(_) => String::new(),
+        }
+    }
+
+    /// The server.properties facts the broadcaster session should mirror,
+    /// so the page can show (and sync) drift between the two files.
+    pub fn server_facts(&self) -> Value {
+        let facts = server_facts(&self.config);
+        json!({
+            "port": facts.port,
+            "transport": facts.transport,
+            "server_name": facts.server_name,
+            "level_name": facts.level_name,
+            "max_players": facts.max_players,
+            "gamemode": facts.gamemode,
+        })
+    }
+
     /// Validate and persist config.yml.
     pub async fn write_config(&self, text: &str) -> anyhow::Result<()> {
         if text.len() > 512 * 1024 {
@@ -281,7 +319,11 @@ impl Broadcaster {
 }
 
 /// Scan console lines for Microsoft device-code prompts, keyed per account.
-async fn watch_device_codes(console: Console, codes: watch::Sender<BTreeMap<String, DeviceCode>>) {
+async fn watch_device_codes(
+    console: Console,
+    codes: watch::Sender<BTreeMap<String, DeviceCode>>,
+    build: watch::Sender<Option<(String, Option<String>)>>,
+) {
     let mut changed = console.changed.subscribe();
     let mut cursor = console.replay(None, 0).latest;
     loop {
@@ -292,6 +334,9 @@ async fn watch_device_codes(console: Console, codes: watch::Sender<BTreeMap<Stri
         let batch = console.replay(Some(cursor), 1024);
         for line in &batch.lines {
             cursor = line.sequence;
+            if let Some(banner) = super::update::parse_boot_banner(&line.line) {
+                build.send_replace(Some(banner));
+            }
             if let Some(captures) = DEVICE_CODE.captures(&line.line) {
                 let account = SUB_SESSION
                     .captures(&line.line)
@@ -310,4 +355,10 @@ async fn watch_device_codes(console: Console, codes: watch::Sender<BTreeMap<Stri
             }
         }
     }
+}
+
+/// Short content hash used as the config.yml version tag.
+pub fn config_etag_of(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(&Sha256::digest(bytes)[..12])
 }

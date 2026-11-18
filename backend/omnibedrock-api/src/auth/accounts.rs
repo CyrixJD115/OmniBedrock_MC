@@ -99,6 +99,7 @@ impl Auth {
                     created_at: timestamp(),
                     last_login: String::new(),
                     quotas: Default::default(),
+                    key_scope: None,
                 };
                 u.set_roles(vec![
                     next.roles
@@ -211,6 +212,9 @@ impl Auth {
             }
             self.save_users(&next).await?;
             *store = next;
+            drop(store);
+            // A deleted account's keys must not outlive it on disk either.
+            self.purge_api_keys_for(name).await;
             Ok(json!({"success":true,"message":format!("Deleted user {name}")}))
         }
     }

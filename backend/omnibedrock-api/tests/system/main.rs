@@ -3,6 +3,7 @@
 #![cfg(unix)]
 
 mod addons;
+mod api_keys;
 mod auth;
 mod backups;
 mod bds;

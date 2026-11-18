@@ -68,7 +68,7 @@ pull the base image):
 docker build -f deploy/docker/Dockerfile.vanilla   -t omnibedrock-vanilla:latest .
 docker build -f deploy/docker/Dockerfile.endstone  -t omnibedrock-endstone:latest .
 # optional: pin the Endstone version
-docker build -f deploy/docker/Dockerfile.endstone --build-arg ENDSTONE_VERSION=0.11.14 -t omnibedrock-endstone:latest .
+docker build -f deploy/docker/Dockerfile.endstone --build-arg ENDSTONE_VERSION=0.11.16 -t omnibedrock-endstone:latest .
 ```
 
 Custom (e.g. registry) images can be configured (`config.toml`, env, or

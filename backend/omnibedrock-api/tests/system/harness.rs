@@ -321,6 +321,7 @@ pub(crate) fn owner() -> omnibedrock_api::auth::User {
         created_at: String::new(),
         last_login: String::new(),
         quotas: Default::default(),
+        key_scope: None,
     }
 }
 

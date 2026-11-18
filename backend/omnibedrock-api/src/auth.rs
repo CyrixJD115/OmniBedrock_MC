@@ -13,10 +13,12 @@
 //! - `settings`: login toggle, CurseForge key override, `panel_settings.yaml`
 //! - `accounts`: user listing, quota lookup and account CRUD
 //! - `roles`: role listing and role CRUD
+//! - `api_keys`: personal API keys (`X-API-User` + `X-API-Key` headers)
 //!
 //! Every previously public item remains reachable from this module path.
 
 mod accounts;
+mod api_keys;
 mod consts;
 mod password;
 mod perms;
@@ -28,6 +30,7 @@ mod throttle;
 mod token;
 mod types;
 
+pub use api_keys::{KeyScope, looks_like_api_key};
 pub use consts::{INSTANCE_PERMISSIONS, PERMISSIONS};
 pub use store::Auth;
 pub use types::{Role, User};

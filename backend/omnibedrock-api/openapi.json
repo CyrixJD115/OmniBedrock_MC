@@ -13,6 +13,9 @@
  "security": [
   {
    "bearerAuth": []
+  },
+  {
+   "apiKeyAuth": []
   }
  ],
  "components": {
@@ -21,6 +24,12 @@
     "type": "http",
     "scheme": "bearer",
     "bearerFormat": "JWT"
+   },
+   "apiKeyAuth": {
+    "type": "apiKey",
+    "in": "header",
+    "name": "X-API-Key",
+    "description": "Personal API key (omb_…) from Settings → API keys. Send X-API-User: <username> alongside it; Authorization: Bearer omb_… is also accepted. Read-only keys are limited to GET."
    }
   }
  },
@@ -148,7 +157,53 @@
     "x-permission": "any signed-in user",
     "responses": {
      "200": {
-      "description": "{token, expires_in} \u2014 purpose-bound, 15-minute TTL, rejected anywhere a login bearer is expected"
+      "description": "{token, expires_in} — purpose-bound, 15-minute TTL, rejected anywhere a login bearer is expected"
+     }
+    }
+   }
+  },
+  "/auth/api-keys": {
+   "get": {
+    "tags": [
+     "auth"
+    ],
+    "summary": "List your API keys (?all=1 lists every account's keys for user managers)",
+    "x-permission": "any signed-in user (not usable with an API key)",
+    "responses": {
+     "200": {
+      "description": "[{id, user, name, scope, prefix, created_at, last_used, last_ip, expires_at, expired}]"
+     }
+    }
+   },
+   "post": {
+    "tags": [
+     "auth"
+    ],
+    "summary": "Create an API key; the plaintext key is returned once",
+    "x-permission": "any signed-in user; USERS_EDIT to create for another user (not usable with an API key)",
+    "x-body": {
+     "name": "string (1-64)",
+     "scope": "'full' | 'read_only'",
+     "expires_days": "0-3650 (0 = never)",
+     "user": "optional username"
+    },
+    "responses": {
+     "200": {
+      "description": "{key, record}"
+     }
+    }
+   }
+  },
+  "/auth/api-keys/{id}": {
+   "delete": {
+    "tags": [
+     "auth"
+    ],
+    "summary": "Revoke an API key",
+    "x-permission": "key owner or USERS_EDIT (not usable with an API key)",
+    "responses": {
+     "200": {
+      "description": "{success, message}"
      }
     }
    }
@@ -366,7 +421,7 @@
     "tags": [
      "server"
     ],
-    "summary": "Bootstrap or update the Endstone toolchain (uv \u2192 CPython \u2192 venv; 'latest' updates the venv in place)",
+    "summary": "Bootstrap or update the Endstone toolchain (uv → CPython → venv; 'latest' updates the venv in place)",
     "x-permission": "SERVER_MANAGE",
     "requestBody": {
      "x-body": {
@@ -769,6 +824,23 @@
     "responses": {
      "200": {
       "description": "{behavior_packs: [], resource_packs: []}"
+     }
+    }
+   }
+  },
+  "/addons/delivery": {
+   "get": {
+    "tags": [
+     "addons"
+    ],
+    "summary": "What joining clients download: active resource packs with sizes, unpaired leftovers, version-pin mismatches, and a console-cache warning",
+    "x-permission": "ADDONS_VIEW",
+    "x-query": {
+     "world": "world folder (default: level-name from server.properties)"
+    },
+    "responses": {
+     "200": {
+      "description": "{world, packs:[{uuid,name,folder,version,bytes,files,subpacks,unpaired,version_mismatch}], total_bytes, missing, console_heavy, texturepack_required}"
      }
     }
    }
@@ -1314,6 +1386,37 @@
     }
    }
   },
+  "/broadcaster/jar": {
+   "get": {
+    "tags": [
+     "broadcaster"
+    ],
+    "summary": "Broadcaster jar build: last booted, installed by the panel, and the latest GitHub release",
+    "x-permission": "BROADCASTER_VIEW",
+    "x-query": {
+     "refresh": "1 to bypass the 30-minute release cache"
+    },
+    "responses": {
+     "200": {
+      "description": "{jar, jar_exists, running_build, running_bedrock, installed_build, latest:{tag,published_at,size}, latest_error, update_available}"
+     }
+    }
+   }
+  },
+  "/broadcaster/jar/update": {
+   "post": {
+    "tags": [
+     "broadcaster"
+    ],
+    "summary": "Download the latest MCXboxBroadcastStandalone.jar (SHA-256 verified, previous kept as .bak); restart the broadcaster to apply",
+    "x-permission": "BROADCASTER_MANAGE (+ SETTINGS_EDIT when the jar is shared)",
+    "responses": {
+     "200": {
+      "description": "{success, message, build}"
+     }
+    }
+   }
+  },
   "/broadcaster/action": {
    "post": {
     "tags": [
@@ -1489,7 +1592,7 @@
       "name": "string 1..64 (path-safe; becomes the id)",
       "backend": "\"vanilla\"|\"endstone\"",
       "deployment": "\"native\"|\"docker\"|\"systemd\" (default native; per-OS UI default: docker on macOS, native elsewhere)",
-      "docker": "{image?, extra_mounts?} \u2014 extra_mounts need DOCKER_ALLOW_HOST_MOUNTS=true and the panel owner",
+      "docker": "{image?, extra_mounts?} — extra_mounts need DOCKER_ALLOW_HOST_MOUNTS=true and the panel owner",
       "port": "int UDP port, 0 = auto-pick (default 0)",
       "memory_mb": "int? soft resource cap",
       "cpus": "float? soft resource cap",
@@ -1528,11 +1631,11 @@
       "name": "string?",
       "port": "int?",
       "deployment": "\"native\"|\"docker\"|\"systemd\"?",
-      "docker": "{image?, extra_mounts?} \u2014 extra_mounts need DOCKER_ALLOW_HOST_MOUNTS=true and the panel owner",
+      "docker": "{image?, extra_mounts?} — extra_mounts need DOCKER_ALLOW_HOST_MOUNTS=true and the panel owner",
       "autostart": "bool? (systemd only)",
       "memory_mb": "int?",
       "cpus": "float?",
-      "access": "[{user: \"username\", roles: [\"viewer\"|\"instance-manager\"|<catalog role name>\"]}? \u2014 full replacement of the share list; empty array revokes everyone]"
+      "access": "[{user: \"username\", roles: [\"viewer\"|\"instance-manager\"|<catalog role name>\"]}? — full replacement of the share list; empty array revokes everyone]"
      }
     },
     "responses": {
@@ -1591,7 +1694,7 @@
      }
     },
     "x-query": {
-     "wait_ms": "int 100..5000, default 1500 \u2014 output collection window",
+     "wait_ms": "int 100..5000, default 1500 — output collection window",
      "format": "\"text\" returns text/plain lines; default JSON"
     },
     "responses": {

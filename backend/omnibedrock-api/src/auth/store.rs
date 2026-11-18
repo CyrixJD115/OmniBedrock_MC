@@ -28,6 +28,8 @@ pub struct Auth {
     pub(super) curseforge_key: Arc<std::sync::RwLock<Option<String>>>,
     /// Per-account+source login backoff (see `throttle`).
     pub(super) throttle: Arc<super::throttle::LoginThrottle>,
+    /// Personal API keys (hashed), see `api_keys`.
+    pub(super) api_keys: Arc<Mutex<Vec<super::api_keys::ApiKey>>>,
 }
 
 async fn load_yaml<T: serde::de::DeserializeOwned + Default>(
@@ -89,6 +91,7 @@ impl Auth {
                     created_at: timestamp(),
                     last_login: String::new(),
                     quotas: Default::default(),
+                    key_scope: None,
                 };
                 user.set_roles(vec!["owner".into()]);
                 user
@@ -143,6 +146,7 @@ impl Auth {
             .map(str::trim)
             .filter(|k| !k.is_empty())
             .map(str::to_owned);
+        let config_dir_keys = config.data_dir.join(super::api_keys::API_KEYS_FILE);
         let auth = Self {
             store: Arc::new(Mutex::new(store)),
             config,
@@ -153,6 +157,11 @@ impl Auth {
             default_credentials: Arc::new(std::sync::atomic::AtomicBool::new(default_credentials)),
             curseforge_key: Arc::new(std::sync::RwLock::new(curseforge_key)),
             throttle: Arc::new(super::throttle::LoginThrottle::default()),
+            api_keys: Arc::new(Mutex::new(
+                super::api_keys::load_keys(&config_dir_keys)
+                    .await
+                    .context("invalid api_keys.yaml")?,
+            )),
         };
         {
             let store = auth.store.lock().await;

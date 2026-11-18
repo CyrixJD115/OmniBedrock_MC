@@ -196,3 +196,43 @@ async fn websocket_history_replay_command_permissions_and_shutdown() {
         .unwrap()
         .unwrap();
 }
+
+#[tokio::test]
+async fn boot_banner_sets_the_reported_version() {
+    let (_dir, c) = setup().await;
+    let console = Console::new(&c);
+    assert_eq!(console.version(), None);
+    console
+        .publish(
+            "[01:41:21 INFO]: [Scripting] [Essentials] Current Version: 2.20.3".into(),
+            "stdout",
+            false,
+        )
+        .await;
+    assert_eq!(
+        console.version(),
+        None,
+        "add-on chatter is not the game version"
+    );
+    console
+        .publish(
+            "[01:41:15 INFO]: Version: 1.26.65.1".into(),
+            "stdout",
+            false,
+        )
+        .await;
+    assert_eq!(console.version().as_deref(), Some("1.26.65.1"));
+    console
+        .publish(
+            "\u{1b}[32m[01:41:15 INFO]: This server is running Endstone version: 0.11.16 (Minecraft: 26.65)\u{1b}[0m".into(),
+            "stdout",
+            false,
+        )
+        .await;
+    assert_eq!(
+        console.version().as_deref(),
+        Some("1.26.65.1 · Endstone 0.11.16")
+    );
+    console.reset_stats();
+    assert_eq!(console.version(), None);
+}

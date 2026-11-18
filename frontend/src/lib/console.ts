@@ -6,8 +6,14 @@ const ansi = new AnsiUp();
 
 ansi.use_classes = false;
 
-const LEVEL_RE = /\[(ERROR|WARN(?:ING)?|INFO|DEBUG|LOCAL)\]/i;
-const ERROR_KEYWORDS = /(?:error|exception|traceback|fatal)/i;
+// Matches the bare tag and the timestamped shapes real servers print:
+// `[01:35:27 WARNING]` (Endstone), `[2026-11-18 01:35:27:123 INFO]` (BDS),
+// `[01:41:41.540 main/INFO]` (MCXboxBroadcast). Mirrors the backend's
+// detect_level so locally classified lines agree with streamed ones.
+const LEVEL_RE = /\[(?:[^[\]\n]{0,48}?[\s/])?(ERROR|SEVERE|CRITICAL|FATAL|WARN(?:ING)?|INFO|DEBUG|TRACE|LOCAL)\]/i;
+// Untagged fallback: whole words, so `errorMessage=(null)` is not an error.
+const ERROR_KEYWORDS = /\b(?:error|exception|traceback|fatal)\b/i;
+const EXCEPTION_CLASS = /\b[A-Z][A-Za-z]*(?:Error|Exception)\b/;
 const TAG_RE = /(<[^>]*>)|([^<]+)/g;
 const ANCHOR_RE = /<a href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/g;
 
@@ -32,13 +38,13 @@ export function detectLevel(text: string): 'error' | 'warn' | 'info' | 'debug' |
   const m = LEVEL_RE.exec(text);
   if (m) {
     const token = m[1].toUpperCase();
-    if (token === 'ERROR') return 'error';
+    if (token === 'ERROR' || token === 'SEVERE' || token === 'CRITICAL' || token === 'FATAL') return 'error';
     if (token === 'WARN' || token === 'WARNING') return 'warn';
-    if (token === 'DEBUG') return 'debug';
+    if (token === 'DEBUG' || token === 'TRACE') return 'debug';
     if (token === 'LOCAL') return 'local';
     return 'info';
   }
-  if (ERROR_KEYWORDS.test(text)) return 'error';
+  if (ERROR_KEYWORDS.test(text) || EXCEPTION_CLASS.test(text)) return 'error';
   return 'info';
 }
 

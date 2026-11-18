@@ -28,6 +28,10 @@ pub struct User {
     /// Aggregate ceilings for this user's instances; None = unlimited.
     #[serde(default)]
     pub quotas: omnibedrock_server::instances::UserQuotas,
+    /// Set only on the per-request copy resolved from an API key; never
+    /// persisted. `None` means a regular login session.
+    #[serde(skip)]
+    pub key_scope: Option<super::api_keys::KeyScope>,
 }
 impl User {
     /// Canonical multi-role setter: keeps the legacy display field in sync.

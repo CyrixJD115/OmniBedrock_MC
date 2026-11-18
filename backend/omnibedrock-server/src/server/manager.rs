@@ -122,6 +122,9 @@ impl ServerManager {
             .filter(|_| s.status == Status::Running)
             .map_or(0.0, |i| i.elapsed().as_secs_f64());
         s.tps = self.console.tps();
+        if s.version.is_none() {
+            s.version = self.console.version();
+        }
         s
     }
     /// Swap the launch context (deployment/resources/port). Applies on the

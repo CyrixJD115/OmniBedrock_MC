@@ -63,7 +63,10 @@ fn resolve_target(
         Some(text) => text.parse::<u16>().unwrap_or(fallback_port),
     };
     RelayTarget {
-        text: format!("{ip}:{port}"),
+        // SocketAddr rendering brackets IPv6 ("[::1]:19132") so the text is
+        // directly probe-able and URL-safe.
+        text: std::net::SocketAddr::new(ip, port).to_string(),
+        port,
         public: publicly_routable(ip),
     }
 }
@@ -90,10 +93,13 @@ pub(super) fn analyze_relay_config(text: &str, fallback_port: u16) -> RelayAnaly
         .and_then(|s| s.get("session-info"))
         .filter(|info| info.get("ip").is_some() || info.get("port").is_some())
         .map(|info| resolve_target(info.get("ip"), info.get("port"), fallback_port));
+    let operational_port = relay.as_ref().or(legacy.as_ref()).map(|t| t.port);
     RelayAnalysis {
         query_server,
         relay,
         legacy,
+        server_port: fallback_port,
+        port_mismatch: operational_port.is_some_and(|p| p != fallback_port),
     }
 }
 
@@ -155,6 +161,25 @@ pub(super) async fn announce_relay(config: &Config, console: &Console) {
                 .await;
         }
     }
+    if analysis.port_mismatch {
+        let configured = analysis
+            .relay
+            .as_ref()
+            .or(analysis.legacy.as_ref())
+            .map_or(0, |t| t.port);
+        console
+            .publish(
+                format!(
+                    "[LOCAL] WARNING: the relay port {configured} is not this instance's \
+                     server-port {} — the broadcaster would advertise and query a different \
+                     server. Set session.remote-port to {} (or auto).",
+                    analysis.server_port, analysis.server_port
+                ),
+                "panel",
+                false,
+            )
+            .await;
+    }
     if let Some(legacy) = &analysis.legacy {
         console
             .publish(
@@ -195,6 +220,7 @@ session:
             a.relay,
             Some(RelayTarget {
                 text: "127.0.0.1:24474".into(),
+                port: 24474,
                 public: false
             })
         );
@@ -260,6 +286,30 @@ session:
     }
 
     #[test]
+    fn relay_port_drift_is_flagged() {
+        // Copied from another instance: relay points at 19132, server is 24474.
+        let text = "session:\n  remote-address: 127.0.0.1\n  remote-port: 19132\n";
+        let a = analyze_relay_config(text, 24474);
+        assert!(a.port_mismatch);
+        assert_eq!(a.server_port, 24474);
+        // String ports (as the visual editor writes them) still compare.
+        let text = "session:\n  remote-address: 127.0.0.1\n  remote-port: '24474'\n";
+        assert!(!analyze_relay_config(text, 24474).port_mismatch);
+        // auto follows the server-port by definition.
+        let text = "session:\n  remote-address: auto\n  remote-port: auto\n";
+        assert!(!analyze_relay_config(text, 24474).port_mismatch);
+    }
+
+    #[test]
+    fn ipv6_relay_targets_render_bracketed() {
+        let text = "session:\n  remote-address: '::1'\n  remote-port: 19132\n";
+        assert_eq!(
+            analyze_relay_config(text, 19132).relay.unwrap().text,
+            "[::1]:19132"
+        );
+    }
+
+    #[test]
     fn query_server_off_is_reported() {
         let text = "session:\n  query-server: false\n";
         assert!(!analyze_relay_config(text, 19132).query_server);
@@ -281,6 +331,7 @@ session:
             a.relay,
             Some(RelayTarget {
                 text: "127.0.0.1:24474".into(),
+                port: 24474,
                 public: false
             })
         );

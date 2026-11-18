@@ -8,6 +8,7 @@
 
 mod archive;
 mod classify;
+mod delivery;
 mod install;
 mod lang;
 mod listing;
@@ -18,6 +19,7 @@ mod sync;
 mod tests;
 
 pub use classify::{ArchiveKind, detect_archive};
+pub use delivery::{CONSOLE_HEAVY_BYTES, DeliveredPack, DeliveryReport, delivery_report};
 pub use install::{InstalledPack, install_archive, install_world};
 pub use lang::{parse_lang, read_texts, resolve_lang};
 pub use listing::{delete_pack, pack_stats};

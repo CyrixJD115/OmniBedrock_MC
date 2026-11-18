@@ -45,6 +45,9 @@ export function switchInstance(id: string) {
 
 /** Refresh statuses in the list without disturbing the active selection. */
 export async function refreshInstances(): Promise<void> {
+  // Background tabs skip the poll; the next visible tick catches up. Every
+  // forgotten tab used to keep hitting the panel every few seconds.
+  if (typeof document !== 'undefined' && document.hidden) return;
   try {
     instances.set(await api.listInstances());
   } catch {
