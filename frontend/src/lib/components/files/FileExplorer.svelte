@@ -9,6 +9,7 @@
   import { addToast } from '$stores/toast';
   import { baseName, breadcrumbs, joinPath, normalizePath, parentPath, isTextFile } from '$lib/files/paths';
   import { prettyView, type PrettyView } from '$lib/files/pretty';
+  import { jsonError } from '$lib/files/jsonCheck';
   import { fmtDate, fmtSize } from '$lib/addons/display';
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
   import ValueTree from '$lib/components/files/ValueTree.svelte';
@@ -55,6 +56,41 @@
   let gutterEl = $state<HTMLDivElement | null>(null);
 
   const crumbs = $derived(breadcrumbs(path));
+
+  // Folder filter + sort (folders always first).
+  let filter = $state('');
+  let sortKey = $state<'name' | 'size' | 'modified'>('name');
+  let sortDir = $state<1 | -1>(1);
+  function sortBy(key: 'name' | 'size' | 'modified') {
+    if (sortKey === key) sortDir = sortDir === 1 ? -1 : 1;
+    else { sortKey = key; sortDir = key === 'name' ? 1 : -1; }
+  }
+  const entries = $derived.by(() => {
+    const q = filter.trim().toLowerCase();
+    const list = (listing?.entries ?? []).filter((e) => !q || e.name.toLowerCase().includes(q));
+    return [...list].sort((a, b) => {
+      if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+      const d = sortKey === 'name' ? a.name.localeCompare(b.name, undefined, { numeric: true })
+        : sortKey === 'size' ? a.size - b.size : a.modified - b.modified;
+      return d * sortDir;
+    });
+  });
+  const sortMark = (key: string) => (sortKey === key ? (sortDir === 1 ? ' ▲' : ' ▼') : '');
+  const jsonProblem = $derived(editPath.toLowerCase().endsWith('.json') ? jsonError(editContent) : null);
+
+  /** Ask before throwing away unsaved editor changes. */
+  function confirmDiscard(): boolean {
+    return !editDirty || window.confirm(`Discard unsaved changes to ${baseName(editPath)}?`);
+  }
+  function requestClose() {
+    if (confirmDiscard()) closeEditor();
+  }
+  $effect(() => {
+    if (!editDirty) return;
+    const guard = (e: BeforeUnloadEvent) => { e.preventDefault(); };
+    window.addEventListener('beforeunload', guard);
+    return () => window.removeEventListener('beforeunload', guard);
+  });
   const editLines = $derived(editContent === '' ? 1 : editContent.split('\n').length);
 
   // Re-anchor to the root whenever the active instance changes; stale loads
@@ -84,6 +120,7 @@
     try {
       const result = await api.listExplorer(instanceId, dest);
       if (mine !== epoch) return;
+      if (dest !== path) filter = '';
       listing = result;
       path = dest;
       pathInput = dest;
@@ -129,6 +166,7 @@
       addToast(`${entry.name} is over 1 MiB — use download instead`, 'info');
       return;
     }
+    if (target !== editPath && !confirmDiscard()) return;
     void (async () => {
       try {
         const text = await api.readExplorerFile(instanceId, target);
@@ -157,6 +195,8 @@
 
   async function saveEditor() {
     if (!editPath || !editDirty) return;
+    // Packs and server files with broken JSON fail to load; say so first.
+    if (jsonProblem && !window.confirm(`This JSON has a syntax error (${jsonProblem}). Save anyway?`)) return;
     try {
       const res = await api.writeExplorerFile(instanceId, editPath, editContent);
       addToast(res.message, 'success');
@@ -285,6 +325,12 @@
     void load();
   }
 
+  /** Leaving a child row is not leaving the drop zone (no flicker). */
+  function onDragLeave(e: DragEvent) {
+    const zone = e.currentTarget as HTMLElement;
+    if (!zone.contains(e.relatedTarget as Node | null)) dragOver = false;
+  }
+
   function onDrop(e: DragEvent) {
     e.preventDefault();
     dragOver = false;
@@ -357,6 +403,9 @@
         <span class="status-dot running"></span> Server running — files are live
       </span>
     {/if}
+    {#if listing && listing.entries.length > 12}
+      <input class="input text-xs py-1 w-48 normal-case tracking-normal" placeholder="Filter this folder…" bind:value={filter} aria-label="Filter files" />
+    {/if}
     {#if listing?.truncated}
       <span class="text-yellow-400">Listing truncated at 2000 entries</span>
     {/if}
@@ -379,24 +428,24 @@
     role="region"
     aria-label="Instance files"
     ondragover={(e) => { e.preventDefault(); if (canWrite) dragOver = true; }}
-    ondragleave={() => (dragOver = false)}
+    ondragleave={onDragLeave}
     ondrop={onDrop}
   >
     <div class={dragOver ? 'border-2 border-dashed border-bedrock-400/60 -m-1 p-1' : ''}>
       <table class="w-full text-xs">
         <thead>
           <tr class="text-left text-deep-400 uppercase tracking-wider text-[10px]">
-            <th class="py-2 pr-2">Name</th>
-            <th class="py-2 pr-2 w-24">Size</th>
-            <th class="py-2 pr-2 w-28">Modified</th>
+            <th class="py-2 pr-2"><button class="hover:text-deep-200 uppercase tracking-wider" onclick={() => sortBy('name')}>Name{sortMark('name')}</button></th>
+            <th class="py-2 pr-2 w-24"><button class="hover:text-deep-200 uppercase tracking-wider" onclick={() => sortBy('size')}>Size{sortMark('size')}</button></th>
+            <th class="py-2 pr-2 w-28"><button class="hover:text-deep-200 uppercase tracking-wider" onclick={() => sortBy('modified')}>Modified{sortMark('modified')}</button></th>
             <th class="py-2 w-24 text-right">Actions</th>
           </tr>
         </thead>
         <tbody>
           {#if loading}
             <tr><td colspan="4" class="py-8 text-center text-deep-400">Loading…</td></tr>
-          {:else if listing && listing.entries.length > 0}
-            {#each listing.entries as entry (entry.name)}
+          {:else if listing && entries.length > 0}
+            {#each entries as entry (entry.name)}
               <tr class="group border-t border-deep-700/40 hover:bg-deep-800/40 transition-colors">
                 <td class="py-1.5 pr-2">
                   <button
@@ -438,7 +487,9 @@
           {:else}
             <tr>
               <td colspan="4" class="py-10 text-center text-deep-400 text-xs">
-                {#if canWrite}
+                {#if filter.trim() && listing?.entries.length}
+                  Nothing in this folder matches “{filter}”
+                {:else if canWrite}
                   This folder is empty — drop files here or use Upload
                 {:else}
                   This folder is empty
@@ -466,6 +517,7 @@
           <FileCode size={13} class="text-bedrock-400" />
           {editPath}
           {#if editDirty}<span class="text-yellow-400 text-[10px] uppercase tracking-wider">unsaved</span>{/if}
+          {#if jsonProblem}<span class="text-red-300 text-[10px] normal-case tracking-normal font-sans" title="Comments and a byte-order mark are allowed, as Bedrock accepts them">JSON error: {jsonProblem}</span>{/if}
         </h3>
         <div class="flex items-center gap-2">
           {#if pretty}
@@ -483,7 +535,7 @@
             </div>
           {/if}
           <button onclick={saveEditor} disabled={!editDirty} class="btn-primary text-xs disabled:opacity-40">Save</button>
-          <button onclick={closeEditor} class="btn-secondary text-xs">Close</button>
+          <button onclick={requestClose} class="btn-secondary text-xs">Close</button>
         </div>
       </div>
 
