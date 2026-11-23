@@ -13,7 +13,7 @@ use omnibedrock_core::{
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
-use super::audit::audit_action;
+use super::audit::{audit_action, skip_generic_audit};
 use super::dispatch_authenticated::dispatch_authenticated;
 use super::explorer;
 use super::helpers::{data_response, success, value_string};
@@ -296,7 +296,7 @@ pub(super) async fn dispatch(
     let result =
         dispatch_authenticated(&state, &svc, &user, &method, &segments, &query, &body).await?;
     // Never include passwords, JWTs, or full edited documents in the audit trail.
-    if method != Method::GET && result.status().is_success() {
+    if method != Method::GET && result.status().is_success() && !skip_generic_audit(&segments) {
         let (action, detail, category) = audit_action(&segments, &method, &body);
         if let Err(e) = state
             .audit_raw(

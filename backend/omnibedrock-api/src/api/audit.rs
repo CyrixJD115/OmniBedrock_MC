@@ -4,6 +4,24 @@ use serde_json::Value;
 
 use super::helpers::optional_string;
 
+/// Requests the generic mutation trail must not record: read-only POSTs
+/// (download tokens are minted for every WebSocket connect, download and
+/// icon, and used to bury real changes) and routes whose handler already
+/// writes its own, more specific entry (recording them twice).
+pub(super) fn skip_generic_audit(p: &[&str]) -> bool {
+    matches!(
+        p,
+        ["auth", "download-token"]
+            | ["addons", "cdn", "test"]
+            | ["backups", _, _, "verify"]
+            | ["addons", "delete"]
+            | ["addons", "compat", "content-logs"]
+            | ["players", "action"]
+            | ["roles", ..]
+            | ["settings", "panel"]
+    )
+}
+
 pub(super) fn audit_action(
     p: &[&str],
     method: &Method,
@@ -177,5 +195,19 @@ pub(super) fn audit_action(
             detail,
             "general",
         ),
+    }
+}
+
+#[cfg(test)]
+mod skip_tests {
+    use super::skip_generic_audit;
+
+    #[test]
+    fn read_only_and_self_audited_posts_are_skipped() {
+        assert!(skip_generic_audit(&["auth", "download-token"]));
+        assert!(skip_generic_audit(&["backups", "W", "f.zip", "verify"]));
+        assert!(skip_generic_audit(&["roles", "admin"]));
+        assert!(!skip_generic_audit(&["server", "action"]));
+        assert!(!skip_generic_audit(&["backups", "create"]));
     }
 }

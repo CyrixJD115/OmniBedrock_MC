@@ -89,9 +89,9 @@
           {/if}
         </span>
         <span class="text-deep-400">Dir</span>
-        <span class="font-mono text-deep-300 break-all" title={status.dir}>{status.dir}</span>
+        <span class="font-mono text-deep-300 truncate min-w-0" style="direction: rtl; text-align: left" title={status.dir}><bdi>{status.dir}</bdi></span>
         <span class="text-deep-400">Jar</span>
-        <span class="font-mono text-deep-300 break-all" title={status.jar}>{status.jar}</span>
+        <span class="font-mono text-deep-300 truncate min-w-0" style="direction: rtl; text-align: left" title={status.jar}><bdi>{status.jar}</bdi></span>
       </div>
     {:else}
       <p class="text-xs text-deep-400">Loading…</p>
