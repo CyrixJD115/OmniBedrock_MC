@@ -83,6 +83,22 @@ pub async fn dirs(root: &Path) -> Result<Vec<String>> {
     result.sort();
     Ok(result)
 }
+/// Whether a folder under `worlds/` is a real world: hidden folders and
+/// panel-made pre-restore copies (`.<w>.pre-restore-<ts>`, legacy
+/// `<w>.bak.<ts>`, `.<w>.restore.<id>` staging) are not.
+pub fn is_world_dir_name(name: &str) -> bool {
+    !name.starts_with('.') && !name.contains(".bak.") && !name.contains(".restore.")
+}
+
+/// Real world folders under `root` (see [`is_world_dir_name`]), sorted.
+pub async fn world_dirs(root: &Path) -> Result<Vec<String>> {
+    Ok(dirs(root)
+        .await?
+        .into_iter()
+        .filter(|n| is_world_dir_name(n))
+        .collect())
+}
+
 pub fn properties(text: &str) -> Vec<Value> {
     text.lines()
         .map(|line| {

@@ -25,25 +25,25 @@
     <h2 class="text-sm font-bold text-strong uppercase tracking-wider mb-4">New Instance</h2>
     <div class="space-y-3">
       <div>
-        <label class="text-[10px] uppercase tracking-wider text-deep-400">Name</label>
-        <input bind:value={form.name} placeholder="My Bedrock Server" class="input w-full text-xs mt-1" />
+        <label for="ci-name" class="text-[10px] uppercase tracking-wider text-deep-400">Name</label>
+        <input id="ci-name" bind:value={form.name} placeholder="My Bedrock Server" class="input w-full text-xs mt-1" />
       </div>
       <div class="grid grid-cols-2 gap-3">
         <div>
-          <label class="text-[10px] uppercase tracking-wider text-deep-400">Runtime</label>
-          <select bind:value={form.backend} class="input w-full text-xs mt-1">
+          <label for="ci-runtime" class="text-[10px] uppercase tracking-wider text-deep-400">Runtime</label>
+          <select id="ci-runtime" bind:value={form.backend} class="input w-full text-xs mt-1">
             <option value="vanilla">Vanilla Bedrock</option>
             <option value="endstone">Endstone</option>
           </select>
         </div>
         <div>
-          <label class="text-[10px] uppercase tracking-wider text-deep-400">UDP port (blank = auto)</label>
-          <input bind:value={form.port} type="number" placeholder="19132" class="input w-full text-xs mt-1" />
+          <label for="ci-udp-port-blank-auto" class="text-[10px] uppercase tracking-wider text-deep-400">UDP port (blank = auto)</label>
+          <input id="ci-udp-port-blank-auto" bind:value={form.port} type="number" placeholder="19132" class="input w-full text-xs mt-1" />
         </div>
       </div>
       <div>
-        <label class="text-[10px] uppercase tracking-wider text-deep-400">Deployment / limit enforcement</label>
-        <select bind:value={form.deployment} class="input w-full text-xs mt-1">
+        <label for="ci-deployment-limit-enforce" class="text-[10px] uppercase tracking-wider text-deep-400">Deployment / limit enforcement</label>
+        <select id="ci-deployment-limit-enforce" bind:value={form.deployment} class="input w-full text-xs mt-1">
           <option value="native">Native process — advisory limits only</option>
           {#if !hostInfo?.capabilities.systemd}
             <option value="systemd" disabled>systemd service — unavailable on this host</option>
@@ -76,12 +76,12 @@
         {#if form.deployment === 'docker'}
           <div class="mt-2 space-y-2 border border-deep-600/40 bg-deep-900/30 p-2">
             <div>
-              <label class="text-[10px] uppercase tracking-wider text-deep-400">Image (blank = panel default for the runtime)</label>
-              <input bind:value={form.dockerImage} placeholder="omnibedrock-vanilla:latest" class="input w-full text-xs mt-1" />
+              <label for="ci-image-blank-panel-defaul" class="text-[10px] uppercase tracking-wider text-deep-400">Image (blank = panel default for the runtime)</label>
+              <input id="ci-image-blank-panel-defaul" bind:value={form.dockerImage} placeholder="omnibedrock-vanilla:latest" class="input w-full text-xs mt-1" />
             </div>
             <div>
-              <label class="text-[10px] uppercase tracking-wider text-deep-400">Extra bind mounts (one host:container[:opts] per line)</label>
-              <textarea bind:value={form.dockerMounts} rows="2" placeholder="/mnt/media/worlds:/data/worlds" class="input w-full text-xs mt-1 font-mono"></textarea>
+              <label for="ci-extra-bind-mounts-one-ho" class="text-[10px] uppercase tracking-wider text-deep-400">Extra bind mounts (one host:container[:opts] per line)</label>
+              <textarea id="ci-extra-bind-mounts-one-ho" bind:value={form.dockerMounts} rows="2" placeholder="/mnt/media/worlds:/data/worlds" class="input w-full text-xs mt-1 font-mono"></textarea>
             </div>
             <p class="text-[10px] text-deep-400">
               {#if hostInfo?.capabilities?.platform === 'linux'}
@@ -106,12 +106,12 @@
       </div>
       <div class="grid grid-cols-2 gap-3">
         <div>
-          <label class="text-[10px] uppercase tracking-wider text-deep-400">Memory limit (MB, blank = ∞)</label>
-          <input bind:value={form.memory} type="number" placeholder="1024" class="input w-full text-xs mt-1" />
+          <label for="ci-memory" class="text-[10px] uppercase tracking-wider text-deep-400">Memory limit (MB, blank = ∞)</label>
+          <input id="ci-memory" bind:value={form.memory} type="number" placeholder="1024" class="input w-full text-xs mt-1" />
         </div>
         <div>
-          <label class="text-[10px] uppercase tracking-wider text-deep-400">CPU limit (cores, blank = ∞)</label>
-          <input bind:value={form.cpus} type="number" step="0.1" placeholder="1.0" class="input w-full text-xs mt-1" />
+          <label for="ci-cpu-limit-cores-blank" class="text-[10px] uppercase tracking-wider text-deep-400">CPU limit (cores, blank = ∞)</label>
+          <input id="ci-cpu-limit-cores-blank" bind:value={form.cpus} type="number" step="0.1" placeholder="1.0" class="input w-full text-xs mt-1" />
         </div>
       </div>
       <label class="flex items-center gap-2 text-xs text-deep-300">

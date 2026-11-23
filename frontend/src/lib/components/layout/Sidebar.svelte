@@ -70,7 +70,7 @@
   }
 
   // Icon reflecting the *effective* mode; the label shows the choice.
-  const modeIcon = $derived($themeMode === 'light' ? Sun : $themeMode === 'dark' ? Moon : Monitor);
+  const ModeIcon = $derived($themeMode === 'light' ? Sun : $themeMode === 'dark' ? Moon : Monitor);
   const modeTitle = $derived(
     $themeMode === 'light' ? 'Light mode — click to switch'
     : $themeMode === 'dark' ? 'Dark mode — click to switch'
@@ -173,7 +173,7 @@
       <button onclick={cycleMode} title={modeTitle} aria-label={modeTitle}
               class="flex items-center {sidebarOpen ? 'gap-3 px-3 py-2 flex-1' : 'p-2'} text-xs uppercase tracking-wider text-deep-400 hover:text-bedrock-300 hover:bg-deep-700/60 transition-colors border-l-2 border-transparent hover:border-bedrock-500/50 rounded-none">
         {#key $themeMode}
-          <modeIcon size={14} class="shrink-0" />
+          <ModeIcon size={14} class="shrink-0" />
         {/key}
         {#if sidebarOpen}
           <span class="capitalize">{$themeMode}</span>

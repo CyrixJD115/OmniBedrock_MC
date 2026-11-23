@@ -158,7 +158,7 @@ pub fn missing_dependencies(worlds_root: &Path) -> Vec<String> {
     };
     for world in worlds.flatten().take(64) {
         if !world.file_type().is_ok_and(|t| t.is_dir())
-            || world.file_name().to_string_lossy().starts_with('.')
+            || !omnibedrock_core::files::is_world_dir_name(&world.file_name().to_string_lossy())
         {
             continue;
         }
@@ -186,7 +186,7 @@ pub fn sync_all_worlds(worlds_root: &Path) -> Vec<String> {
     };
     for world in worlds.flatten().take(64) {
         if !world.file_type().is_ok_and(|t| t.is_dir())
-            || world.file_name().to_string_lossy().starts_with('.')
+            || !omnibedrock_core::files::is_world_dir_name(&world.file_name().to_string_lossy())
         {
             continue;
         }

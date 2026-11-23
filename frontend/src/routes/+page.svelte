@@ -7,6 +7,7 @@
   import { activeInstance } from '$stores/instances';
   import { Play, Square, RotateCw, Terminal, Users, HardDrive, Globe, Cpu, Clock, Activity, TriangleAlert, Radio } from '@lucide/svelte';
   import type { BroadcasterStatus } from '$types/index';
+  import AtAGlance from '$lib/components/dashboard/AtAGlance.svelte';
 
   let loading = $state(true);
   let acting = $state<string | null>(null);
@@ -191,6 +192,8 @@
       </div>
     </div>
   </div>
+
+  <AtAGlance instanceId={currentInstanceId} />
 
   <!-- Quick Actions -->
   <div class="card">

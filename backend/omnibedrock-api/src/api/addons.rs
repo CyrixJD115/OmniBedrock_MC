@@ -81,7 +81,7 @@ pub(super) async fn addons(
             let refresh = q.contains_key("refresh");
             let mut result = json!({"behavior_packs":[],"resource_packs":[]});
             let mut live: HashSet<String> = HashSet::new();
-            for world in files::dirs(&root).await? {
+            for world in files::world_dirs(&root).await? {
                 let world_path = safe_path(&root, FsPath::new(&world)).await?;
                 for pack_type in ["behavior_packs", "resource_packs"] {
                     let path = safe_path(&root, &PathBuf::from(&world).join(pack_type)).await?;

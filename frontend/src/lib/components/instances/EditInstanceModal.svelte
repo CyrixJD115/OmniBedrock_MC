@@ -44,26 +44,26 @@
     {/if}
     <div class="space-y-3">
       <div>
-        <label class="text-[10px] uppercase tracking-wider text-deep-400">Name</label>
-        <input bind:value={editForm.name} class="input w-full text-xs mt-1" />
+        <label for="ei-name" class="text-[10px] uppercase tracking-wider text-deep-400">Name</label>
+        <input id="ei-name" bind:value={editForm.name} class="input w-full text-xs mt-1" />
       </div>
       <div class="grid grid-cols-3 gap-3">
         <div>
-          <label class="text-[10px] uppercase tracking-wider text-deep-400">Port</label>
-          <input bind:value={editForm.port} type="number" class="input w-full text-xs mt-1" />
+          <label for="ei-port" class="text-[10px] uppercase tracking-wider text-deep-400">Port</label>
+          <input id="ei-port" bind:value={editForm.port} type="number" class="input w-full text-xs mt-1" />
         </div>
         <div>
-          <label class="text-[10px] uppercase tracking-wider text-deep-400">Memory MB</label>
-          <input bind:value={editForm.memory} type="number" placeholder="∞" class="input w-full text-xs mt-1" />
+          <label for="ei-memory-mb" class="text-[10px] uppercase tracking-wider text-deep-400">Memory MB</label>
+          <input id="ei-memory-mb" bind:value={editForm.memory} type="number" placeholder="∞" class="input w-full text-xs mt-1" />
         </div>
         <div>
-          <label class="text-[10px] uppercase tracking-wider text-deep-400">CPUs</label>
-          <input bind:value={editForm.cpus} type="number" step="0.1" placeholder="∞" class="input w-full text-xs mt-1" />
+          <label for="ei-cpus" class="text-[10px] uppercase tracking-wider text-deep-400">CPUs</label>
+          <input id="ei-cpus" bind:value={editForm.cpus} type="number" step="0.1" placeholder="∞" class="input w-full text-xs mt-1" />
         </div>
       </div>
       <div>
-        <label class="text-[10px] uppercase tracking-wider text-deep-400">Deployment</label>
-        <select bind:value={editForm.deployment} class="input w-full text-xs mt-1">
+        <label for="ei-deployment" class="text-[10px] uppercase tracking-wider text-deep-400">Deployment</label>
+        <select id="ei-deployment" bind:value={editForm.deployment} class="input w-full text-xs mt-1">
           <option value="native">Native — advisory</option>
           {#if hostInfo?.capabilities.systemd}<option value="systemd">systemd service — cgroup enforced</option>{/if}
           {#if hostInfo?.capabilities.docker}<option value="docker">Docker — container enforced</option>{/if}
@@ -72,12 +72,12 @@
         {#if editForm.deployment === 'docker'}
           <div class="mt-2 space-y-2 border border-deep-600/40 bg-deep-900/30 p-2">
             <div>
-              <label class="text-[10px] uppercase tracking-wider text-deep-400">Image (blank = panel default for the runtime)</label>
-              <input bind:value={editForm.dockerImage} placeholder="omnibedrock-vanilla:latest" class="input w-full text-xs mt-1" />
+              <label for="ei-image-blank-panel-defaul" class="text-[10px] uppercase tracking-wider text-deep-400">Image (blank = panel default for the runtime)</label>
+              <input id="ei-image-blank-panel-defaul" bind:value={editForm.dockerImage} placeholder="omnibedrock-vanilla:latest" class="input w-full text-xs mt-1" />
             </div>
             <div>
-              <label class="text-[10px] uppercase tracking-wider text-deep-400">Extra bind mounts (one host:container[:opts] per line)</label>
-              <textarea bind:value={editForm.dockerMounts} rows="2" placeholder="/mnt/media/worlds:/data/worlds" class="input w-full text-xs mt-1 font-mono"></textarea>
+              <label for="ei-extra-bind-mounts-one-ho" class="text-[10px] uppercase tracking-wider text-deep-400">Extra bind mounts (one host:container[:opts] per line)</label>
+              <textarea id="ei-extra-bind-mounts-one-ho" bind:value={editForm.dockerMounts} rows="2" placeholder="/mnt/media/worlds:/data/worlds" class="input w-full text-xs mt-1 font-mono"></textarea>
             </div>
           </div>
         {/if}
@@ -89,11 +89,11 @@
         {/if}
       </div>
       <div>
-        <label class="text-[10px] uppercase tracking-wider text-deep-400">Share with users — roles grant what they may do here</label>
+        <label for="ei-share-user" class="text-[10px] uppercase tracking-wider text-deep-400">Share with users — roles grant what they may do here</label>
         <div class="flex gap-2 mt-1">
-          <input list="instance-users" bind:value={accessUser} placeholder="username" class="input flex-1 text-xs" />
+          <input id="ei-share-user" list="instance-users" bind:value={accessUser} placeholder="username" class="input flex-1 text-xs" />
           <datalist id="instance-users">
-            {#each users as u}<option value={u} />{/each}
+            {#each users as u}<option value={u}></option>{/each}
           </datalist>
           <button onclick={onaddaccess} disabled={accessRoles.size === 0} class="btn-secondary text-xs"><Plus size={12} /></button>
         </div>

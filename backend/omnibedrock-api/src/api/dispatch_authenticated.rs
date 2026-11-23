@@ -538,7 +538,7 @@ pub(super) async fn dispatch_authenticated(
         }
         ["worlds"] if read => {
             s.require_for(u, "SERVER_VIEW", svc).await?;
-            json!(files::dirs(&svc.config.bedrock_server_dir.join("worlds")).await?)
+            json!(files::world_dirs(&svc.config.bedrock_server_dir.join("worlds")).await?)
         }
         ["worlds", world] if read => {
             s.require_for(u, "SERVER_VIEW", svc).await?;

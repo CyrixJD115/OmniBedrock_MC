@@ -62,7 +62,7 @@ fn worlds(inputs: &Inputs, opts: &Options) -> Vec<String> {
         .flatten()
         .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
         .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| !n.starts_with('.'))
+        .filter(|n| omnibedrock_core::files::is_world_dir_name(n))
         .collect();
     match housekeeping::level_name(&inputs.server_dir) {
         Some(level) if all.contains(&level) => vec![level],

@@ -59,10 +59,9 @@ pub(super) fn meta_path(zip: &Path) -> PathBuf {
     zip.with_file_name(name)
 }
 
-/// World folders that are backup targets: hidden and panel-made pre-restore
-/// copies (`.<w>.pre-restore-…`, legacy `<w>.bak.<ts>`) are not worlds.
+/// World folders that are backup targets (shared rule in the core crate).
 pub(super) fn is_world_name(name: &str) -> bool {
-    !name.starts_with('.') && !name.contains(".bak.") && !name.contains(".restore.")
+    omnibedrock_core::files::is_world_dir_name(name)
 }
 
 impl Backups {
