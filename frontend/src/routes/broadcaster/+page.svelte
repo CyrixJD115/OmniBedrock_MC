@@ -1,6 +1,12 @@
 <script lang="ts">
+  /**
+   * MCXboxBroadcast for the active instance. Overview (status, sign-in codes,
+   * accounts, live console), Configuration (config.yml) and Screenshot tabs.
+   * The config editor stays mounted while hidden so unsaved edits survive
+   * switching tabs.
+   */
   import { onDestroy, onMount } from 'svelte';
-  import { api, rawHeaders, getInstance } from '$lib/api/client';
+  import { api, getInstance } from '$lib/api/client';
   import { wsManager } from '$lib/websocket';
   import { addToast } from '$stores/toast';
   import { userPermissions } from '$stores/auth';
@@ -17,18 +23,16 @@
     resetFor,
   } from '$lib/broadcaster/console.ts';
   import type { BroadcasterStatus, DeviceCode, BroadcasterJarInfo } from '$types/index';
-  import { normalize, overlayModel, visualDefaults, serverDrift } from '$lib/broadcaster/configModel';
-  import type { BcVisualConfig } from '$lib/broadcaster/configModel';
-  import { load as yamlLoad, dump as yamlDump } from 'js-yaml';
-  import {
-    Radio, Save, Upload, RefreshCw, Settings2, FileText, GitCompareArrows
-  } from '@lucide/svelte';
+  import { Radio, LayoutDashboard, Settings2, Image } from '@lucide/svelte';
   import StatusBanners from '$lib/components/broadcaster/StatusBanners.svelte';
   import ProcessCard from '$lib/components/broadcaster/ProcessCard.svelte';
   import DeviceCodesCard from '$lib/components/broadcaster/DeviceCodesCard.svelte';
   import AccountsCard from '$lib/components/broadcaster/AccountsCard.svelte';
-  import VisualConfigEditor from '$lib/components/broadcaster/VisualConfigEditor.svelte';
+  import ConfigEditorCard from '$lib/components/broadcaster/ConfigEditorCard.svelte';
+  import ScreenshotCard from '$lib/components/broadcaster/ScreenshotCard.svelte';
 
+  type Tab = 'overview' | 'config' | 'screenshot';
+  let tab = $state<Tab>('overview');
   let status = $state<BroadcasterStatus | null>(null);
   let codes = $state<Record<string, DeviceCode>>({});
   // Module-level feed: the view (and any Clear) survives tab switches; see
@@ -36,77 +40,18 @@
   const feed = broadcasterFeed;
   let lines = $state<FeedLine[]>([]);
   feed.subscribe(v => { lines = v; });
-  let configText = $state('');
-  let configDirty = $state(false);
-  let configMode = $state<'visual' | 'raw'>('visual');
-  let cfg = $state<BcVisualConfig>(visualDefaults());
-  let visualDirty = $state(false);
-  let parsedDoc: Record<string, any> = {};
-  // Version tag of the config.yml this editor was loaded from. Saves send it
-  // back, and a status poll that reports a different tag means the file
-  // changed on disk (jar migration, hand edit, another tab).
-  let configEtag = '';
-  let diskChanged = $state(false);
   let jarInfo = $state<BroadcasterJarInfo | null>(null);
+  let editor: ReturnType<typeof ConfigEditorCard> | undefined = $state();
+  let configDirty = $state(false);
   // The instance the page currently shows; async work for any other
   // instance (a poll still in flight across a switch) is discarded.
   let currentId = $state<string>('');
   let busy = $state('');
   let newAccount = $state('');
-  let screenshotAccount = $state('main');
-  let previewUrl = $state('');
-  let screenshotInput = $state<HTMLInputElement | undefined>(undefined);
   let poll: ReturnType<typeof setInterval>;
   const unsubs: Array<() => void> = [];
 
-  function loadSetting<T>(key: string, def: T): T {
-    if (typeof localStorage === 'undefined') return def;
-    try { return JSON.parse(localStorage.getItem(key) || 'null') ?? def; }
-    catch { return def; }
-  }
-  function saveSetting(key: string, value: unknown) {
-    if (typeof localStorage !== 'undefined') localStorage.setItem(key, JSON.stringify(value));
-  }
-
   const canManage = $derived($userPermissions.includes('BROADCASTER_MANAGE'));
-
-  function parseConfigToModel() {
-    try {
-      parsedDoc = (yamlLoad(configText) as Record<string, any>) ?? {};
-      cfg = normalize(parsedDoc);
-      visualDirty = false;
-    } catch (e: any) {
-      addToast(`Cannot open Visual editor: ${e.message}. Editing raw YAML.`, 'error');
-      configMode = 'raw';
-    }
-  }
-
-  function serializeModelToText() {
-    configText = yamlDump(overlayModel(parsedDoc, cfg), { indent: 2, lineWidth: -1, noRefs: true });
-    visualDirty = false;
-    configDirty = true;
-  }
-
-  function switchMode(mode: 'visual' | 'raw') {
-    if (mode === configMode) return;
-    if (mode === 'visual') {
-      parseConfigToModel();
-    } else if (visualDirty) {
-      serializeModelToText();
-    }
-    configMode = mode;
-  }
-
-  function markVisualDirty() {
-    visualDirty = true;
-    configDirty = true;
-  }
-
-  function tabClass(active: boolean): string {
-    return 'flex items-center gap-1.5 px-3 py-1.5 text-[11px] uppercase tracking-wider transition-colors '
-      + (active ? 'bg-bedrock-500/20 text-bedrock-300' : 'text-deep-400 hover:text-strong');
-  }
-
 
   function pushLine(text: string, level?: string) {
     feed.push(text, (level || detectLevel(text)) as FeedLine['level']);
@@ -127,14 +72,7 @@
       if (forId !== currentId) return;
       status = next;
       codes = next.device_codes;
-      if (next.config_etag && configEtag && next.config_etag !== configEtag) {
-        if (configDirty) {
-          diskChanged = true;
-        } else {
-          await loadConfig();
-          if (forId === currentId) addToast('config.yml changed on disk — editor reloaded', 'info');
-        }
-      }
+      await editor?.noticeEtag(next.config_etag);
     } catch { /* transient */ }
   }
 
@@ -157,36 +95,6 @@
       addToast(`Jar update failed: ${e.message}`, 'error');
     }
     busy = '';
-  }
-
-  /** (Re)load config.yml into the editor and remember its version tag. */
-  async function loadConfig() {
-    const forId = currentId;
-    const loaded = await api.getBroadcasterConfig();
-    if (forId !== currentId) return;
-    configText = loaded.text;
-    configEtag = loaded.etag;
-    configDirty = false;
-    visualDirty = false;
-    diskChanged = false;
-    parseConfigToModel();
-  }
-
-  async function reloadFromDisk() {
-    try {
-      await loadConfig();
-      addToast('Reloaded config.yml from disk', 'success');
-    } catch (e: any) {
-      addToast(`Reload failed: ${e.message}`, 'error');
-    }
-  }
-
-  // config.yml vs server.properties drift (operational first).
-  const drift = $derived(serverDrift(cfg, status?.server));
-  function applyDrift(items: ReturnType<typeof serverDrift>) {
-    for (const item of items) item.apply(cfg);
-    markVisualDirty();
-    addToast(`Applied ${items.length} value${items.length === 1 ? '' : 's'} from server.properties — review and Save`, 'info');
   }
 
   /** (Re)load everything for the active instance: console stream, status, config. */
@@ -217,12 +125,11 @@
         codes = data.codes as Record<string, DeviceCode>;
       }
     }));
-    configEtag = '';
     jarInfo = null;
     void loadJarInfo();
     await refresh();
     try {
-      await loadConfig();
+      await editor?.load();
     } catch (e: any) {
       addToast(`Config load failed: ${e.message}`, 'error');
     }
@@ -245,35 +152,8 @@
     void loadAll();
   });
 
-  async function loadPreview(account: string, instance: string) {
-    if (!instance) return;
-    try {
-      const r = await fetch(
-        `/api/v1/broadcaster/screenshot?account=${encodeURIComponent(account)}&instance=${encodeURIComponent(instance)}`,
-        { headers: rawHeaders() },
-      );
-      if (instance !== currentId) return;
-      if (!r.ok) throw new Error(String(r.status));
-      const blob = await r.blob();
-      const url = URL.createObjectURL(blob);
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-      previewUrl = url;
-    } catch {
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-      previewUrl = '';
-    }
-  }
-
-  // Keyed on the account and the instance id only. Reading the
-  // activeInstance store here re-ran this on every layout list refresh (a
-  // fresh object each poll) and re-fetched the screenshot every few seconds.
-  $effect(() => {
-    void loadPreview(screenshotAccount, currentId);
-  });
-
   onDestroy(() => {
     clearInterval(poll);
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
     for (const unsub of unsubs) unsub();
   });
 
@@ -296,31 +176,6 @@
     }
   }
 
-  async function saveConfig() {
-    if (configMode === 'visual' || visualDirty) {
-      if (cfg.session['update-interval'] < 20 || cfg['friend-sync']['update-interval'] < 20) {
-        addToast('Update intervals must be at least 20 seconds (Xbox rate limits)', 'error');
-        return;
-      }
-      serializeModelToText();
-    }
-    try {
-      const r = await api.saveBroadcasterConfig(configText, configEtag);
-      configDirty = false;
-      diskChanged = false;
-      if (r.etag) configEtag = r.etag;
-      parsedDoc = (yamlLoad(configText) as Record<string, any>) ?? {};
-      addToast('Config saved; restart the broadcaster to apply', 'success');
-    } catch (e: any) {
-      if (String(e.message).includes('409')) {
-        diskChanged = true;
-        addToast('config.yml changed on disk since you opened it — reload, then re-apply your edit', 'error');
-      } else {
-        addToast(`Save failed: ${e.message}`, 'error');
-      }
-    }
-  }
-
   async function accountAction(kind: 'add' | 'remove') {
     const id = newAccount.trim();
     if (!id) return;
@@ -332,23 +187,11 @@
     } catch (e: any) { addToast(`${kind} failed: ${e.message}`, 'error'); }
   }
 
-  async function uploadScreenshot(event: Event) {
-    const file = (event.target as HTMLInputElement).files?.[0];
-    if (!file) return;
-    try {
-      const r = await api.uploadBroadcasterScreenshot(screenshotAccount, file);
-      addToast(r.message || 'Uploaded', 'success');
-      await loadPreview(screenshotAccount, currentId);
-    } catch (e: any) { addToast(`Upload failed: ${e.message}`, 'error'); }
-    (event.target as HTMLInputElement).value = '';
-  }
-
   function copy(text: string) {
     navigator.clipboard.writeText(text);
     addToast('Copied', 'success');
   }
 </script>
-
 <div class="space-y-4">
   <div class="flex items-center justify-between">
     <div class="flex items-center gap-3">
@@ -375,147 +218,45 @@
   <!-- Status warnings: jar, external broadcaster, relay target, ping -->
   <StatusBanners {status} canManage={canManage} {busy} onaction={action} />
 
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-    <!-- Status + controls -->
-    <ProcessCard {status} canManage={canManage} {busy} onaction={action} {jarInfo} onupdatejar={updateJar} />
-
-    <!-- Device codes -->
-    <DeviceCodesCard {codes} oncopy={copy} />
-
-    <!-- Accounts -->
-    <AccountsCard accounts={status?.accounts ?? []} canManage={canManage} bind:newAccount onaction={accountAction} />
+  <div class="flex flex-wrap gap-1 border-b border-deep-600/30 pb-px" role="tablist">
+    {#each [
+      { id: 'overview' as const, label: 'Overview', icon: LayoutDashboard },
+      { id: 'config' as const, label: 'Configuration', icon: Settings2 },
+      { id: 'screenshot' as const, label: 'Screenshot', icon: Image },
+    ] as t (t.id)}
+      <button role="tab" aria-selected={tab === t.id} onclick={() => (tab = t.id)}
+              class="text-xs px-4 py-2 uppercase tracking-wider font-semibold transition rounded-t flex items-center gap-1.5
+                     {tab === t.id ? 'bg-deep-800/60 text-strong border-b-2 border-bedrock-500' : 'text-deep-400 hover:text-deep-200'}">
+        <t.icon size={12} /> {t.label}
+        {#if t.id === 'config' && configDirty}<span class="w-1.5 h-1.5 rounded-full bg-yellow-400" title="Unsaved changes"></span>{/if}
+      </button>
+    {/each}
   </div>
 
-  <!-- Console: same shared terminal widget as the Console page -->
-  <Terminal
-    title="broadcaster-console"
-    heightKey="broadcaster"
-    {lines}
-    emptyHint="> Broadcaster output appears here…"
-    onclear={() => clearBroadcastView(instanceId())}
-    onsend={send}
-    canSend={canManage}
-    sendPlaceholder="accounts list · restart · dumpsession · stop…"
-  />
-
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-    <!-- Config editor -->
-    <div class="card lg:col-span-2">
-      <div class="flex items-center justify-between">
-        <h2 class="card-header">config.yml</h2>
-        <div class="flex items-center gap-2">
-          {#if configDirty}<span class="text-[10px] uppercase tracking-wider text-yellow-400">unsaved</span>{/if}
-          <div class="flex border-2 border-deep-600/40 overflow-hidden">
-            <button onclick={() => switchMode('visual')} class={tabClass(configMode === 'visual')}
-                    title="Form editor over the known config schema">
-              <Settings2 size={12} /> Visual
-            </button>
-            <button onclick={() => switchMode('raw')} class={tabClass(configMode === 'raw') + ' border-l-2 border-deep-600/40'}
-                    title="Edit the raw YAML document">
-              <FileText size={12} /> Raw
-            </button>
-          </div>
-          {#if canManage}
-            <button onclick={saveConfig} disabled={!configDirty}
-                    class="btn-primary flex items-center gap-1.5 text-xs">
-              <Save size={13} /> Save
-            </button>
-          {/if}
-        </div>
-      </div>
-
-      {#if diskChanged}
-        <div class="mb-3 flex items-center justify-between gap-3 border-2 border-yellow-500/40 bg-yellow-500/5 px-3 py-2 text-xs">
-          <span class="text-yellow-300">config.yml changed on disk while you were editing. Saving now is refused so the newer file is not overwritten.</span>
-          <button onclick={reloadFromDisk} class="btn-ghost flex items-center gap-1.5 text-xs shrink-0">
-            <RefreshCw size={12} /> Reload from disk
-          </button>
-        </div>
-      {/if}
-      {#if drift.length > 0 && configMode === 'visual'}
-        <div class="mb-3 border-2 border-bedrock-500/30 bg-bedrock-950/20 p-3 space-y-2">
-          <div class="flex items-center justify-between gap-2">
-            <p class="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-bedrock-300">
-              <GitCompareArrows size={12} /> Differs from server.properties
-            </p>
-            {#if canManage}
-              <button onclick={() => applyDrift(drift)} class="btn-ghost text-[11px] px-2 py-1">Sync from server.properties</button>
-            {/if}
-          </div>
-          <ul class="space-y-1">
-            {#each drift as item (item.key)}
-              <li class="flex items-center justify-between gap-2 text-[11px]">
-                <span class="text-deep-300">
-                  <span class="{item.kind === 'operational' ? 'text-yellow-300' : 'text-deep-400'}">{item.label}</span>:
-                  <span class="font-mono text-strong">{item.config}</span>
-                  <span class="text-deep-400">→</span>
-                  <span class="font-mono text-teal-300">{item.server}</span>
-                  {#if item.kind === 'fallback'}<span class="text-deep-500"> (fallback only)</span>{/if}
-                </span>
-                {#if canManage}
-                  <button onclick={() => applyDrift([item])} class="text-bedrock-400 hover:underline shrink-0">apply</button>
-                {/if}
-              </li>
-            {/each}
-          </ul>
-          <p class="text-[10px] text-deep-400 leading-snug">
-            With query-server on, the Xbox session shows the server's live name, level, and player count;
-            the session-info values here only appear when the query cannot answer. Applying only changes
-            the form — review, then Save.
-          </p>
-        </div>
-      {/if}
-      {#if configMode === 'visual'}
-        <VisualConfigEditor bind:cfg visualDirty={visualDirty} canManage={canManage} onmarkdirty={markVisualDirty} />
-      {:else}
-        <textarea bind:value={configText} oninput={() => (configDirty = true)}
-                  spellcheck="false"
-                  class="input w-full h-80 font-mono text-xs leading-relaxed whitespace-pre overflow-auto"
-                  disabled={!canManage}></textarea>
-      {/if}
-      <p class="text-[10px] text-deep-400 mt-2 leading-relaxed">
-        <span class="text-yellow-400 uppercase tracking-wider">Relay target:</span>
-        <span class="font-mono text-deep-400">session.remote-address</span> is where join offers are
-        relayed to, and it doubles as the address the query ping checks (NetherNet HTTP signaling on
-        TCP server-port first, RakNet on UDP as fallback). Because the panel runs the
-        broadcaster on the same host as the server, keep it at
-        <span class="font-mono text-strong">127.0.0.1</span> with the instance's server-port — Endstone
-        advertises its own public address to clients. A public IP here sends every relay through the
-        router's hairpin loop, which is refused: friends-list joins fail with
-        <span class="font-mono">"Failed to relay offer … connection refused"</span> while everything
-        else looks healthy. Older configs with <span class="font-mono">session-info.ip</span> are
-        migrated into the relay keys by the jar itself (config-version 7).
-      </p>
-      <p class="text-[10px] text-deep-400 mt-1">
-        Full MCXboxBroadcast config. Save, then restart the broadcaster to apply — the panel itself needs no restart.
-      </p>
+  {#if tab === 'overview'}
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <ProcessCard {status} canManage={canManage} {busy} onaction={action} {jarInfo} onupdatejar={updateJar} />
+      <DeviceCodesCard {codes} oncopy={copy} />
+      <AccountsCard accounts={status?.accounts ?? []} canManage={canManage} bind:newAccount onaction={accountAction} />
     </div>
 
-    <!-- Screenshot -->
-    <div class="card">
-      <h2 class="card-header">Screenshot</h2>
-      <div class="space-y-3">
-        <select bind:value={screenshotAccount} class="input w-full text-xs">
-          {#each status?.accounts ?? [{ id: 'main', main: true }] as account (account.id)}
-            <option value={account.id}>{account.id}</option>
-          {/each}
-        </select>
-        <div class="relative border-2 border-deep-600/40 bg-black/40 aspect-video flex items-center justify-center overflow-hidden">
-          {#if previewUrl}
-            <img src={previewUrl} alt="screenshot preview" class="w-full h-full object-cover" />
-          {:else}
-            <span class="text-[10px] text-deep-400 uppercase tracking-wider">no screenshot uploaded</span>
-          {/if}
-        </div>
-        {#if canManage}
-          <input type="file" accept="image/jpeg,image/png" bind:this={screenshotInput} class="hidden" onchange={uploadScreenshot} />
-          <button onclick={() => screenshotInput?.click()}
-                  class="btn-ghost w-full flex items-center justify-center gap-2 text-xs">
-            <Upload size={13} /> Upload JPEG/PNG (1200×675 recommended)
-          </button>
-        {/if}
-        <p class="text-[10px] text-deep-400">Xbox Live may take a few minutes to refresh the club image.</p>
-      </div>
+    <!-- Console: same shared terminal widget as the Console page -->
+    <Terminal
+      title="broadcaster-console"
+      heightKey="broadcaster"
+      {lines}
+      emptyHint="> Broadcaster output appears here…"
+      onclear={() => clearBroadcastView(instanceId())}
+      onsend={send}
+      canSend={canManage}
+      sendPlaceholder="accounts list · restart · dumpsession · stop…"
+    />
+  {:else if tab === 'screenshot'}
+    <div class="max-w-xl">
+      <ScreenshotCard canManage={canManage} instanceId={currentId} accounts={status?.accounts ?? []} />
     </div>
+  {/if}
+  <div class:hidden={tab !== 'config'}>
+    <ConfigEditorCard bind:this={editor} bind:dirty={configDirty} canManage={canManage} server={status?.server} />
   </div>
 </div>
