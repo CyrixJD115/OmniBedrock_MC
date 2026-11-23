@@ -22,6 +22,13 @@ Before every commit: `cargo fmt --all`, `cargo clippy --workspace
 `npm --prefix frontend run check` (0 errors **and** 0 warnings),
 `npm --prefix frontend test`. All source files stay under 1000 lines.
 
+## Status (2026-11-23, later session)
+
+Done: Console (`b85d1a7`), Broadcaster (`687327f`), Store (`a4ecf44`,
+also readable API errors panel-wide), Audit (this commit). Users/Roles
+was reviewed and left as is: already two focused panels (267/352 lines)
+that render cleanly; extracting a shared permission matrix is optional.
+
 ## Pages to rework (in priority order)
 
 1. **Console** — `frontend/src/routes/console/+page.svelte` +

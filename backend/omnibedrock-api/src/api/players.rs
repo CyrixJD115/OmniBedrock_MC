@@ -312,7 +312,7 @@ pub(super) async fn action(
             _ => return Err(ApiError::bad("Invalid player action")),
         }
     };
-    s.audit(u, &format!("players.{action}"), target, "players")
+    s.audit(u, &format!("players.{action}"), target, "player")
         .await
         .ok();
     Ok(json!({"success": true, "message": message}))

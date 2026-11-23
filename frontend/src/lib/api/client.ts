@@ -237,11 +237,14 @@ export const api = {
       body: JSON.stringify({ enabled, base_url: baseUrl }),
     }),
   testPackCdn: () => request<PackCdnTest>('/addons/cdn/test', { method: 'POST' }),
-  listAudit: (params: { category?: string; limit?: number } = {}) => {
+  listAudit: (params: { category?: string; username?: string; action?: string; limit?: number; offset?: number } = {}) => {
     const q = new URLSearchParams();
     if (params.category) q.set('category', params.category);
+    if (params.username) q.set('username', params.username);
+    if (params.action) q.set('action', params.action);
     q.set('limit', String(params.limit ?? 200));
-    return request<Array<{ timestamp: string; username: string; action: string; detail: string; category: string; instance: string }>>(`/audit?${q}`);
+    if (params.offset) q.set('offset', String(params.offset));
+    return request<Array<{ timestamp: string; username: string; action: string; detail: string; category: string; instance: string; ip?: string }>>(`/audit?${q}`);
   },
   migrationPlan: (instanceId: string, to: string) =>
     request<MigrationPlan>(`/instances/${encodeURIComponent(instanceId)}/migration?to=${encodeURIComponent(to)}`),
