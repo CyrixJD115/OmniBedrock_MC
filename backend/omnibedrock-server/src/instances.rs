@@ -25,6 +25,7 @@ mod consts;
 mod helpers;
 mod instance;
 mod manager;
+pub mod migration;
 mod ports;
 mod transport;
 mod types;

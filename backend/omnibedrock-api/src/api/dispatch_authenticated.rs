@@ -638,6 +638,19 @@ pub(super) async fn dispatch_authenticated(
             }
             item
         }
+        // Deployment switch preflight: checks + the steps the switch implies.
+        ["instances", id, "migration"] if read => {
+            let instance = s.resolve_instance(Some(id), u).await?;
+            let target = omnibedrock_server::instances::Deployment::parse(
+                q.get("to").map(String::as_str).unwrap_or(""),
+            )
+            .map_err(|e| ApiError::bad(e.to_string()))?;
+            let plan = s
+                .instances
+                .migration_plan(&instance.record().id, target)
+                .await?;
+            serde_json::to_value(plan).map_err(anyhow::Error::from)?
+        }
         ["instances", id] if write => {
             let instance = s.resolve_instance(Some(id), u).await?;
             update_instance(s, u, &instance, b).await?

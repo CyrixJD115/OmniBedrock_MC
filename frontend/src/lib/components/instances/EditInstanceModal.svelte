@@ -8,6 +8,7 @@
   import { Plus, ShieldAlert } from '@lucide/svelte';
   import type { AccessEntry, HostInfo, Instance, RoleInfo } from '$types/index';
   import type { EditInstanceForm } from '$lib/instances/forms';
+  import MigrationPreflight from './MigrationPreflight.svelte';
 
   let {
     instance, editForm = $bindable(), hostInfo, users, roleCatalog,
@@ -26,6 +27,9 @@
     onsave: () => void;
     onclose: () => void;
   } = $props();
+
+  let migrationReady = $state(true);
+  const live = $derived(instance.status !== 'stopped' && instance.status !== 'crashed');
 </script>
 
 <div class="fixed inset-0 flex items-center justify-center z-50" style="background: rgb(var(--color-overlay) / 0.85); backdrop-filter: blur(4px);" role="dialog" aria-modal="true" tabindex="-1"
@@ -33,7 +37,7 @@
      onkeydown={(e) => { if (e.key === 'Escape') onclose(); }}>
   <div class="card max-w-md w-full mx-4 max-h-[85vh] overflow-y-auto">
     <h2 class="text-sm font-bold text-strong uppercase tracking-wider mb-1">Edit {instance.name}</h2>
-    {#if instance.status === 'running'}
+    {#if live}
       <p class="text-[10px] text-amber-400 mb-3 flex items-center gap-1"><ShieldAlert size={10} /> Stop the instance before changing deployment, resources, or port.</p>
     {:else}
       <p class="mb-3"></p>
@@ -64,6 +68,7 @@
           {#if hostInfo?.capabilities.systemd}<option value="systemd">systemd service — cgroup enforced</option>{/if}
           {#if hostInfo?.capabilities.docker}<option value="docker">Docker — container enforced</option>{/if}
         </select>
+        <MigrationPreflight instanceId={instance.id} from={instance.deployment} to={editForm.deployment} bind:ready={migrationReady} />
         {#if editForm.deployment === 'docker'}
           <div class="mt-2 space-y-2 border border-deep-600/40 bg-deep-900/30 p-2">
             <div>
@@ -130,7 +135,8 @@
       </div>
       <div class="flex justify-end gap-2 pt-2">
         <button onclick={onclose} class="btn-secondary text-xs">Cancel</button>
-        <button onclick={onsave} class="btn-primary text-xs">Save</button>
+        <button onclick={onsave} disabled={!migrationReady} title={migrationReady ? '' : 'Resolve the deployment blockers first'}
+                class="btn-primary text-xs disabled:opacity-40">Save</button>
       </div>
     </div>
   </div>

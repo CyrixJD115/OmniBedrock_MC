@@ -2110,6 +2110,22 @@
     }
    }
   },
+  "/instances/{id}/migration": {
+   "get": {
+    "tags": [
+     "instances"
+    ],
+    "summary": "Preflight for switching the deployment (?to=native|systemd|docker): checks (status, leftover runtime, target availability, image, file ownership, linger) and the steps the switch implies. PUT /instances/{id} enforces the same blockers and removes the old unit/container",
+    "x-query": {
+     "to": "native|systemd|docker"
+    },
+    "responses": {
+     "200": {
+      "description": "{from, to, ready, checks:[{id, level, message}], steps}"
+     }
+    }
+   }
+  },
   "/instances/{id}/files/mkdir": {
    "post": {
     "tags": [

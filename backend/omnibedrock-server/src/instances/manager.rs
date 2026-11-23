@@ -88,6 +88,20 @@ impl InstanceManager {
         Ok(manager)
     }
 
+    /// Preflight for switching instance `id` to `target`.
+    pub async fn migration_plan(
+        &self,
+        id: &str,
+        target: Deployment,
+    ) -> anyhow::Result<super::migration::MigrationPlan> {
+        let instance = self
+            .get(id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("instance '{id}' not found"))?;
+        let autostart = instance.record().autostart;
+        Ok(super::migration::preflight(&instance, target, &self.capabilities, autostart).await)
+    }
+
     pub fn capabilities(&self) -> &DeployCapabilities {
         &self.capabilities
     }
@@ -290,13 +304,38 @@ impl InstanceManager {
         if next.id != current.id || next.owner != current.owner {
             bail!("instance id and owner cannot change");
         }
-        let running = instance.server.snapshot().status == Status::Running;
+        // Starting / stopping / crash-looping count as live: only a cleanly
+        // stopped (or crashed-and-down) server may change how it launches.
+        let live = !matches!(
+            instance.server.snapshot().status,
+            Status::Stopped | Status::Crashed
+        );
         let relaunch_changed = next.deployment != current.deployment
             || next.docker != current.docker
             || next.resources != current.resources
             || next.port != current.port;
-        if running && relaunch_changed {
+        if live && relaunch_changed {
             bail!("stop the instance before changing deployment, resources, or port");
+        }
+        if next.deployment != current.deployment {
+            let plan = super::migration::preflight(
+                &instance,
+                next.deployment,
+                &self.capabilities,
+                next.autostart,
+            )
+            .await;
+            if let Some(blocker) = plan
+                .checks
+                .iter()
+                .find(|c| c.level == super::migration::Level::Error)
+            {
+                bail!(
+                    "cannot switch to {}: {}",
+                    next.deployment.as_str(),
+                    blocker.message
+                );
+            }
         }
         if next.deployment == Deployment::Systemd && !self.capabilities.systemd {
             bail!("systemd user scopes are not available on this host");
@@ -339,10 +378,8 @@ impl InstanceManager {
         self.save().await?;
         // systemd unit lifecycle: retiring the deployment removes the unit;
         // an autostart toggle syncs the enable state when the unit exists.
-        if current.deployment == Deployment::Systemd && next.deployment != Deployment::Systemd {
-            if let Err(e) = crate::systemd::remove_unit(&next.id).await {
-                tracing::warn!(%e, "retiring the old systemd unit failed");
-            }
+        if current.deployment != next.deployment {
+            super::migration::retire(&next.id, current.deployment).await;
         } else if next.deployment == Deployment::Systemd
             && next.autostart != current.autostart
             && crate::systemd::unit_path(&next.id)

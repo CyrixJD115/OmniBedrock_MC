@@ -1,6 +1,7 @@
 import type { ServerStatus, ServerActionResponse, Backup, AddonList, Addon, Player, PropertyEntry, WorldInfo, BackupSettings, SchedulerConfig, CommandEntry, IncludeItem, FolderEntry, BackendInfo, VersionRegistry, EndstoneRegistry, BroadcasterStatus, CfProject, StoreSearchResponse, StoreMeta, StoreFilesResponse, StoreInstallResponse, Instance, HostInfo, PluginFile, ExplorerListing, ApiKeyRecord, PackDelivery, BroadcasterJarInfo, PackCdnStatus, PackCdnTest } from '$types/index';
 import type { CompatReport } from '$types/compat';
 import type { OnlinePlayer, PlayersOverview, PlayerAction } from '$types/players';
+import type { MigrationPlan } from '$types/migration';
 
 const API_BASE = '/api/v1';
 let authToken = '';
@@ -222,6 +223,8 @@ export const api = {
       body: JSON.stringify({ enabled, base_url: baseUrl }),
     }),
   testPackCdn: () => request<PackCdnTest>('/addons/cdn/test', { method: 'POST' }),
+  migrationPlan: (instanceId: string, to: string) =>
+    request<MigrationPlan>(`/instances/${encodeURIComponent(instanceId)}/migration?to=${encodeURIComponent(to)}`),
   /** Current sample plus up to an hour of [t, cpu%, memMiB, tps|null] history. */
   getMetricsHistory: (minutes = 60) =>
     request<{ current: Record<string, unknown> | null; history: [number, number, number, number | null][] }>(
