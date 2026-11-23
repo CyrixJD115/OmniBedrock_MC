@@ -164,7 +164,7 @@
     {#if flood}
       <div class="card !py-3 border-l-4 border-l-red-400 text-xs leading-relaxed">
         <b class="text-red-300">{compact(flood.count)} events</b> come from one problem:
-        <b class="text-strong">{flood.title}</b>{#if flood.pack} in <b class="text-strong">{flood.pack.name}</b>{/if}.
+        <b class="text-strong">{flood.title}</b>{flood.pack ? ' in ' : ''}{#if flood.pack}<b class="text-strong">{flood.pack.name}</b>{/if}.
         Fixing or disabling that pack removes most of the log noise.
       </div>
     {/if}

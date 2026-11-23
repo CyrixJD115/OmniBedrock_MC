@@ -147,6 +147,19 @@ pub(super) async fn addons(
             s.addon_meta.retain_paths(&live).await;
             // No-op unless something changed (miss, prune, or forced refresh).
             s.addon_meta.flush().await;
+            // Manifest names often carry § format codes ("§7[v5.1]§r WAILA");
+            // show clean text and keep the original as raw_name.
+            for pack_type in ["behavior_packs", "resource_packs"] {
+                for item in result[pack_type].as_array_mut().into_iter().flatten() {
+                    if let Some(name) = item["name"].as_str().filter(|n| n.contains('§')) {
+                        let clean = omnibedrock_server::compat::strip_codes(name)
+                            .trim()
+                            .to_owned();
+                        item["raw_name"] = json!(name);
+                        item["name"] = json!(clean);
+                    }
+                }
+            }
             result
         }
         ["addons", "icon"] if read => {

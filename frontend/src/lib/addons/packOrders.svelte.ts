@@ -24,8 +24,17 @@ export class PackOrders {
   orderRP = $state<string[]>([]);
   orderDirty = $state(false);
 
+  /** True while a save request is in flight (drives the "Saving…" hint). */
+  saving = $state(false);
+
   private saveTimer: ReturnType<typeof setTimeout> | undefined;
   private pendingSave: { world: string; bp: string[]; rp: string[] } | null = null;
+  /** Bumped on every edit; a save only clears `orderDirty` if no edit
+   * happened while it was in flight. */
+  private generation = 0;
+  /** Saves run strictly one after another: two overlapping autosaves used to
+   * interleave their BP/RP requests and could leave a stale order on disk. */
+  private chain: Promise<void> = Promise.resolve();
 
   constructor(private ctx: PackOrdersContext) {}
 
@@ -47,7 +56,8 @@ export class PackOrders {
     const world = this.ctx.world();
     if (!this.ctx.canManage() || !world || world === ALL_WORLDS) return;
     this.orderDirty = true;
-    this.pendingSave = { world, bp: this.orderBP, rp: this.orderRP };
+    this.generation++;
+    this.pendingSave = { world, bp: [...this.orderBP], rp: [...this.orderRP] };
     clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => this.flushPendingSave(), AUTOSAVE_DELAY_MS);
   }
@@ -57,7 +67,12 @@ export class PackOrders {
     this.saveTimer = undefined;
     const p = this.pendingSave;
     this.pendingSave = null;
-    if (p) void this.saveOrdersFor(p.world, p.bp, p.rp, true);
+    if (p) void this.saveOrdersFor(p.world, p.bp, p.rp, true).catch(() => undefined);
+  }
+
+  /** Resolves once every queued save has finished (successfully or not). */
+  settled(): Promise<void> {
+    return this.chain;
   }
 
   /** Drop any in-flight debounced edit (used on instance/world switches). */
@@ -67,16 +82,26 @@ export class PackOrders {
     this.pendingSave = null;
   }
 
-  async saveOrdersFor(world: string, bp: string[], rp: string[], auto: boolean) {
-    try {
-      await api.setPackOrder(world, 'behavior_packs', bp);
-      await api.setPackOrder(world, 'resource_packs', rp);
-      this.orderDirty = false;
-      if (auto) this.ctx.log(`Pack order auto-saved (${world})`);
-    } catch (e: any) {
-      addToast(`Save failed: ${e.message}`, 'error');
-      this.ctx.log(`Order save failed: ${e.message}`);
-    }
+  saveOrdersFor(world: string, bp: string[], rp: string[], auto: boolean): Promise<void> {
+    const gen = this.generation;
+    const run = async () => {
+      this.saving = true;
+      try {
+        await api.setPackOrder(world, 'behavior_packs', bp);
+        await api.setPackOrder(world, 'resource_packs', rp);
+        if (gen === this.generation && world === this.ctx.world()) this.orderDirty = false;
+        if (auto) this.ctx.log(`Pack order auto-saved (${world})`);
+      } catch (e: any) {
+        addToast(`Save failed: ${e.message}`, 'error');
+        this.ctx.log(`Order save failed: ${e.message}`);
+        throw e;
+      } finally {
+        this.saving = false;
+      }
+    };
+    const next = this.chain.then(run, run);
+    this.chain = next.catch(() => undefined);
+    return next;
   }
 
   async saveOrder() {
@@ -85,7 +110,11 @@ export class PackOrders {
     clearTimeout(this.saveTimer);
     this.saveTimer = undefined;
     this.pendingSave = null;
-    await this.saveOrdersFor(world, this.orderBP, this.orderRP, false);
+    try {
+      await this.saveOrdersFor(world, [...this.orderBP], [...this.orderRP], false);
+    } catch {
+      return;
+    }
     addToast('Pack order saved', 'success');
     this.ctx.log('Pack order saved');
   }

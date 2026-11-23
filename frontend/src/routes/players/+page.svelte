@@ -107,7 +107,7 @@
     <div class="flex items-center gap-3 text-xs">
       {#if data}
         <span class="text-deep-400">
-          <span class="font-mono text-strong">{online.length}</span>{#if data.max_players} / {data.max_players}{/if} online
+          <span class="font-mono text-strong">{online.length}</span>{data.max_players ? ` / ${data.max_players}` : ''} online
           {#if !data.running}<span class="badge-stopped !text-[9px] !py-0.5 ml-2">server stopped</span>{/if}
           {#if data.allowlist_enabled}<span class="badge-info !text-[9px] !py-0.5 ml-1">allowlist on</span>{/if}
         </span>

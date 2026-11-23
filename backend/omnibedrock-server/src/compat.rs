@@ -27,5 +27,7 @@ mod types;
 pub use export::markdown;
 pub use housekeeping::prune_content_logs;
 pub use logs::forget as forget_log_cache;
+/// Strip Minecraft `§x` format codes and ANSI escapes from display text.
+pub use parse::strip_codes;
 pub use report::{Inputs, Options, analyze};
 pub use types::*;

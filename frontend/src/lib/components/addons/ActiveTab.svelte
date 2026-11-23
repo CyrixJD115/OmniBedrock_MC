@@ -5,6 +5,7 @@
     Package, ChevronUp, ChevronDown, X, GripVertical, CircleOff, AlertTriangle,
   } from '@lucide/svelte';
   import { authorOf, versionStr, type PackKind } from '$lib/addons/display';
+  import { Sortable } from '$lib/addons/sortable.svelte';
   import PackIcon from './PackIcon.svelte';
   import SourceBadge from './SourceBadge.svelte';
   import TypeBadge from './TypeBadge.svelte';
@@ -46,9 +47,9 @@
     onreorder: (packType: PackKind, order: string[], msg: string) => void;
   } = $props();
 
-  // DnD state — reorder within an Active-tab section
-  let dragSource = $state<{ packType: PackKind; uuid: string } | null>(null);
-  let dragOverRow = $state<{ packType: PackKind; uuid: string } | null>(null);
+  // Pointer-based sorting (mouse + touch): one controller per section.
+  const sorters = { bp: new Sortable(), rp: new Sortable() };
+  let lists = $state<Record<PackKind, HTMLElement | null>>({ bp: null, rp: null });
 
   function orderList(packType: PackKind): string[] {
     return packType === 'bp' ? bpOrder : rpOrder;
@@ -60,57 +61,30 @@
     (e.target as HTMLSelectElement).value = '';
   }
 
-  function onRowDragStart(e: DragEvent, packType: PackKind, uuid: string) {
-    dragSource = { packType, uuid };
-    if (e.dataTransfer) {
-      e.dataTransfer.effectAllowed = 'move';
-      e.dataTransfer.setData('text/plain', uuid);
-    }
+  function startDrag(e: PointerEvent, packType: PackKind, p: Addon) {
+    if (!canManage) return;
+    // Drag over the rendered rows (packs present on disk); missing uuids keep
+    // their relative place at the end of the saved order.
+    const visible = (packType === 'bp' ? bpPacks : rpPacks).map((x) => x.uuid);
+    sorters[packType].start(e, p.uuid, lists[packType], visible, ({ order, from, to }) => {
+      const rest = orderList(packType).filter((u) => !visible.includes(u));
+      onreorder(packType, [...order, ...rest], `Moved ${p.name} from #${from + 1} to #${to + 1} (${packType === 'bp' ? 'BP' : 'RP'})`);
+    });
   }
 
-  function onRowDragEnd() {
-    dragSource = null;
-    dragOverRow = null;
-  }
-
-  function onRowDragOver(e: DragEvent, packType: PackKind, uuid: string) {
-    if (!dragSource || dragSource.packType !== packType) return;
+  /** Alt+↑/↓ moves the focused row; keeps keyboard users first-class. */
+  function onRowKey(e: KeyboardEvent, packType: PackKind, uuid: string) {
+    if (!canManage || !e.altKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
     e.preventDefault();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-    dragOverRow = { packType, uuid };
-  }
-
-  function onRowDrop(e: DragEvent, packType: PackKind, targetUuid: string) {
-    e.preventDefault();
-    e.stopPropagation();
-    const ds = dragSource;
-    onRowDragEnd();
-    if (!ds || ds.packType !== packType || ds.uuid === targetUuid) return;
-    const order = orderList(packType).filter((u) => u !== ds.uuid);
-    const idx = order.indexOf(targetUuid);
-    if (idx >= 0) order.splice(idx, 0, ds.uuid);
-    else order.push(ds.uuid);
-    onreorder(packType, order, `Reordered ${ds.uuid.slice(0, 8)} in ${packType === 'bp' ? 'BP' : 'RP'} order`);
-  }
-
-  function onZoneDrop(e: DragEvent, packType: PackKind) {
-    e.preventDefault();
-    const ds = dragSource;
-    onRowDragEnd();
-    if (!ds || ds.packType !== packType) return;
-    const order = orderList(packType).filter((u) => u !== ds.uuid);
-    order.push(ds.uuid);
-    onreorder(packType, order, `Moved ${ds.uuid.slice(0, 8)} to end of ${packType === 'bp' ? 'BP' : 'RP'} order`);
-  }
-
-  function dropBefore(packType: PackKind, uuid: string): boolean {
-    return !!dragOverRow && dragOverRow.packType === packType && dragOverRow.uuid === uuid;
+    onmove(packType, uuid, e.key === 'ArrowUp' ? -1 : 1);
+    const target = e.currentTarget as HTMLElement;
+    requestAnimationFrame(() => target.focus());
   }
 </script>
 
 <div class="flex flex-wrap items-center gap-2 mb-1">
   <p class="text-deep-400 text-[10px] uppercase tracking-wider">
-    Packs applied in load order — top packs load first. Drag rows or use the arrows.
+    Packs apply in load order: top packs load first. Drag rows (mouse or touch), use the arrows, or Alt + Up/Down.
   </p>
   <div class="flex-1"></div>
   {#if canManage && bpPacks.length + rpPacks.length > 0}
@@ -144,23 +118,23 @@
           <span class="text-yellow-400/70 text-[10px] uppercase tracking-wider">Modified</span>
         {/if}
       </div>
-      <div role="list" aria-label="Active {section.title} order"
-           class="flex-1 space-y-1 max-h-[32rem] overflow-y-auto rounded min-h-[8rem] p-1 -m-1"
-           ondragover={(e) => { if (dragSource?.packType === section.kind) { e.preventDefault(); dragOverRow = null; } }}
-           ondrop={(e) => onZoneDrop(e, section.kind)}>
+      <div role="listbox" aria-label="Active {section.title} order" bind:this={lists[section.kind]}
+           class="relative flex-1 space-y-1 max-h-[32rem] overflow-y-auto rounded min-h-[8rem] p-1 -m-1 touch-pan-y">
+        {#if sorters[section.kind].dragging && sorters[section.kind].slot !== null}
+          <div class="pointer-events-none absolute left-1 right-1 h-0.5 bg-bedrock-400 rounded-full shadow-glow-accent z-10 transition-[top] duration-75"
+               style="top: {sorters[section.kind].indicatorTop}px"></div>
+        {/if}
         {#each section.packs as p, i (p.path)}
-          {#if dropBefore(section.kind, p.uuid)}
-            <div class="h-0.5 bg-bedrock-500 rounded-full mx-1 shadow-glow-accent"></div>
-          {/if}
-          <div role="listitem" draggable="true"
-               ondragstart={(e) => onRowDragStart(e, section.kind, p.uuid)}
-               ondragend={onRowDragEnd}
-               ondragover={(e) => onRowDragOver(e, section.kind, p.uuid)}
-               ondrop={(e) => onRowDrop(e, section.kind, p.uuid)}
-               class="group flex items-center gap-2 p-2 border rounded transition-colors cursor-grab active:cursor-grabbing
+          <div role="option" aria-selected={sorters[section.kind].dragging === p.uuid} data-sort-id={p.uuid} tabindex={canManage ? 0 : -1}
+               onpointerdown={(e) => startDrag(e, section.kind, p)}
+               onkeydown={(e) => onRowKey(e, section.kind, p.uuid)}
+               aria-label="{i + 1}. {p.name}{canManage ? ' (Alt+Up/Down to move)' : ''}"
+               class="group flex items-center gap-2 p-2 border rounded transition-colors select-none outline-none
+                      focus-visible:ring-1 focus-visible:ring-bedrock-400
+                      {canManage ? 'cursor-grab active:cursor-grabbing' : ''}
                       {!p.valid ? 'opacity-50 border-red-500/30' : 'border-deep-600/30'}
                       hover:border-bedrock-500/40 hover:bg-deep-800/40
-                      {dragSource?.uuid === p.uuid ? 'opacity-30 border-dashed' : ''}"
+                      {sorters[section.kind].dragging === p.uuid ? 'opacity-40 border-dashed border-bedrock-400/60' : ''}"
                title={!p.valid ? 'manifest.json missing or invalid' : p.name}>
             <GripVertical size={12} class="text-deep-400 group-hover:text-deep-400 shrink-0 transition-colors" />
             <span class="text-deep-400 text-[10px] font-mono w-5 text-right shrink-0 tabular-nums">{i + 1}</span>
@@ -176,7 +150,7 @@
               <SourceBadge addon={p} />
             </div>
             {#if canManage}
-              <div class="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+              <div data-no-drag class="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity shrink-0">
                 <button onclick={() => onmove(section.kind, p.uuid, -1)}
                         disabled={i === 0}
                         class="btn-ghost p-0.5 disabled:opacity-20 disabled:cursor-not-allowed" title="Move up (loads earlier)"><ChevronUp size={12} /></button>
@@ -209,9 +183,6 @@
               <p class="text-deep-400 text-[10px] mt-1">Activate packs from the Available tab</p>
             </div>
           </div>
-        {/if}
-        {#if dragOverRow === null && dragSource?.packType === section.kind && section.packs.length > 0}
-          <div class="h-0.5 bg-bedrock-500 rounded-full mx-1 shadow-glow-accent"></div>
         {/if}
       </div>
     </div>

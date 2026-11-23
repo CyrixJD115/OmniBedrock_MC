@@ -312,6 +312,11 @@
   async function loadOrders() {
     if (!selWorld || selWorld === ALL_WORLDS) { orders.orderBP = []; orders.orderRP = []; return; }
     const mine = epoch;
+    // Land any pending/in-flight save first, or the reload would undo the
+    // user's last drag with the server's older copy.
+    orders.flushPendingSave();
+    await orders.settled();
+    if (mine !== epoch) return;
     try {
       const bpOrder = await api.getPackOrder(selWorld, 'behavior_packs');
       if (mine !== epoch) return;

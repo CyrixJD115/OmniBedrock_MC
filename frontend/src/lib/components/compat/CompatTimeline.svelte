@@ -43,7 +43,9 @@
   {#if jump}
     {@const j = entries.find((e) => e.label === jump)}
     <p class="text-[11px] text-red-300">
-      Errors jumped at <b>{jump}</b> ({compact(j?.errors ?? 0)}){#if j && !j.version_changed} with no server or Endstone version change. Look at what changed in packs or the world around then.{:else}, the same file where the server version changed.{/if}
+      Errors jumped at <b>{jump}</b> ({compact(j?.errors ?? 0)}){j && !j.version_changed
+        ? ' with no server or Endstone version change. Look at what changed in packs or the world around then.'
+        : ', the same file where the server version changed.'}
     </p>
   {/if}
 </div>
