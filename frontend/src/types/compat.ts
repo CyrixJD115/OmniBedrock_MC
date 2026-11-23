@@ -100,3 +100,14 @@ export interface CompatReport {
     content_log_file_enabled: boolean | null;
   };
 }
+
+/** GET /addons/compat/preview?version=… */
+export interface VersionPreview {
+  current: string | null;
+  target: string;
+  world: string | null;
+  target_script_api: string | null;
+  issues: { pack: string; folder: string; severity: CompatSeverity; title: string; new: boolean }[];
+  blocking: number;
+  resolved: number;
+}

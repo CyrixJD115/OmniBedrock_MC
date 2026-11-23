@@ -1,5 +1,5 @@
 import type { ServerStatus, ServerActionResponse, Backup, AddonList, Addon, Player, PropertyEntry, WorldInfo, BackupSettings, SchedulerConfig, CommandEntry, IncludeItem, FolderEntry, BackendInfo, VersionRegistry, EndstoneRegistry, BroadcasterStatus, CfProject, StoreSearchResponse, StoreMeta, StoreFilesResponse, StoreInstallResponse, Instance, HostInfo, PluginFile, ExplorerListing, ApiKeyRecord, PackDelivery, BroadcasterJarInfo, PackCdnStatus, PackCdnTest } from '$types/index';
-import type { CompatReport } from '$types/compat';
+import type { CompatReport, VersionPreview } from '$types/compat';
 import type { OnlinePlayer, PlayersOverview, PlayerAction } from '$types/players';
 import type { MigrationPlan } from '$types/migration';
 
@@ -237,6 +237,8 @@ export const api = {
     const qs = q.toString();
     return request<CompatReport>(`/addons/compat${qs ? `?${qs}` : ''}`);
   },
+  compatPreview: (version: string) =>
+    request<VersionPreview>(`/addons/compat/preview?version=${encodeURIComponent(version)}`),
   exportCompat: async (world?: string) => {
     const q = world ? `?world=${encodeURIComponent(world)}` : '';
     const res = await fetch(`${API_BASE}/addons/compat/export${q}`, { headers: rawHeaders() });

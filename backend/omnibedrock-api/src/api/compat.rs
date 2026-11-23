@@ -120,3 +120,28 @@ pub(super) async fn prune_content_logs(svc: &Arc<Instance>, b: &Value) -> Result
     Ok(json!({"success": true, "files": files, "bytes": bytes,
         "message": format!("Deleted {files} ContentLog file(s), freed {} MB", bytes / (1024 * 1024))}))
 }
+
+/// Static compatibility of the installed packs on another game version.
+pub(super) async fn version_preview(
+    s: &AppState,
+    svc: &Arc<Instance>,
+    q: &HashMap<String, String>,
+) -> Result<Value> {
+    let target = q
+        .get("version")
+        .map(|v| v.trim().to_owned())
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| ApiError::bad("'version' is required"))?;
+    let base = inputs(s, svc).await;
+    let world = options(q).world;
+    let preview = compat::preview(
+        base.server_dir,
+        base.cache_dir,
+        world,
+        base.server_version,
+        target,
+    )
+    .await
+    .map_err(|e| ApiError::bad(e.to_string()))?;
+    Ok(serde_json::to_value(preview).map_err(anyhow::Error::from)?)
+}

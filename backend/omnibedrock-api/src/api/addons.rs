@@ -313,6 +313,9 @@ pub(super) async fn addons(
         // Compatibility checker: log + manifest + script analysis, its
         // Markdown export, and ContentLog cleanup.
         ["addons", "compat"] if read => super::compat::report(s, svc, q).await?,
+        ["addons", "compat", "preview"] if read => {
+            super::compat::version_preview(s, svc, q).await?
+        }
         ["addons", "compat", "export"] if read => {
             return super::compat::export(s, svc, q).await;
         }

@@ -937,6 +937,20 @@
     }
    }
   },
+  "/addons/compat/preview": {
+   "get": {
+    "tags": [
+     "addons"
+    ],
+    "summary": "Static pack compatibility on another game version (?version=1.26.70.1[&world=]): engine and script-module checks for the target, diffed with the current version",
+    "x-permission": "ADDONS_VIEW",
+    "responses": {
+     "200": {
+      "description": "{current, target, world, target_script_api, issues:[{pack, folder, severity, title, new}], blocking, resolved}"
+     }
+    }
+   }
+  },
   "/addons/compat/content-logs": {
    "post": {
     "tags": [
