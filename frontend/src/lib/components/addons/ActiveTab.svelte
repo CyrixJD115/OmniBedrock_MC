@@ -28,6 +28,7 @@
     onmove,
     onremove,
     onreorder,
+    health = {},
   }: {
     bpPacks: Addon[];
     rpPacks: Addon[];
@@ -45,7 +46,14 @@
     onmove: (packType: PackKind, uuid: string, dir: -1 | 1) => void;
     onremove: (packType: PackKind, uuid: string) => void;
     onreorder: (packType: PackKind, order: string[], msg: string) => void;
+    /** `${pack_type}/${folder}` → status from the compatibility checker. */
+    health?: Record<string, 'error' | 'warning'>;
   } = $props();
+
+  function statusOf(p: Addon): 'error' | 'warning' | undefined {
+    const folder = p.path.split(/[\\/]/).pop() ?? '';
+    return health[`${p.pack_type}/${folder}`];
+  }
 
   // Pointer-based sorting (mouse + touch): one controller per section.
   const sorters = { bp: new Sortable(), rp: new Sortable() };
@@ -140,7 +148,10 @@
             <span class="text-deep-400 text-[10px] font-mono w-5 text-right shrink-0 tabular-nums">{i + 1}</span>
             <PackIcon icon={icon(p)} pack={p} onbroken={() => oniconbroken(p)} />
             <button onclick={() => onpreview(p)} class="flex-1 min-w-0 text-left">
-              <p class="text-xs font-medium truncate hover:text-strong transition-colors">{p.name}</p>
+              <p class="text-xs font-medium truncate hover:text-strong transition-colors flex items-center gap-1.5">
+                {#if statusOf(p)}<span class="w-1.5 h-1.5 rounded-full shrink-0 {statusOf(p) === 'error' ? 'bg-red-400' : 'bg-yellow-400'}" title="The compatibility checker found {statusOf(p) === 'error' ? 'errors' : 'warnings'} for this pack"></span>{/if}
+                <span class="truncate">{p.name}</span>
+              </p>
               <p class="text-[10px] text-deep-400 truncate">
                 v{versionStr(p.version)}{authorOf(p) ? ` · by ${authorOf(p)}` : ''}
               </p>

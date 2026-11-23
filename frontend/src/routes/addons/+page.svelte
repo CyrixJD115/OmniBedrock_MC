@@ -26,12 +26,13 @@
   import PackDeliveryCard from '$lib/components/addons/PackDeliveryCard.svelte';
   import PackCdnCard from '$lib/components/addons/PackCdnCard.svelte';
   import PreviewDrawer from '$lib/components/addons/PreviewDrawer.svelte';
-  import ManifestEditorModal from '$lib/components/addons/ManifestEditorModal.svelte';
-  import VersionEditorModal from '$lib/components/addons/VersionEditorModal.svelte';
-  import UuidEditorModal from '$lib/components/addons/UuidEditorModal.svelte';
-  import RenameModal from '$lib/components/addons/RenameModal.svelte';
   import PluginsCard from '$lib/components/plugins/PluginsCard.svelte';
   import CompatPanel from '$lib/components/compat/CompatPanel.svelte';
+  import UploadPanel from '$lib/components/addons/UploadPanel.svelte';
+  import AddonLogTab from '$lib/components/addons/AddonLogTab.svelte';
+  import PackEditors from '$lib/components/addons/PackEditors.svelte';
+  import PackHealthStrip from '$lib/components/addons/PackHealthStrip.svelte';
+  import { UploadQueue } from '$lib/addons/uploadQueue.svelte';
 
   // ─── state ────────────────────────────────────────────────────────────────
   let worlds = $state<string[]>([]);
@@ -55,32 +56,14 @@
   let manifestWrap = $state(true);
 
   // manifest editor modal
-  let manifestEditorOpen = $state(false);
-  let manifestEditPath = $state('');
-  let manifestEditor: ReturnType<typeof ManifestEditorModal> | undefined = $state();
-
-  // version editor
-  let versionEditorOpen = $state(false);
-  let versionEditAddon = $state<Addon | null>(null);
-  let versionMajor = $state(0);
-  let versionMinor = $state(0);
-  let versionPatch = $state(0);
-
-  let uuidEditorOpen = $state(false);
-  let uuidEditPath = $state('');
-  let uuidEditValue = $state('');
-  let uuidEditMode: 'change' | 'randomize' = $state('change');
-
-  let renameOpen = $state(false);
-  let renamePath = $state('');
-  let renameValue = $state('');
+  let editors: ReturnType<typeof PackEditors> | undefined = $state();
+  let packHealth = $state<Record<string, 'error' | 'warning'>>({});
 
   // ─── helpers ──────────────────────────────────────────────────────────────
   const STORAGE_KEY = 'omb_addon_hidden';
   const LOG_MAX = 200;
 
   // ─── upload / icons / delete / bulk ─────────────────────────────────────
-  let uploadBusy = $state(false);
   let dragFilesOver = $state(false);
   let fileInput = $state<HTMLInputElement | undefined>(undefined);
   let brokenIcons = $state<Set<string>>(new Set());
@@ -99,47 +82,42 @@
     brokenIcons = next;
   }
 
-  async function handleFiles(files: File[]) {
-    if (!canManage || uploadBusy || files.length === 0) return;
+  const uploads = new UploadQueue();
+  /** Files dropped while "All worlds" was selected wait for a world pick. */
+  let pendingFiles = $state<File[] | null>(null);
+  let pickWorld = $state('');
+
+  function handleFiles(files: File[]) {
+    if (!canManage || files.length === 0) return;
     if (!selWorld || selWorld === ALL_WORLDS) {
-      addToast('Select a world to upload into', 'error');
+      pendingFiles = files;
+      pickWorld = worlds[0] ?? '';
       return;
     }
-    uploadBusy = true;
-    let installed = 0;
-    let failed = 0;
-    for (const f of files) {
-      if (!/\.(mcpack|mcaddon|zip)$/i.test(f.name)) {
-        addToast(`${f.name}: only .mcpack, .mcaddon, and .zip are supported`, 'error');
-        failed++;
-        continue;
-      }
-      if (f.size > 512 * 1024 * 1024) {
-        addToast(`${f.name}: exceeds the 512 MiB limit`, 'error');
-        failed++;
-        continue;
-      }
-      try {
-        const r = await api.uploadAddon(selWorld, f);
-        installed += r.installed?.length ?? 1;
-        log(r.message);
-        addToast(r.message, 'success');
-      } catch (e: any) {
-        failed++;
-        addToast(`${f.name}: ${e.message}`, 'error');
-        log(`Upload failed: ${f.name} — ${e.message}`);
-      }
-    }
-    uploadBusy = false;
-    if (installed > 0) await loadAddons();
-    if (files.length > 1) addToast(`${installed} pack(s) installed, ${failed} file(s) failed`, failed ? 'info' : 'success');
+    for (const f of files) log(`Upload queued: ${f.name}`);
+    uploads.add(files, selWorld, () => void loadAddons());
+  }
+
+  async function confirmPickWorld() {
+    const files = pendingFiles;
+    pendingFiles = null;
+    if (!files || !pickWorld) return;
+    selWorld = pickWorld;
+    await onWorldChange();
+    handleFiles(files);
+  }
+
+  function activateUploaded(uuid: string) {
+    const pack = worldBP.concat(worldRP).find((p) => p.uuid === uuid);
+    if (pack) orders.activate(pack);
+    else addToast('Pack not found yet; reload the list', 'info');
   }
 
   function onFileDrop(e: DragEvent) {
     e.preventDefault();
     dragFilesOver = false;
     if (e.dataTransfer?.types.includes('Files')) {
-      void handleFiles([...e.dataTransfer.files]);
+      handleFiles([...e.dataTransfer.files]);
     }
   }
   function onFileDragOver(e: DragEvent) {
@@ -217,15 +195,12 @@
     canManage: () => canManage,
   });
 
-  /** After mutations, refresh the preview to match the updated addon. */
-  function syncPreview(path: string) {
-    if (!previewAddon || previewAddon.path !== path) return;
-    const matchPath = path === renamePath ? undefined : path;
-    // For rename, match by new name since path changed
-    const updated = allBp.concat(allRp).find((p) =>
-      renameOpen ? p.name === renameValue.trim() : p.path === matchPath
-    );
-    if (updated) previewAddon = updated;
+  /** After an edit, reload and keep the preview on the (possibly renamed) pack. */
+  async function afterEdit(oldPath: string, newPath: string) {
+    await loadAddons();
+    if (!previewAddon || previewAddon.path !== oldPath) return;
+    const updated = allBp.concat(allRp).find((p) => p.path === newPath);
+    previewAddon = updated ?? null;
   }
 
   // ─── data ─────────────────────────────────────────────────────────────────
@@ -444,99 +419,10 @@
     previewAddon = null;
   }
 
-  // ─── manifest editor ───────────────────────────────────────────────────────
-  function openManifestEditor(a: Addon) {
-    manifestEditPath = a.path;
-    manifestEditor?.openWith(a.manifest);
-  }
-
-  async function saveManifest(raw: string) {
-    try {
-      const obj = JSON.parse(raw);
-      await api.updateManifest(manifestEditPath, obj);
-      addToast('Manifest saved', 'success');
-      log(`Manifest saved: ${manifestEditPath}`);
-      manifestEditorOpen = false;
-      await loadAddons();
-      syncPreview(manifestEditPath);
-    } catch (e: any) {
-      addToast(`Save failed: ${e.message}`, 'error');
-    }
-  }
-
-  // ─── version editor ────────────────────────────────────────────────────────
-  function openVersionEditor(a: Addon) {
-    const v = a.version ?? [0, 0, 0];
-    versionMajor = v[0] ?? 0;
-    versionMinor = v[1] ?? 0;
-    versionPatch = v[2] ?? 0;
-    versionEditAddon = a;
-    versionEditorOpen = true;
-  }
-
-  async function saveVersion() {
-    if (!versionEditAddon) return;
-    const manifest = versionEditAddon.manifest ? JSON.parse(JSON.stringify(versionEditAddon.manifest)) : {};
-    if (!manifest.header) manifest.header = {};
-    manifest.header.version = [versionMajor, versionMinor, versionPatch];
-    const targetPath = versionEditAddon.path;
-    try {
-      await api.updateManifest(targetPath, manifest);
-      addToast(`Version bumped to ${versionMajor}.${versionMinor}.${versionPatch}`, 'success');
-      log(`Version bumped: ${versionEditAddon.name} → ${versionMajor}.${versionMinor}.${versionPatch}`);
-      versionEditorOpen = false;
-      await loadAddons();
-      syncPreview(targetPath);
-    } catch (e: any) {
-      addToast(`Failed: ${e.message}`, 'error');
-    }
-  }
-
-  // ─── UUID operations ──────────────────────────────────────────────────────
-  function openUuidEditor(a: Addon, mode: 'change' | 'randomize') {
-    uuidEditMode = mode;
-    uuidEditPath = a.path;
-    uuidEditValue = mode === 'randomize' ? crypto.randomUUID() : a.uuid;
-    uuidEditorOpen = true;
-  }
-
-  async function saveUuid() {
-    try {
-      if (uuidEditMode === 'randomize') {
-        await api.randomizeUuid(uuidEditPath);
-      } else {
-        await api.changeUuid(uuidEditPath, uuidEditValue);
-      }
-      addToast(`UUID ${uuidEditMode === 'randomize' ? 'randomized' : 'updated'}`, 'success');
-      log(`UUID ${uuidEditMode} for ${uuidEditPath}`);
-      uuidEditorOpen = false;
-      await loadAddons();
-      syncPreview(uuidEditPath);
-    } catch (e: any) {
-      addToast(`Failed: ${e.message}`, 'error');
-    }
-  }
-
-  // ─── rename ────────────────────────────────────────────────────────────────
-  function openRename(a: Addon) {
-    renamePath = a.path;
-    renameValue = a.name;
-    renameOpen = true;
-  }
-
-  async function saveRename() {
-    if (!renameValue.trim()) return;
-    try {
-      await api.renameAddon(renamePath, renameValue.trim());
-      addToast(`Renamed to ${renameValue}`, 'success');
-      log(`Renamed: ${renamePath} → ${renameValue}`);
-      renameOpen = false;
-      await loadAddons();
-      syncPreview(renamePath);
-    } catch (e: any) {
-      addToast(`Rename failed: ${e.message}`, 'error');
-    }
-  }
+  const openManifestEditor = (a: Addon) => editors?.openManifest(a);
+  const openVersionEditor = (a: Addon) => editors?.openVersion(a);
+  const openUuidEditor = (a: Addon, mode: 'change' | 'randomize') => editors?.openUuid(a, mode);
+  const openRename = (a: Addon) => editors?.openRename(a);
 
   // ─── import/export ─────────────────────────────────────────────────────────
   function exportOrder() {
@@ -652,7 +538,7 @@
       <div class="text-center">
         <UploadIcon size={40} class="text-bedrock-400 mx-auto mb-3 animate-pulse" />
         <p class="text-sm uppercase tracking-widest text-strong">Drop .mcpack / .mcaddon / .zip</p>
-        <p class="text-xs text-deep-400 mt-1">Installs into “{selWorld === ALL_WORLDS ? '— pick a world first' : selWorld}”</p>
+        <p class="text-xs text-deep-400 mt-1">{selWorld === ALL_WORLDS ? 'You will pick the world next' : `Installs into “${selWorld}”`}</p>
       </div>
     </div>
   {/if}
@@ -697,13 +583,13 @@
           <input type="file" accept=".mcpack,.mcaddon,.zip" multiple bind:this={fileInput}
                  class="hidden" onchange={(e) => {
                    const files = [...((e.target as HTMLInputElement).files ?? [])];
-                   void handleFiles(files);
+                   handleFiles(files);
                    (e.target as HTMLInputElement).value = '';
                  }} />
-          <button onclick={() => fileInput?.click()} disabled={uploadBusy || !selWorld || selWorld === ALL_WORLDS}
+          <button onclick={() => fileInput?.click()} disabled={!selWorld}
                   class="btn-primary text-xs py-1.5 px-3 flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
                   title="Upload .mcpack / .mcaddon / .zip into the selected world">
-            {#if uploadBusy}<Loader2 size={13} class="animate-spin" />{:else}<UploadIcon size={13} />{/if}
+            {#if uploads.busy}<Loader2 size={13} class="animate-spin" />{:else}<UploadIcon size={13} />{/if}
             Upload
           </button>
         {/if}
@@ -740,6 +626,7 @@
     {/if}
 
     {#if selWorld && selWorld !== ALL_WORLDS}
+      <PackHealthStrip world={selWorld} instanceId={$activeInstance?.id ?? 'default'} bind:health={packHealth} onopen={() => (modTab = 'compat')} />
       <PackDeliveryCard world={selWorld} />
     {/if}
     <PackCdnCard canManage={canManage} instanceId={$activeInstance?.id ?? 'default'} />
@@ -785,6 +672,7 @@
         onmove={(t, u, d) => orders.moveActive(t, u, d)}
         onremove={(t, u) => orders.removeFromOrder(t, u)}
         onreorder={(t, order, msg) => { orders.setOrderOf(t, order); orders.touchOrder(); log(msg); }}
+        health={packHealth}
       />
 
     <!-- ======================== AVAILABLE TAB ======================== -->
@@ -845,19 +733,7 @@
 
     <!-- ======================== LOGS TAB ======================== -->
     {:else if activeTab === 'logs'}
-      <div class="card">
-        <div class="flex items-center justify-between mb-2">
-          <h2 class="card-header !mb-0">Action Log</h2>
-          <button onclick={() => actionLog = []} class="btn-ghost text-xs px-2 py-1 rounded border border-deep-600/30">Clear</button>
-        </div>
-        <div class="h-80 overflow-y-auto bg-deep-900/60 border border-deep-600/30 rounded p-3 font-mono text-xs space-y-1">
-          {#each actionLog as entry}
-            <div class="text-deep-300">{entry}</div>
-          {:else}
-            <p class="text-deep-400 text-center py-8">No actions logged yet</p>
-          {/each}
-        </div>
-      </div>
+      <AddonLogTab bind:actionLog instanceId={$activeInstance?.id ?? 'default'} />
     {/if}
 
     {:else if modTab === 'compat'}
@@ -895,39 +771,7 @@
 
 <!-- ======================== MODALS ======================== -->
 
-<!-- Manifest Editor Modal -->
-<ManifestEditorModal
-  bind:open={manifestEditorOpen}
-  bind:this={manifestEditor}
-  onsave={saveManifest}
-/>
-
-<!-- Version Editor Modal -->
-{#if versionEditorOpen && versionEditAddon}
-  <VersionEditorModal
-    bind:open={versionEditorOpen}
-    name={versionEditAddon.name}
-    bind:major={versionMajor}
-    bind:minor={versionMinor}
-    bind:patch={versionPatch}
-    onsave={saveVersion}
-  />
-{/if}
-
-<!-- UUID Editor Modal -->
-<UuidEditorModal
-  bind:open={uuidEditorOpen}
-  mode={uuidEditMode}
-  bind:value={uuidEditValue}
-  onsave={saveUuid}
-/>
-
-<!-- Rename Modal -->
-<RenameModal
-  bind:open={renameOpen}
-  bind:value={renameValue}
-  onsave={saveRename}
-/>
+<PackEditors bind:this={editors} {log} onchanged={afterEdit} />
 
 <!-- ======================== CONFIRM DIALOG ======================== -->
 <ConfirmDialog
@@ -939,3 +783,23 @@
   onconfirm={async () => { const run = confirmState?.run; confirmState = null; await run?.(); }}
   oncancel={() => (confirmState = null)}
 />
+
+<UploadPanel queue={uploads} isActive={(uuid) => orders.orderBP.includes(uuid) || orders.orderRP.includes(uuid)} onactivate={activateUploaded} />
+
+{#if pendingFiles}
+  <div class="fixed inset-0 z-[70] flex items-center justify-center p-4 modal-backdrop" role="presentation"
+       onclick={(e) => { if (e.target === e.currentTarget) pendingFiles = null; }}
+       onkeydown={(e) => e.key === 'Escape' && (pendingFiles = null)}>
+    <div class="card w-full max-w-sm space-y-3 text-xs" role="dialog" aria-modal="true" aria-label="Choose a world">
+      <h2 class="text-sm font-bold text-strong uppercase tracking-widest">Install into which world?</h2>
+      <p class="text-deep-300">{pendingFiles.length} file(s): {pendingFiles.map((f) => f.name).join(', ')}</p>
+      <select bind:value={pickWorld} class="input w-full text-xs">
+        {#each worlds as w (w)}<option value={w}>{w}</option>{/each}
+      </select>
+      <div class="flex justify-end gap-2">
+        <button class="btn-secondary text-xs" onclick={() => (pendingFiles = null)}>Cancel</button>
+        <button class="btn-primary text-xs" onclick={confirmPickWorld} disabled={!pickWorld}>Upload</button>
+      </div>
+    </div>
+  </div>
+{/if}

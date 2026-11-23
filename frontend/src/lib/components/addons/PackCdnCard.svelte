@@ -10,7 +10,7 @@
   import { api } from '$lib/api/client';
   import { addToast } from '$stores/toast';
   import type { PackCdnStatus, PackCdnTest } from '$types/index';
-  import { Zap, ChevronDown, ChevronRight, ShieldAlert, Gamepad2 } from '@lucide/svelte';
+  import { Zap, ChevronDown, ChevronRight, ShieldAlert, Gamepad2, CircleCheck, CircleX, CircleDashed, HelpCircle } from '@lucide/svelte';
 
   let { canManage, instanceId }: { canManage: boolean; instanceId: string } = $props();
 
@@ -68,6 +68,39 @@
     busy = '';
   }
 
+  let explain = $state(false);
+
+  /** Client-side check of the public base URL (the API validates too). */
+  const urlProblem = $derived.by(() => {
+    const v = baseUrl.trim();
+    if (!v) return enabled ? 'Enter the public URL players reach the panel at' : '';
+    let u: URL;
+    try { u = new URL(v); } catch { return 'Not a valid URL'; }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return 'Use http:// or https://';
+    if (/^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(u.hostname)) return 'This address is not reachable from the internet';
+    if (u.pathname.replace(/\/$/, '').endsWith('/packs')) return 'Leave out /packs; the panel adds it';
+    return '';
+  });
+
+  type Step = { label: string; state: 'done' | 'todo' | 'fail'; detail?: string };
+  const steps = $derived.by<Step[]>(() => {
+    if (!status) return [];
+    const st = status.state;
+    const on = st.settings.enabled;
+    const loaded = status.bds?.status === 'loaded' || status.bds?.status === 'accepted';
+    const bdsFail = status.bds?.status === 'mismatch' || status.bds?.status === 'parse_error';
+    return [
+      { label: 'Public URL set', state: st.settings.base_url ? 'done' : 'todo', detail: st.settings.base_url || undefined },
+      { label: 'Pack zips built', state: on && st.files > 0 ? 'done' : 'todo', detail: st.files ? `${st.files} · ${mb(st.total_bytes)}` : undefined },
+      { label: 'cdn_config.json written', state: st.config_present && st.config_owned ? 'done' : st.config_present ? 'fail' : 'todo',
+        detail: st.config_present && !st.config_owned ? 'hand-made file present; the panel will not overwrite it' : undefined },
+      { label: 'Every active resource pack covered', state: !on ? 'todo' : st.uncovered.length ? 'fail' : 'done',
+        detail: on && st.uncovered.length ? `${st.uncovered.length} missing: Bedrock ignores the whole file` : undefined },
+      { label: 'Bedrock loaded it (restart after changes)', state: loaded ? 'done' : bdsFail ? 'fail' : 'todo', detail: status.bds?.line },
+      { label: 'Reachable from the internet', state: test ? (test.ok ? 'done' : 'fail') : 'todo', detail: test ? test.detail : 'Run "Test URL"' },
+    ];
+  });
+
   const badge = $derived.by(() => {
     if (!status) return null;
     const st = status.state;
@@ -94,6 +127,24 @@
 
     {#if open}
       <div class="mt-3 space-y-3 text-xs">
+        <ol class="mc-slot p-3 space-y-1.5">
+          {#each steps as step, i (i)}
+            <li class="flex items-start gap-2 text-[11px]">
+              {#if step.state === 'done'}<CircleCheck size={13} class="text-teal-400 shrink-0 mt-px" />
+              {:else if step.state === 'fail'}<CircleX size={13} class="text-red-400 shrink-0 mt-px" />
+              {:else}<CircleDashed size={13} class="text-deep-400 shrink-0 mt-px" />{/if}
+              <span class="min-w-0">
+                <span class={step.state === 'done' ? 'text-strong' : step.state === 'fail' ? 'text-red-200' : 'text-deep-300'}>{step.label}</span>
+                {#if step.detail}<span class="block font-mono text-[10px] text-deep-400 break-all">{step.detail}</span>{/if}
+              </span>
+            </li>
+          {/each}
+        </ol>
+
+        <button class="flex items-center gap-1.5 text-[11px] text-bedrock-300 hover:text-bedrock-200" onclick={() => (explain = !explain)} aria-expanded={explain}>
+          <HelpCircle size={12} /> What is this?
+        </button>
+        {#if explain}
         <p class="text-deep-300 leading-snug">
           Bedrock servers can hand joining players a web link for each resource pack instead of sending the packs
           through the game connection, which is slow on consoles. With this on, the panel zips the world's resource
@@ -103,6 +154,7 @@
           changes. This uses an undocumented Bedrock feature — if anything misbehaves, turn it off and packs go back
           to in-game transfer.
         </p>
+        {/if}
 
         <div class="flex items-start gap-2 border-2 border-yellow-500/30 bg-yellow-500/5 p-2 text-[11px] text-yellow-200/90 leading-snug">
           <ShieldAlert size={14} class="shrink-0 mt-0.5" />
@@ -121,10 +173,11 @@
           <label class="space-y-1 block flex-1 min-w-64">
             <span class="text-[10px] text-deep-400 uppercase tracking-wider">Public base URL</span>
             <input bind:value={baseUrl} disabled={!canManage || !!busy} placeholder="https://packs.example.com"
-                   class="input w-full text-xs font-mono" />
+                   class="input w-full text-xs font-mono {urlProblem ? '!border-yellow-500/60' : ''}" aria-invalid={!!urlProblem} />
+            {#if urlProblem}<span class="block text-[10px] text-yellow-300">{urlProblem}</span>{/if}
           </label>
           {#if canManage}
-            <button onclick={save} disabled={!!busy || (enabled && !baseUrl.trim())} class="btn-primary text-xs px-3 py-2">
+            <button onclick={save} disabled={!!busy || (enabled && (!baseUrl.trim() || urlProblem === 'Not a valid URL'))} class="btn-primary text-xs px-3 py-2">
               {busy === 'save' ? 'Building zips…' : 'Save'}
             </button>
             <button onclick={runTest} disabled={!!busy || !status.state.settings.enabled} class="btn-secondary text-xs px-3 py-2">
@@ -140,22 +193,6 @@
             {/each}
           </div>
         {/if}
-
-        <div class="mc-slot p-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[11px]">
-          <span class="text-deep-400">World</span><span class="font-mono text-strong">{status.state.world}</span>
-          <span class="text-deep-400">Zips built</span>
-          <span class="font-mono text-strong">{status.state.files} · {mb(status.state.total_bytes)}</span>
-          <span class="text-deep-400">cdn_config.json</span>
-          <span class="font-mono {status.state.config_present ? 'text-teal-300' : 'text-deep-300'}">
-            {status.state.config_present ? (status.state.config_owned ? 'written by the panel' : 'present (hand-made — the panel will not touch it)') : 'not present'}
-          </span>
-          <span class="text-deep-400">Coverage</span>
-          <span class="font-mono {status.state.uncovered.length ? 'text-red-300' : 'text-strong'}">
-            {status.state.uncovered.length ? `${status.state.uncovered.length} pack(s) not covered — Bedrock ignores the whole file` : 'every active resource pack'}
-          </span>
-          <span class="text-deep-400">Bedrock said</span>
-          <span class="font-mono text-deep-300 break-all">{status.bds ? status.bds.line : 'nothing yet this run'}</span>
-        </div>
 
         {#if test}
           <p class="text-[11px] {test.ok ? 'text-teal-300' : 'text-yellow-300'} break-all">

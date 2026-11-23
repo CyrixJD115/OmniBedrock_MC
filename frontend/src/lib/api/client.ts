@@ -223,6 +223,12 @@ export const api = {
       body: JSON.stringify({ enabled, base_url: baseUrl }),
     }),
   testPackCdn: () => request<PackCdnTest>('/addons/cdn/test', { method: 'POST' }),
+  listAudit: (params: { category?: string; limit?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (params.category) q.set('category', params.category);
+    q.set('limit', String(params.limit ?? 200));
+    return request<Array<{ timestamp: string; username: string; action: string; detail: string; category: string; instance: string }>>(`/audit?${q}`);
+  },
   migrationPlan: (instanceId: string, to: string) =>
     request<MigrationPlan>(`/instances/${encodeURIComponent(instanceId)}/migration?to=${encodeURIComponent(to)}`),
   /** Current sample plus up to an hour of [t, cpu%, memMiB, tps|null] history. */
@@ -468,6 +474,22 @@ export const api = {
       return body as { success: boolean; message: string; installed: Array<{ name: string; pack_type: string; uuid: string; version: number[] }> };
     });
   },
+  /** Same as uploadAddon, with upload progress (0..1) via XHR. */
+  uploadAddonWithProgress: (world: string, file: File, onProgress: (fraction: number) => void) =>
+    new Promise<{ success: boolean; message: string; installed: Array<{ name: string; pack_type: string; uuid: string; version: number[] }> }>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${API_BASE}/addons/upload?world=${encodeURIComponent(world)}&type=auto`);
+      for (const [k, v] of Object.entries(rawHeaders())) xhr.setRequestHeader(k, v);
+      xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+      xhr.onload = () => {
+        let body: any = {};
+        try { body = JSON.parse(xhr.responseText); } catch { /* non-JSON error page */ }
+        if (xhr.status >= 200 && xhr.status < 300) resolve(body);
+        else reject(new Error(body.detail ?? body.error?.message ?? `Upload failed (${xhr.status})`));
+      };
+      xhr.onerror = () => reject(new Error('Network error during upload'));
+      xhr.send(file);
+    }),
   deleteAddon: (path: string) =>
     request<{ success: boolean; message: string }>('/addons/delete', {
       method: 'POST',
