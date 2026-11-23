@@ -34,7 +34,8 @@ export interface Metrics {
   cpu_percent: number;
   memory_mb: number;
   memory_percent: number;
-  tps: number;
+  /** Reported by the server (Endstone/plugins); null when unknown. */
+  tps: number | null;
   /** Where the usage numbers come from: process-tree or docker-stats. */
   usage_source?: string;
   limits?: { memory_mb: number | null; cpus: number | null; enforcement: string };

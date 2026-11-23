@@ -15,12 +15,21 @@ use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
+/// Samples kept per instance: one hour at the 2 s sampling interval.
+const HISTORY_SAMPLES: usize = 1800;
+
+/// One history point: (unix time, cpu %, memory MiB, tps or None).
+pub type Sample = (f64, f64, f64, Option<f64>);
+type History = Arc<std::sync::Mutex<BTreeMap<String, std::collections::VecDeque<Sample>>>>;
+
 #[derive(Clone)]
 pub struct Metrics {
     /// Default instance in the legacy single-server shape (performance page).
     pub latest: watch::Receiver<Value>,
     /// Host capacity plus per-instance usage: {"host": {...}, "instances": {...}}.
     pub all: watch::Receiver<Value>,
+    /// Recent samples per instance (running periods only), oldest first.
+    history: History,
 }
 
 /// Recursive directory size in bytes; IO errors count as zero for that entry.
@@ -80,6 +89,8 @@ impl Metrics {
             "host": host_shape(&System::new()),
             "instances": {},
         }));
+        let history: History = Arc::default();
+        let recorder = history.clone();
         tokio::spawn(async move {
             let mut system = System::new_with_specifics(RefreshKind::nothing());
             let mut docker_usage: BTreeMap<String, (f64, f64)> = BTreeMap::new();
@@ -158,6 +169,8 @@ impl Metrics {
                         });
                     }
                     let mut map = serde_json::Map::new();
+                    let host_memory = host["memory_total_mb"].as_f64().unwrap_or(0.0);
+                    let stamp = now();
                     for (record, snapshot, _) in &samples {
                         let (mut cpu, mut memory_mb, source) = match record.deployment {
                             crate::instances::Deployment::Docker => {
@@ -177,16 +190,22 @@ impl Metrics {
                             cpu = 0.0;
                             memory_mb = 0.0;
                         }
+                        // Memory share of the limit when one is set, else of the host.
+                        let ceiling = record.resources.memory_mb.map(|m| m as f64).unwrap_or(host_memory);
                         map.insert(
                             record.id.clone(),
                             json!({
                                 "id": record.id,
                                 "name": record.name,
+                                "timestamp": stamp,
                                 "status": snapshot.status,
                                 "cpu_percent": cpu,
                                 "memory_mb": memory_mb,
+                                "memory_percent": if ceiling > 0.0 { 100.0 * memory_mb / ceiling } else { 0.0 },
                                 "disk_mb": disk_cache.get(&record.id).cloned().unwrap_or(0.0),
-                                "tps": if snapshot.status == Status::Running { snapshot.tps.unwrap_or(20.0) } else { 0.0 },
+                                // Only what the server actually reported; never a
+                                // made-up 20 when the backend prints no TPS.
+                                "tps": if snapshot.status == Status::Running { snapshot.tps } else { None },
                                 "usage_source": source,
                                 "limits": {
                                     "memory_mb": record.resources.memory_mb,
@@ -204,6 +223,7 @@ impl Metrics {
                 match result {
                     Ok((s, data)) => {
                         system = s;
+                        record_history(&recorder, &data);
                         if let Some(default) = data["instances"].get(DEFAULT_INSTANCE).cloned() {
                             latest_tx.send_replace(default);
                         }
@@ -221,12 +241,49 @@ impl Metrics {
                 }
             }
         });
-        Self { latest, all }
+        Self {
+            latest,
+            all,
+            history,
+        }
+    }
+
+    /// Samples for one instance newer than `since` (unix seconds).
+    pub fn history(&self, id: &str, since: f64) -> Vec<Sample> {
+        self.history
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(id)
+            .map(|q| q.iter().filter(|s| s.0 >= since).copied().collect())
+            .unwrap_or_default()
+    }
+}
+
+fn record_history(history: &History, data: &Value) {
+    let Some(instances) = data["instances"].as_object() else {
+        return;
+    };
+    let mut h = history.lock().unwrap_or_else(|e| e.into_inner());
+    h.retain(|id, _| instances.contains_key(id));
+    for (id, m) in instances {
+        if m["status"] != json!(Status::Running) {
+            continue;
+        }
+        let q = h.entry(id.clone()).or_default();
+        q.push_back((
+            m["timestamp"].as_f64().unwrap_or_default(),
+            m["cpu_percent"].as_f64().unwrap_or_default(),
+            m["memory_mb"].as_f64().unwrap_or_default(),
+            m["tps"].as_f64(),
+        ));
+        while q.len() > HISTORY_SAMPLES {
+            q.pop_front();
+        }
     }
 }
 
 fn stopped_metrics() -> Value {
-    json!({"timestamp":now(),"status":"stopped","cpu_percent":0.0,"memory_mb":0.0,"memory_percent":0.0,"tps":0.0})
+    json!({"timestamp":now(),"status":"stopped","cpu_percent":0.0,"memory_mb":0.0,"memory_percent":0.0,"tps":null})
 }
 
 fn host_shape(system: &System) -> Value {

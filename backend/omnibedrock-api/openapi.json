@@ -530,7 +530,7 @@
     "tags": [
      "console"
     ],
-    "summary": "Per-instance CPU/memory usage samples",
+    "summary": "Current CPU/memory/TPS sample for the scoped instance; ?history=1&minutes=N (1-60) adds the recorded samples as [unix, cpu%, memory MiB, tps|null]",
     "x-permission": "SERVER_VIEW",
     "responses": {
      "200": {

@@ -24,7 +24,7 @@ static ENDSTONE_VERSION: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"running Endstone version:\s*([0-9][0-9A-Za-z.+-]*)").unwrap());
 static ANSI: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\x1b\[[0-9;?]*[A-Za-z]").unwrap());
 static TPS: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)(tps|mspt)[:\s]*([0-9]+(?:\.[0-9]+)?)").unwrap());
+    LazyLock::new(|| Regex::new(r"(?i)\b(tps|mspt)\b[:\s=]*([0-9]+(?:\.[0-9]+)?)").unwrap());
 static DECIMAL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\d+(?:\.\d+)+").unwrap());
 static NUMBER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b\d+\b").unwrap());
 

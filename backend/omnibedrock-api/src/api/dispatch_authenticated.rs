@@ -229,7 +229,19 @@ pub(super) async fn dispatch_authenticated(
         }
         ["performance", "metrics"] if read => {
             s.require_for(u, "SERVER_VIEW", svc).await?;
-            s.instance_metrics(&svc.record().id)
+            let id = svc.record().id;
+            let current = s.instance_metrics(&id);
+            if q.contains_key("history") {
+                let minutes = q
+                    .get("minutes")
+                    .and_then(|m| m.parse::<f64>().ok())
+                    .unwrap_or(60.0)
+                    .clamp(1.0, 60.0);
+                let since = omnibedrock_server::server::now() - minutes * 60.0;
+                json!({"current": current, "history": s.metrics.history(&id, since)})
+            } else {
+                current
+            }
         }
         ["players"] if read => {
             s.require_for(u, "PLAYERS_VIEW", svc).await?;

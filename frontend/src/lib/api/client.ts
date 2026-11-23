@@ -222,6 +222,11 @@ export const api = {
       body: JSON.stringify({ enabled, base_url: baseUrl }),
     }),
   testPackCdn: () => request<PackCdnTest>('/addons/cdn/test', { method: 'POST' }),
+  /** Current sample plus up to an hour of [t, cpu%, memMiB, tps|null] history. */
+  getMetricsHistory: (minutes = 60) =>
+    request<{ current: Record<string, unknown> | null; history: [number, number, number, number | null][] }>(
+      `/performance/metrics?history=1&minutes=${minutes}`,
+    ),
   getCompat: (world?: string, refresh = false) => {
     const q = new URLSearchParams();
     if (world) q.set('world', world);

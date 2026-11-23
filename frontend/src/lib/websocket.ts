@@ -18,7 +18,10 @@ class WebSocketManager {
   private connections = new Map<string, Connection>();
 
   connect(path: string, onMessage: MessageHandler): () => void {
-    const key = path.split('?')[0];
+    // Keyed by the full path: `?instance=` is part of the identity, so a
+    // page still subscribed to instance A never hands its socket to a new
+    // subscriber for instance B (the stream used to stay on A after a switch).
+    const key = path;
     let entry = this.connections.get(key);
     if (!entry) {
       entry = { path, handlers: new Set(), closed: false, attempts: 0, lastMessage: Date.now() };
@@ -108,7 +111,7 @@ class WebSocketManager {
   }
 
   disconnect(path: string) {
-    const key = path.split('?')[0];
+    const key = path;
     const entry = this.connections.get(key);
     if (entry) this.close(key, entry);
   }
