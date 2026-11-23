@@ -310,6 +310,11 @@ pub(super) async fn launch(
     }
 }
 
+/// Fail-fast ceiling for a live process holding the port.
+const HARD_BUDGET: Duration = Duration::from_secs(10);
+/// Ceiling for kernel socket remnants (TIME_WAIT is ~60s on Linux).
+const REMNANT_BUDGET: Duration = Duration::from_secs(75);
+
 /// Wait (bounded) for the instance's ports to become bindable before
 /// launching: the UDP pair (P v4/P+1 v6) AND TCP P — NetherNet's signaling
 /// leg listens on TCP server-port, and the Endstone launcher refuses to boot
@@ -318,10 +323,32 @@ pub(super) async fn launch(
 /// report a false "crashed" even though a manual start seconds later works
 /// fine. A dying process can free UDP and TCP at different moments, so both
 /// transports are polled until all three ports are free.
+///
+/// Two different "busy" states share this wait. A live process holding the
+/// port is a real conflict: fail at [`HARD_BUDGET`] seconds and name it. But
+/// NetherNet's loopback keep-alives die server-side, leaving TIME_WAIT
+/// sockets whose LOCAL port is the game port — no process owns those, and
+/// they keep even a `SO_REUSEADDR` bind refused until the kernel retires
+/// them (~60s). A stop→start (restore with restart, quick bounce) lands in
+/// exactly that window, so when `port_holders` finds nobody the wait
+/// continues to [`REMNANT_BUDGET`] instead of failing a start that was
+/// always going to work.
 pub(super) async fn wait_ports_free(port: u16, console: &Console) -> anyhow::Result<()> {
-    const BUDGET: Duration = Duration::from_secs(10);
-    let deadline = Instant::now() + BUDGET;
+    wait_ports_free_bounded(port, console, HARD_BUDGET, REMNANT_BUDGET).await
+}
+
+/// The wait itself with caller-supplied budgets, so tests can exercise the
+/// holder and remnant branches without sitting through the real timeouts.
+async fn wait_ports_free_bounded(
+    port: u16,
+    console: &Console,
+    hard_budget: Duration,
+    remnant_budget: Duration,
+) -> anyhow::Result<()> {
+    let hard_deadline = Instant::now() + hard_budget;
+    let remnant_deadline = Instant::now() + remnant_budget;
     let mut announced = false;
+    let mut remnant_note = false;
     loop {
         let udp = crate::instances::port_bindable(port).await;
         let udp6 = crate::instances::port_bindable(port + 1).await;
@@ -343,7 +370,9 @@ pub(super) async fn wait_ports_free(port: u16, console: &Console) -> anyhow::Res
                 .await;
             announced = true;
         }
-        if Instant::now() >= deadline {
+        let past_hard = Instant::now() >= hard_deadline;
+        let past_remnant = Instant::now() >= remnant_deadline;
+        if past_hard && (past_remnant || !remnant_note) {
             // Name exactly what is busy and who holds it, so the next
             // occurrence is diagnosable from the console alone.
             let mut busy = Vec::new();
@@ -360,17 +389,34 @@ pub(super) async fn wait_ports_free(port: u16, console: &Console) -> anyhow::Res
             holders.extend(port_holders(port + 1));
             holders.sort();
             holders.dedup();
-            let held_by = if holders.is_empty() {
-                String::new()
-            } else {
-                format!(" (held by {})", holders.join(", "))
-            };
-            bail!(
-                "{} still in use after {}s{held_by} — stop whatever holds it (or pick another \
-                 port) and start again",
-                busy.join(" + "),
-                BUDGET.as_secs()
-            );
+            if !holders.is_empty() {
+                bail!(
+                    "{} still in use after {}s (held by {}) — stop whatever holds it (or pick \
+                     another port) and start again",
+                    busy.join(" + "),
+                    hard_budget.as_secs(),
+                    holders.join(", ")
+                );
+            }
+            if past_remnant {
+                bail!(
+                    "{} still not bindable after {}s with no process holding it — kernel socket \
+                     remnants; wait a minute or pick another port",
+                    busy.join(" + "),
+                    remnant_budget.as_secs()
+                );
+            }
+            console
+                .publish(
+                    format!(
+                        "[LOCAL] No process holds the port — waiting out the kernel's ~60s \
+                         TIME_WAIT on {port} left behind by NetherNet loopback keep-alives..."
+                    ),
+                    "panel",
+                    false,
+                )
+                .await;
+            remnant_note = true;
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
@@ -444,5 +490,104 @@ mod port_holder_tests {
             holders.iter().any(|h| h.contains(&format!("pid {me}"))),
             "{holders:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod wait_ports_tests {
+    use super::wait_ports_free_bounded;
+    use crate::server::console::Console;
+    use std::time::{Duration, Instant};
+
+    fn console() -> Console {
+        let dir = tempfile::tempdir().unwrap();
+        Console::with_journal_root(dir.path().join("journal"), 128, 65536, 1 << 20)
+    }
+
+    async fn free_tcp_port() -> u16 {
+        let probe = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = probe.local_addr().unwrap().port();
+        // Give the kernel a beat to retire the probe's own socket so the
+        // test starts from a genuinely bindable port.
+        drop(probe);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        port
+    }
+
+    #[tokio::test]
+    async fn free_port_returns_immediately() {
+        let port = free_tcp_port().await;
+        let started = Instant::now();
+        wait_ports_free_bounded(
+            port,
+            &console(),
+            Duration::from_secs(10),
+            Duration::from_secs(75),
+        )
+        .await
+        .unwrap();
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    /// A live listener is a real conflict: named and failed at the hard
+    /// budget, long before the remnant budget.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn live_holder_fails_fast_and_is_named() {
+        let port = free_tcp_port().await;
+        let _holder = tokio::net::TcpListener::bind(("0.0.0.0", port))
+            .await
+            .unwrap();
+        let started = Instant::now();
+        let err = wait_ports_free_bounded(
+            port,
+            &console(),
+            Duration::from_millis(150),
+            Duration::from_millis(1500),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("held by"), "{err}");
+        assert!(err.contains("stop whatever holds it"), "{err}");
+        assert!(started.elapsed() < Duration::from_millis(1500));
+    }
+
+    /// The NetherNet after-stop state: the port is unbindable but owned by
+    /// nobody (TIME_WAIT from a loopback keep-alive the closing side left
+    /// behind). The wait must outlive the hard budget instead of failing a
+    /// start that would work, then explain the remnants.
+    #[tokio::test]
+    async fn time_wait_remnants_wait_past_the_hard_budget() {
+        let port = free_tcp_port().await;
+        let peer = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let peer_addr = peer.local_addr().unwrap();
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        let mut local = peer_addr;
+        local.set_port(port);
+        socket.bind(local).unwrap();
+        let client = socket.connect(peer_addr).await.unwrap();
+        let (accepted, _) = peer.accept().await.unwrap();
+        // Client closes first: its side — local port `port` — enters
+        // TIME_WAIT, exactly like a server-side-closed keep-alive.
+        drop(client);
+        drop(accepted);
+        let started = Instant::now();
+        let err = wait_ports_free_bounded(
+            port,
+            &console(),
+            Duration::from_millis(150),
+            Duration::from_millis(1200),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("no process holding it"), "{err}");
+        // It waited out the remnant budget, not the hard one.
+        assert!(started.elapsed() >= Duration::from_millis(1200));
     }
 }
