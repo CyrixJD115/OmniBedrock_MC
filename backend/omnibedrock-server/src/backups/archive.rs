@@ -170,6 +170,58 @@ pub(super) fn verify_archive(archive: &Path, world: &str) -> anyhow::Result<(u64
     Ok((entries, bytes))
 }
 
+/// Total bytes an archive may extract to (matches the zip bomb guard in
+/// [`restore_archive`]).
+const EXTRACTION_LIMIT: u64 = 64 * 1024 * 1024 * 1024;
+
+/// Static checks for one archive entry: it lives under `world/`, is not a
+/// symlink, and its size still fits the extraction budget `total` tracks.
+fn check_entry(
+    path: Option<&Path>,
+    unix_mode: Option<u32>,
+    size: u64,
+    total: &mut u64,
+    world: &str,
+) -> anyhow::Result<()> {
+    *total = total.checked_add(size).context("archive size overflow")?;
+    ensure!(
+        *total <= EXTRACTION_LIMIT,
+        "Archive exceeds 64 GiB extraction limit"
+    );
+    let path = path.context("Archive contains unsafe path")?;
+    ensure!(
+        path.components()
+            .next()
+            .is_some_and(|c| c.as_os_str() == world),
+        "Archive contains a different world"
+    );
+    ensure!(
+        !unix_mode.is_some_and(|m| m & 0o170000 == 0o120000),
+        "Archive contains a symlink"
+    );
+    Ok(())
+}
+
+/// Run every archive-only safety check [`restore_archive`] enforces — same
+/// world folder, no symlinks, within the extraction limit — without
+/// extracting. Called before the server is stopped so a rejected archive
+/// never causes downtime.
+pub(super) fn prevalidate_archive(archive: &Path, world: &str) -> anyhow::Result<()> {
+    let mut zip = ZipArchive::new(std::fs::File::open(archive)?)?;
+    let mut total = 0u64;
+    for i in 0..zip.len() {
+        let entry = zip.by_index(i)?;
+        check_entry(
+            entry.enclosed_name().as_deref(),
+            entry.unix_mode(),
+            entry.size(),
+            &mut total,
+            world,
+        )?;
+    }
+    Ok(())
+}
+
 pub(super) fn restore_archive(archive: &Path, target: &Path, world: &str) -> anyhow::Result<()> {
     let mut zip = ZipArchive::new(std::fs::File::open(archive)?)?;
     let parent = target.parent().context("missing world root")?;
@@ -179,27 +231,15 @@ pub(super) fn restore_archive(archive: &Path, target: &Path, world: &str) -> any
         let mut total = 0u64;
         for i in 0..zip.len() {
             let entry = zip.by_index(i)?;
-            total = total
-                .checked_add(entry.size())
-                .context("archive size overflow")?;
-            ensure!(
-                total <= 64 * 1024 * 1024 * 1024,
-                "Archive exceeds 64 GiB extraction limit"
-            );
-            let path = entry
-                .enclosed_name()
-                .context("Archive contains unsafe path")?;
-            let mut components = path.components();
-            ensure!(
-                components.next().is_some_and(|c| c.as_os_str() == world),
-                "Archive contains a different world"
-            );
-            ensure!(
-                !entry.unix_mode().is_some_and(|m| m & 0o170000 == 0o120000),
-                "Archive contains a symlink"
-            );
+            check_entry(
+                entry.enclosed_name().as_deref(),
+                entry.unix_mode(),
+                entry.size(),
+                &mut total,
+                world,
+            )?;
         }
-        let mut remaining = 64u64 * 1024 * 1024 * 1024;
+        let mut remaining = EXTRACTION_LIMIT;
         for i in 0..zip.len() {
             let mut entry = zip.by_index(i)?;
             let path = entry.enclosed_name().context("unsafe path")?;

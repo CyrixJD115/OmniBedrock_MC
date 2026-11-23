@@ -23,7 +23,7 @@ use tokio::sync::{Mutex, broadcast, watch};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use super::archive::{create_zip, restore_archive, verify_archive};
+use super::archive::{self, create_zip, restore_archive, verify_archive};
 use super::settings::{defaults, merge, validate_settings};
 use super::types::{BackupRequest, Hooks};
 
@@ -481,6 +481,11 @@ impl Backups {
         let path = self.path(&world, &filename, false).await?;
         let worlds_root = self.config.bedrock_server_dir.join("worlds");
         let target = safe_path(&worlds_root, Path::new(&world)).await?;
+        // Reject impossible archives before stopping the server: a restore
+        // that cannot succeed must not be the reason the world goes down.
+        // Same checks `restore_archive` re-enforces under the job lock.
+        archive::prevalidate_archive(&path, &world)
+            .map_err(|e| ApiError::bad(format!("{e}; the server was left running")))?;
         // Caller serializes lifecycle actions with restore through AppState.operations.
         self.server.action("stop").await?;
         let w = world.clone();

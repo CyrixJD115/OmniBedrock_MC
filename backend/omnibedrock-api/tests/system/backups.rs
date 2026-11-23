@@ -122,6 +122,8 @@ async fn unsafe_zip_cannot_replace_existing_world() {
         zip.write_all(b"unsafe").unwrap();
         zip.finish().unwrap();
     }
+    s.server.action("start").await.unwrap();
+    wait_line(&s.server, "ready").await;
     let (code, _) = call(
         &app,
         "POST",
@@ -130,7 +132,13 @@ async fn unsafe_zip_cannot_replace_existing_world() {
         json!({}),
     )
     .await;
-    assert_eq!(code, StatusCode::INTERNAL_SERVER_ERROR);
+    // Rejected in prevalidation before anything is stopped or touched: a
+    // bad request, not an internal error with the world left down.
+    assert_eq!(code, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        s.server.snapshot().status,
+        omnibedrock_server::server::Status::Running
+    );
     assert_eq!(
         tokio::fs::read_to_string(s.config.bedrock_server_dir.join("worlds/Fixture/level.dat"))
             .await

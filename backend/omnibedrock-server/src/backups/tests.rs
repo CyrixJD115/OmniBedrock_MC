@@ -1,4 +1,4 @@
-use super::archive::{create_zip, verify_archive};
+use super::archive::{create_zip, prevalidate_archive, restore_archive, verify_archive};
 use super::live::Snapshot;
 use super::service::is_world_name;
 use super::types::BackupRequest;
@@ -65,4 +65,23 @@ fn hidden_and_pre_restore_folders_are_not_worlds() {
     assert!(!is_world_name(".W.pre-restore-20261123-101010"));
     assert!(!is_world_name("W.bak.20261101-000000.abcd"));
     assert!(!is_world_name(".W.restore.1234"));
+}
+
+#[test]
+fn prevalidate_accepts_its_own_archive_and_rejects_a_foreign_world() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = world(dir.path());
+    let out = dir.path().join("b.zip");
+    create_zip(&w, &out, &BackupRequest::default(), None, &|_, _| {}).unwrap();
+    // The archive the panel just wrote for W prevalidates for W…
+    assert!(prevalidate_archive(&out, "W").is_ok());
+    // …and is refused for any other world before anything is stopped.
+    let err = prevalidate_archive(&out, "Other").unwrap_err().to_string();
+    assert!(err.contains("different world"), "{err}");
+    // restore_archive still enforces the same rule at extraction time.
+    let err = restore_archive(&out, &dir.path().join("worlds").join("Other"), "Other")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("different world"), "{err}");
+    assert!(!dir.path().join("worlds").join("Other").exists());
 }
