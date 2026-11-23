@@ -205,10 +205,24 @@ fn real_logs() {
             r.issues.len()
         );
         if pass == 1 {
-            for i in r.issues.iter().take(25) {
+            for i in &r.issues {
                 println!(
-                    "{:?} {:>8} {} | {:?} | {:?}",
-                    i.severity, i.count, i.title, i.hint, i.first_seen
+                    "{:?} {:>8} {} | pack={:?} hint={:?} | ctx={}",
+                    i.severity,
+                    i.count,
+                    i.title,
+                    i.pack.as_ref().map(|p| &p.name),
+                    i.hint,
+                    i.context.as_deref().map(|c| c.len()).unwrap_or(0)
+                );
+            }
+            if let Some(c) = r.issues[0].context.as_deref() {
+                println!("CONTEXT\n{c}");
+            }
+            for p in r.packs.iter().take(8) {
+                println!(
+                    "PACK {} {} e={} w={} ev={}",
+                    p.status, p.name, p.errors, p.warnings, p.events
                 );
             }
             for t in &r.timeline {

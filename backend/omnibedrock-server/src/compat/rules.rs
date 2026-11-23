@@ -445,10 +445,12 @@ fn folder_hint(s: &str) -> Option<Hint> {
     for marker in ["behavior_packs/", "resource_packs/"] {
         if let Some(i) = s.find(marker) {
             let rest = &s[i + marker.len()..];
-            let end = rest.find([' ', '|', '/']).map_or(rest.len(), |e| {
-                // Folder names may contain spaces; cut at " | " or a slash.
-                rest.find(" |").or_else(|| rest.find('/')).unwrap_or(e)
-            });
+            // Folder names may contain spaces: cut at the first "/" or " |".
+            let end = [rest.find('/'), rest.find(" |")]
+                .into_iter()
+                .flatten()
+                .min()
+                .unwrap_or(rest.len());
             let folder = rest[..end].trim();
             if !folder.is_empty() {
                 return Some(Hint::Folder(folder.to_owned()));
