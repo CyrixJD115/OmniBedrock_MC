@@ -164,6 +164,20 @@ export function rawHeaders(extra: Record<string, string> = {}, apiPath = ''): Re
 
 type Method = 'GET' | 'POST' | 'PUT' | 'DELETE';
 
+/**
+ * The human message from an API error body. The API answers with an
+ * envelope `{detail, error: {code, message}, ok, request_id}`; toasts used to
+ * show that raw JSON. Non-JSON bodies pass through unchanged.
+ */
+export function errorDetail(text: string): string {
+  try {
+    const body = JSON.parse(text);
+    const msg = body?.detail ?? body?.error?.message ?? body?.message;
+    if (typeof msg === 'string' && msg) return msg;
+  } catch { /* not JSON */ }
+  return text;
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -188,7 +202,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     if (res.status === 401 && authToken && !path.startsWith('/auth/')) {
       handleSessionExpired();
     }
-    throw new Error(`API Error ${res.status}: ${text}`);
+    throw new Error(`API Error ${res.status}: ${errorDetail(text)}`);
   }
 
   return res.json();
