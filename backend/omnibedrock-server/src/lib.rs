@@ -7,6 +7,7 @@ pub mod addons;
 pub mod backups;
 pub mod bds;
 pub mod broadcaster;
+pub mod compat;
 pub mod curseforge;
 pub mod docker;
 pub mod endstone;

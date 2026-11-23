@@ -5,6 +5,7 @@ mod audit;
 mod backups;
 mod broadcaster;
 mod command;
+mod compat;
 mod dispatch;
 mod dispatch_authenticated;
 mod docs;

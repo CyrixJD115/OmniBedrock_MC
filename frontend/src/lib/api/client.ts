@@ -1,4 +1,5 @@
 import type { ServerStatus, ServerActionResponse, Backup, AddonList, Addon, Player, PropertyEntry, WorldInfo, BackupSettings, SchedulerConfig, CommandEntry, IncludeItem, FolderEntry, BackendInfo, VersionRegistry, EndstoneRegistry, BroadcasterStatus, CfProject, StoreSearchResponse, StoreMeta, StoreFilesResponse, StoreInstallResponse, Instance, HostInfo, PluginFile, ExplorerListing, ApiKeyRecord, PackDelivery, BroadcasterJarInfo, PackCdnStatus, PackCdnTest } from '$types/index';
+import type { CompatReport } from '$types/compat';
 
 const API_BASE = '/api/v1';
 let authToken = '';
@@ -220,6 +221,25 @@ export const api = {
       body: JSON.stringify({ enabled, base_url: baseUrl }),
     }),
   testPackCdn: () => request<PackCdnTest>('/addons/cdn/test', { method: 'POST' }),
+  getCompat: (world?: string, refresh = false) => {
+    const q = new URLSearchParams();
+    if (world) q.set('world', world);
+    if (refresh) q.set('refresh', '1');
+    const qs = q.toString();
+    return request<CompatReport>(`/addons/compat${qs ? `?${qs}` : ''}`);
+  },
+  exportCompat: async (world?: string) => {
+    const q = world ? `?world=${encodeURIComponent(world)}` : '';
+    const res = await fetch(`${API_BASE}/addons/compat/export${q}`, { headers: rawHeaders() });
+    if (!res.ok) throw new Error(`API Error ${res.status}`);
+    const name = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') ?? '')?.[1] ?? 'compat-report.md';
+    saveBlob(name, await res.blob());
+  },
+  pruneContentLogs: () =>
+    request<{ success: boolean; files: number; bytes: number; message: string }>('/addons/compat/content-logs', {
+      method: 'POST',
+      body: JSON.stringify({ confirm: true }),
+    }),
   getPackDelivery: (world: string) =>
     request<PackDelivery>(`/addons/delivery?world=${encodeURIComponent(world)}`),
 

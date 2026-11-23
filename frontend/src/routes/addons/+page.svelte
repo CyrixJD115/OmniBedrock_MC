@@ -9,7 +9,7 @@
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
   import {
     Save, RotateCw, FileDown, FileUp,
-    Upload as UploadIcon, Loader2, Puzzle, Blocks,
+    Upload as UploadIcon, Loader2, Puzzle, Blocks, ShieldCheck,
   } from '@lucide/svelte';
   import {
     ALL_WORLDS, PackOrders,
@@ -31,6 +31,7 @@
   import UuidEditorModal from '$lib/components/addons/UuidEditorModal.svelte';
   import RenameModal from '$lib/components/addons/RenameModal.svelte';
   import PluginsCard from '$lib/components/plugins/PluginsCard.svelte';
+  import CompatPanel from '$lib/components/compat/CompatPanel.svelte';
 
   // ─── state ────────────────────────────────────────────────────────────────
   let worlds = $state<string[]>([]);
@@ -193,7 +194,7 @@
   // Mods page top level: pack organizer vs the Endstone plugin manager.
   // The plugins sub-tab only exists on endstone-backend instances held by a
   // PLUGIN_MANAGE user (enforced server-side as well).
-  let modTab = $state<'addons' | 'plugins'>('addons');
+  let modTab = $state<'addons' | 'plugins' | 'compat'>('addons');
   const pluginsAvailable = $derived(
     $activeInstance?.backend === 'endstone' && $userPermissions.includes('PLUGIN_MANAGE')
   );
@@ -202,7 +203,7 @@
     // strand the user on a hidden tab.
     if (!pluginsAvailable && modTab === 'plugins') modTab = 'addons';
   });
-  function modTabClass(tab: 'addons' | 'plugins'): string {
+  function modTabClass(tab: 'addons' | 'plugins' | 'compat'): string {
     return 'flex items-center gap-1.5 px-3 py-1.5 text-xs uppercase tracking-wider font-semibold transition-all border-b-2 ' +
       (modTab === tab
         ? 'border-bedrock-400 text-bedrock-300 bg-bedrock-500/10'
@@ -665,6 +666,9 @@
               <Blocks size={13} /> Endstone Plugins
             </button>
           {/if}
+          <button onclick={() => (modTab = 'compat')} class={modTabClass('compat')} aria-selected={modTab === 'compat'} role="tab">
+            <ShieldCheck size={13} /> Compatibility
+          </button>
         </div>
       </div>
       {#if modTab === 'addons'}
@@ -851,6 +855,8 @@
       </div>
     {/if}
 
+    {:else if modTab === 'compat'}
+      <CompatPanel world={selWorld && selWorld !== ALL_WORLDS ? selWorld : undefined} canManage={canManage} instanceId={$activeInstance?.id ?? 'default'} />
     {:else if pluginsAvailable}
       <PluginsCard instanceId={$activeInstance?.id ?? 'default'} />
     {/if}

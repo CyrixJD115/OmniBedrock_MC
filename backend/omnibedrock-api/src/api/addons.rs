@@ -297,6 +297,19 @@ pub(super) async fn addons(
                     .map_err(anyhow::Error::from)?;
             serde_json::to_value(report).map_err(anyhow::Error::from)?
         }
+        // Compatibility checker: log + manifest + script analysis, its
+        // Markdown export, and ContentLog cleanup.
+        ["addons", "compat"] if read => super::compat::report(s, svc, q).await?,
+        ["addons", "compat", "export"] if read => {
+            return super::compat::export(s, svc, q).await;
+        }
+        ["addons", "compat", "content-logs"] if create => {
+            let result = super::compat::prune_content_logs(svc, b).await?;
+            s.audit(u, "addons.compat.prune", "ContentLog files", "addons")
+                .await
+                .ok();
+            result
+        }
         // Optional pack CDN (cdn_config.json): status / configure / self-test.
         ["addons", "cdn"] if read => cdn_status(s, svc).await?,
         ["addons", "cdn"] if *m == Method::PUT => {

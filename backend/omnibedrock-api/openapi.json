@@ -889,6 +889,56 @@
     }
    }
   },
+  "/addons/compat": {
+   "get": {
+    "tags": [
+     "addons"
+    ],
+    "summary": "Compatibility report: classified log issues per pack (latest.log + rotated logs), manifest/script-API version checks against this server build, JS scan for removed APIs, timeline, fixes and docs",
+    "x-permission": "ADDONS_VIEW",
+    "x-query": {
+     "world": "world folder (default: level-name)",
+     "files": "newest log files to scan (1-60, default 14)",
+     "refresh": "re-fetch script-module support from npm"
+    },
+    "responses": {
+     "200": {
+      "description": "{generated_at, world, server, script_api, summary, packs, issues, timeline, housekeeping}"
+     }
+    }
+   }
+  },
+  "/addons/compat/export": {
+   "get": {
+    "tags": [
+     "addons"
+    ],
+    "summary": "The compatibility report as a Markdown download",
+    "x-permission": "ADDONS_VIEW",
+    "responses": {
+     "200": {
+      "description": "text/markdown"
+     }
+    }
+   }
+  },
+  "/addons/compat/content-logs": {
+   "post": {
+    "tags": [
+     "addons"
+    ],
+    "summary": "Delete old ContentLog*.txt files (keeps the newest)",
+    "x-permission": "ADDONS_MANAGE",
+    "x-body": {
+     "confirm": "true"
+    },
+    "responses": {
+     "200": {
+      "description": "{success, files, bytes, message}"
+     }
+    }
+   }
+  },
   "/addons/upload": {
    "post": {
     "tags": [
