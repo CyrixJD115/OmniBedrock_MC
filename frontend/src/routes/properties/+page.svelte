@@ -4,7 +4,10 @@
   import { userPermissions } from '$stores/auth';
   import { activeInstance } from '$stores/instances';
   import type { BackendInfo } from '$types/index';
-  import { Eye, Plus, RotateCw, Save, Search } from '@lucide/svelte';
+  import { serverStatus } from '$stores/index';
+  import PropertyRow from '$lib/components/properties/PropertyRow.svelte';
+  import { CATEGORIES, SCHEMA, descriptions, specFor, type Category } from '$lib/properties/schema';
+  import { Eye, Plus, RotateCw, Save, Search, RefreshCcw } from '@lucide/svelte';
 
   type Entry = { key: string; value: string; comment: string; inline_comment: string };
 
@@ -80,7 +83,8 @@
       // Sync every row carrying this key (hand-edited files can hold dupes);
       // no reload needed — the backend write is the file's new truth.
       for (const p of properties) if (p.key === key) p.value = value;
-      addToast(`Updated ${key}`, 'success');
+      if (running) pendingRestart = [...new Set([...pendingRestart, key])];
+      addToast(`Updated ${key}${running ? ' (applies after a restart)' : ''}`, 'success');
     } catch (e: any) {
       addToast(`Update failed: ${e.message}`, 'error');
       rowEpoch++;
@@ -120,56 +124,18 @@
     } catch (e: any) { addToast(`Save failed: ${e.message}`, 'error'); }
   }
 
-  // Widget schema. Known keys get predefined inputs; every other entry stays
-  // fully editable as free text, and any entry holding true/false offers a
-  // toggle — so every parsed line is configurable, whatever it is.
-  const CHOICES: Record<string, string[]> = {
-    gamemode: ['survival', 'creative', 'adventure'],
-    difficulty: ['peaceful', 'easy', 'normal', 'hard'],
-    'default-player-permission-level': ['visitor', 'member', 'operator'],
-    'chat-restriction': ['None', 'Dropped', 'Disabled'],
-    transport: ['raknet', 'nethernet'],
-  };
-  const BOOL_KEYS = new Set([
-    'allow-cheats', 'online-mode', 'white-list', 'texturepack-required',
-    'content-log-file-enabled', 'server-authoritative-movement',
-    'enable-lan-visibility', 'disable-player-interaction',
-  ]);
-  const NUMBERS: Record<string, [number, number | null]> = {
-    'max-players': [1, 1000],
-    'server-port': [1, 65535],
-    'server-portv6': [1, 65535],
-    'view-distance': [2, 96],
-    'tick-distance': [4, 12],
-    'player-idle-timeout': [0, null],
-    'compression-threshold': [0, 65535],
-  };
-  // Common keys float to the top when unfiltered; everything else keeps
-  // file order beneath them.
-  const COMMON = ['server-name', 'motd', 'gamemode', 'difficulty', 'allow-cheats', 'max-players',
-    'online-mode', 'white-list', 'server-port', 'server-portv6', 'transport', 'server-udp-ports',
-    'view-distance', 'tick-distance', 'level-name', 'level-seed',
-    'default-player-permission-level', 'texturepack-required',
-    'player-idle-timeout', 'content-log-file-enabled', 'compression-threshold',
-    'server-authoritative-movement', 'enable-lan-visibility', 'chat-restriction',
-    'disable-player-interaction'];
-
-  type Widget =
-    | { kind: 'enum'; options: string[] }
-    | { kind: 'number'; min: number; max: number | null }
-    | { kind: 'text' };
-
-  function widgetFor(entry: Entry): Widget {
-    if (BOOL_KEYS.has(entry.key)) return { kind: 'enum', options: ['true', 'false'] };
-    if (CHOICES[entry.key]) return { kind: 'enum', options: CHOICES[entry.key] };
-    if (NUMBERS[entry.key]) {
-      const [min, max] = NUMBERS[entry.key];
-      return { kind: 'number', min, max };
-    }
-    if (entry.value === 'true' || entry.value === 'false') {
-      return { kind: 'enum', options: ['true', 'false'] };
-    }
-    return { kind: 'text' };
+  const running = $derived($serverStatus?.status === 'running');
+  /** Keys changed while the server runs; BDS reads the file only at start. */
+  let pendingRestart = $state<string[]>([]);
+  let restarting = $state(false);
+  async function restartNow() {
+    restarting = true;
+    try {
+      await api.serverAction('restart');
+      pendingRestart = [];
+      addToast('Restarting the server to apply the changes', 'success');
+    } catch (e: any) { addToast(`Restart failed: ${e.message}`, 'error'); }
+    restarting = false;
   }
 
   // ─── port-forward advisor ────────────────────────────────────────────────
@@ -326,17 +292,24 @@
     }
     return null;
   }
-  let visible = $derived.by(() => {
+  const help = $derived(descriptions(properties));
+  /** Visible entries grouped by category, in file order within a group. */
+  let groups = $derived.by(() => {
     const q = query.trim().toLowerCase();
-    const rows = q
-      ? entries.filter(p => p.key.toLowerCase().includes(q) || p.value.toLowerCase().includes(q))
-      : [...entries];
-    const rank = (key: string) => {
-      const i = COMMON.indexOf(key);
-      return i === -1 ? COMMON.length : i;
-    };
-    return rows.sort((a, b) => rank(a.key) - rank(b.key));
+    const map = new Map<Category, Entry[]>();
+    for (const entry of entries) {
+      const spec = specFor(entry.key, entry.value, help.get(entry.key) ?? '');
+      const text = `${entry.key} ${entry.value} ${spec.summary} ${help.get(entry.key) ?? ''}`.toLowerCase();
+      if (q && !text.includes(q)) continue;
+      const list = map.get(spec.category) ?? [];
+      list.push(entry);
+      map.set(spec.category, list);
+    }
+    return CATEGORIES.filter((c) => map.has(c.id)).map((c) => ({ ...c, entries: map.get(c.id) ?? [] }));
   });
+  let visibleCount = $derived(groups.reduce((a, g) => a + g.entries.length, 0));
+  /** Known keys this file does not set yet (offered when adding). */
+  let suggestions = $derived(Object.keys(SCHEMA).filter((k) => !entries.some((e) => e.key === k)));
 </script>
 
 <div class="space-y-4">
@@ -356,6 +329,16 @@
 
   {#if loading}
     <div class="card py-3 text-xs text-deep-400 uppercase tracking-wider">Loading properties…</div>
+  {/if}
+
+  {#if pendingRestart.length && running}
+    <div class="card !py-3 flex flex-wrap items-center gap-3 border-l-4 border-l-yellow-400 text-xs">
+      <span class="text-yellow-200">{pendingRestart.length} change(s) apply after a restart: <span class="font-mono text-deep-300">{pendingRestart.join(', ')}</span></span>
+      <span class="flex-1"></span>
+      {#if $userPermissions.includes('SERVER_MANAGE')}
+        <button onclick={restartNow} disabled={restarting} class="btn-primary text-xs py-1.5 px-3 flex items-center gap-1.5"><RefreshCcw size={12} /> Restart now</button>
+      {/if}
+    </div>
   {/if}
 
   {#if advisor}
@@ -393,8 +376,11 @@
         <h2 class="card-header">Add Property</h2>
         <form class="flex flex-wrap items-center gap-2"
               onsubmit={(e) => { e.preventDefault(); void addProperty(); }}>
-          <input type="text" placeholder="key (e.g. education-feature)" bind:value={newKey}
+          <input type="text" placeholder="key (e.g. content-log-level)" bind:value={newKey} list="known-property-keys"
                  class="input flex-1 min-w-44 text-xs py-1.5 font-mono" />
+          <datalist id="known-property-keys">
+            {#each suggestions as k (k)}<option value={k}>{SCHEMA[k].summary}</option>{/each}
+          </datalist>
           <input type="text" placeholder="value" bind:value={newValue}
                  class="input flex-1 min-w-32 text-xs py-1.5" />
           <button type="submit" class="btn-primary flex items-center gap-2 text-xs"
@@ -412,63 +398,27 @@
       <div class="flex items-center justify-between flex-wrap gap-2">
         <h2 class="card-header">Properties</h2>
         <div class="flex items-center gap-2">
-          <span class="text-xs text-deep-400">{visible.length} of {entries.length}</span>
+          <span class="text-xs text-deep-400">{visibleCount} of {entries.length}</span>
           <div class="relative">
             <Search size={12} class="absolute left-2 top-1/2 -translate-y-1/2 text-deep-400" />
-            <input type="text" placeholder="Filter key or value…" bind:value={query}
+            <input type="text" placeholder="Search keys, values, descriptions…" bind:value={query}
                    class="input pl-7 w-56 text-xs py-1.5" />
           </div>
         </div>
       </div>
-      <div class="overflow-x-auto mt-2">
-        <table class="w-full text-xs">
-          <thead><tr class="text-deep-400 border-b border-deep-600/30 uppercase tracking-wider">
-            <th class="text-left py-2 px-3 font-medium w-72">Key</th>
-            <th class="text-left py-2 px-3 font-medium">Value</th>
-            <th class="text-left py-2 px-3 font-medium">Comment</th>
-          </tr></thead>
-          <tbody>
-            {#each visible as entry (entry.key + '#' + rowEpoch)}
-              {@const widget = widgetFor(entry)}
-              <tr class="border-b border-deep-700/20 hover:bg-deep-800/30">
-                <td class="py-1.5 px-3 font-mono text-bedrock-400 whitespace-nowrap">{entry.key}</td>
-                <td class="py-1.5 px-3 w-1/2">
-                  {#if !canEdit}
-                    <span>{entry.value}</span>
-                  {:else if widget.kind === 'enum'}
-                    <select value={entry.value}
-                            onchange={(e) => updateValue(entry.key, (e.target as HTMLSelectElement).value)}
-                            class="input w-full text-xs py-1">
-                      {#if !widget.options.includes(entry.value)}
-                        <option value={entry.value}>{entry.value} (current)</option>
-                      {/if}
-                      {#each widget.options as o}
-                        <option value={o}>{o}</option>
-                      {/each}
-                    </select>
-                  {:else if widget.kind === 'number'}
-                    <input type="number" value={entry.value}
-                           min={widget.min} max={widget.max ?? undefined}
-                           onchange={(e) => updateValue(entry.key, (e.target as HTMLInputElement).value)}
-                           class="input w-full text-xs py-1" />
-                  {:else}
-                    <input type="text" value={entry.value}
-                           onchange={(e) => updateValue(entry.key, (e.target as HTMLInputElement).value)}
-                           class="input w-full text-xs py-1" />
-                  {/if}
-                  {#if canEdit && hintFor(entry.key)}
-                    <p class="text-[10px] text-deep-400 mt-0.5">{hintFor(entry.key)}</p>
-                  {/if}
-                </td>
-                <td class="py-1.5 px-3 text-deep-400">{entry.inline_comment}</td>
-              </tr>
-            {:else}
-              <tr><td colspan="3" class="py-3 px-3 text-deep-400 text-center">
-                {query.trim() ? 'No entries match the filter.' : 'No properties found.'}
-              </td></tr>
+      <div class="mt-2 space-y-4">
+        {#each groups as g (g.id)}
+          <section>
+            <h3 class="text-[10px] uppercase tracking-widest text-deep-400 font-semibold px-3 pb-1 border-b border-deep-600/30">{g.label} <span class="font-normal">({g.entries.length})</span></h3>
+            {#each g.entries as entry (entry.key + '#' + rowEpoch)}
+              <PropertyRow name={entry.key} value={entry.value} spec={specFor(entry.key, entry.value, help.get(entry.key) ?? '')}
+                description={help.get(entry.key) ?? ''} hint={hintFor(entry.key)} {canEdit}
+                onchange={(v) => updateValue(entry.key, v)} />
             {/each}
-          </tbody>
-        </table>
+          </section>
+        {:else}
+          <p class="py-3 px-3 text-deep-400 text-center text-xs">{query.trim() ? 'No entries match the filter.' : 'No properties found.'}</p>
+        {/each}
       </div>
       <p class="mt-2 text-xs text-deep-400">
         Every entry saves to the instance's server.properties on change. Full-line comments and
