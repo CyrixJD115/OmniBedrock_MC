@@ -14,6 +14,7 @@ pub mod endstone;
 pub mod instances;
 mod journal;
 pub mod metrics;
+pub mod players;
 pub mod server;
 pub mod systemd;
 pub mod unit_helper;

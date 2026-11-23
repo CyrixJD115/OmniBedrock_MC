@@ -544,7 +544,7 @@
     "tags": [
      "players"
     ],
-    "summary": "Players currently online",
+    "summary": "Players currently online (reconciled with the list command) with xuid, session start and permission level",
     "x-permission": "PLAYERS_VIEW",
     "responses": {
      "200": {
@@ -558,18 +558,33 @@
     "tags": [
      "players"
     ],
-    "summary": "Kick / ban / pardon / op / deop a player",
+    "summary": "Kick / tell / ban / pardon / op / deop / permission / allowlist_add / allowlist_remove / forget. Console commands while running; allowlist.json and permissions.json are edited directly when stopped",
     "x-permission": "PLAYERS_KICK | PLAYERS_BAN | PLAYERS_OP (by action)",
     "requestBody": {
      "x-body": {
-      "action": "\"kick\"|\"ban\"|\"pardon\"|\"op\"|\"deop\"",
-      "target": "string",
-      "reason": "string? (kick only)"
+      "action": "kick|tell|ban|pardon|op|deop|permission|allowlist_add|allowlist_remove|forget",
+      "target": "player name",
+      "reason": "kick/ban reason or tell message (one line)",
+      "level": "visitor|member|operator (permission)"
      }
     },
     "responses": {
      "200": {
       "description": "{success, message}"
+     }
+    }
+   }
+  },
+  "/players/known": {
+   "get": {
+    "tags": [
+     "players"
+    ],
+    "summary": "Player history (first/last seen, sessions, playtime, xuid) plus allowlist.json, permissions.json, Endstone bans and related server.properties",
+    "x-permission": "PLAYERS_VIEW",
+    "responses": {
+     "200": {
+      "description": "{players, allowlist, operators, bans, allowlist_enabled, max_players, default_permission, running, bans_supported}"
      }
     }
    }

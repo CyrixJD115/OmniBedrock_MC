@@ -27,6 +27,7 @@ async fn inputs(s: &AppState, svc: &Arc<Instance>) -> compat::Inputs {
         .server
         .console
         .version()
+        .and_then(|v| v.split_whitespace().next().map(str::to_owned))
         .or_else(|| {
             installed
                 .as_ref()

@@ -1,5 +1,6 @@
 import type { ServerStatus, ServerActionResponse, Backup, AddonList, Addon, Player, PropertyEntry, WorldInfo, BackupSettings, SchedulerConfig, CommandEntry, IncludeItem, FolderEntry, BackendInfo, VersionRegistry, EndstoneRegistry, BroadcasterStatus, CfProject, StoreSearchResponse, StoreMeta, StoreFilesResponse, StoreInstallResponse, Instance, HostInfo, PluginFile, ExplorerListing, ApiKeyRecord, PackDelivery, BroadcasterJarInfo, PackCdnStatus, PackCdnTest } from '$types/index';
 import type { CompatReport } from '$types/compat';
+import type { OnlinePlayer, PlayersOverview, PlayerAction } from '$types/players';
 
 const API_BASE = '/api/v1';
 let authToken = '';
@@ -512,11 +513,12 @@ export const api = {
     `${API_BASE}/store/image?url=${encodeURIComponent(url)}`,
 
   // Players
-  listPlayers: () => request<{ players: Player[]; count: number }>('/players/'),
-  playerAction: (action: string, target: string, reason?: string) =>
-    request<{ success: boolean }>('/players/action', {
+  listPlayers: () => request<{ players: OnlinePlayer[]; count: number }>('/players/'),
+  knownPlayers: () => request<PlayersOverview>('/players/known'),
+  playerAction: (action: PlayerAction, target: string, extra: { reason?: string; level?: string; xuid?: string } = {}) =>
+    request<{ success: boolean; message: string }>('/players/action', {
       method: 'POST',
-      body: JSON.stringify({ action, target, reason: reason ?? '' }),
+      body: JSON.stringify({ action, target, reason: extra.reason ?? '', level: extra.level, xuid: extra.xuid }),
     }),
 
   // Worlds

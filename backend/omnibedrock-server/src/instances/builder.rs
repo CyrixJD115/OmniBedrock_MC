@@ -98,12 +98,14 @@ pub(super) async fn build_instance(
         instance_config.console_max_bytes,
         instance_config.console_journal_bytes,
     );
+    let state_dir = paths.state_dir.clone();
     let server = ServerManager::with_paths(
         instance_config.clone(),
         token.clone(),
         paths,
         launch_context(&record),
     )?;
+    let players = crate::players::Players::spawn(server.console.clone(), &state_dir, token.clone());
     let bds = Bds::new(instance_config.clone(), console.clone(), token.clone());
     let endstone = Endstone::new(instance_config.clone(), console.clone(), token.clone());
     // The default instance's broadcaster dir IS the panel dir, so its
@@ -139,6 +141,7 @@ pub(super) async fn build_instance(
         endstone,
         broadcaster,
         backups,
+        players,
         token,
         operations: Arc::new(tokio::sync::Mutex::new(())),
     });

@@ -235,38 +235,11 @@ pub(super) async fn dispatch_authenticated(
             s.require_for(u, "PLAYERS_VIEW", svc).await?;
             list_players(svc).await?
         }
-        ["players", "action"] if create => {
-            let action = value_string(b, "action")?;
-            s.require_for(
-                u,
-                match action {
-                    "kick" => "PLAYERS_KICK",
-                    "ban" | "pardon" => "PLAYERS_BAN",
-                    "op" | "deop" => "PLAYERS_OP",
-                    _ => return Err(ApiError::bad("Invalid player action")),
-                },
-                svc,
-            )
-            .await?;
-            let target = value_string(b, "target")?;
-            if target.contains(['\n', '\r', '\0', '"']) || target.is_empty() {
-                return Err(ApiError::bad("Invalid player name"));
-            }
-            let reason = optional_string(b, "reason", "");
-            let command = format!(
-                "{action} \"{target}\"{}",
-                if action == "kick" && !reason.is_empty() {
-                    format!(" {reason}")
-                } else {
-                    String::new()
-                }
-            );
-            svc.server
-                .send_command(&command)
-                .await
-                .map_err(|e| ApiError::conflict(e.to_string()))?;
-            success(format!("Sent '{command}' to server"))
+        ["players", "known"] if read => {
+            s.require_for(u, "PLAYERS_VIEW", svc).await?;
+            super::players::known(svc).await?
         }
+        ["players", "action"] if create => super::players::action(s, svc, u, b).await?,
         ["settings"] if read => {
             s.auth.require(u, "SETTINGS_VIEW").await?;
             let mut v = serde_json::to_value(s.config.as_ref()).map_err(anyhow::Error::from)?;

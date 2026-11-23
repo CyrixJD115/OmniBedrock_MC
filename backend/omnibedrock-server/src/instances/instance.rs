@@ -22,6 +22,8 @@ pub struct Instance {
     /// token cache, screenshots, and console under its broadcaster dir.
     pub broadcaster: Broadcaster,
     pub backups: Backups,
+    /// Join/leave history fed by the console (players.json).
+    pub players: crate::players::Players,
     pub token: CancellationToken,
     /// Serializes lifecycle operations (start/stop/install/backup) for this
     /// instance only; other instances are unaffected.
