@@ -43,6 +43,19 @@ pub(super) async fn backups(
             let backups = svc.backups.list(q.get("world").cloned(), false).await?;
             json!({"total":backups.len(),"backups":backups})
         }
+        ["backups", "trash"] if *m == Method::DELETE => {
+            s.require_for(u, "BACKUPS_DELETE", svc).await?;
+            let (files, bytes) = svc
+                .backups
+                .purge_trash(q.get("world").map(String::as_str), None)
+                .await?;
+            json!({"success": true, "files": files, "bytes": bytes,
+                   "message": format!("Permanently deleted {files} backup(s), freed {} MB", bytes / (1024 * 1024))})
+        }
+        ["backups", world, filename, "verify"] if create => {
+            s.require_for(u, "BACKUPS_VIEW", svc).await?;
+            svc.backups.verify(world, filename).await?
+        }
         ["backups", "trash"] if read => {
             s.require_for(u, "BACKUPS_VIEW", svc).await?;
             json!(svc.backups.list(q.get("world").cloned(), true).await?)
@@ -86,12 +99,17 @@ pub(super) async fn backups(
             let service = svc.backups.clone();
             let world = world.to_string();
             let filename = filename.to_string();
-            let message = format!(
-                "World '{world}' restored from '{filename}'. Server was stopped — start it manually when ready."
-            );
+            let start_after = b["start_after"].as_bool().unwrap_or(false);
+            let message = if start_after {
+                format!("World '{world}' restored from '{filename}' and the server is starting.")
+            } else {
+                format!(
+                    "World '{world}' restored from '{filename}'. The server was stopped; start it when ready."
+                )
+            };
             tokio::spawn(async move {
                 let _lock = lock;
-                service.restore_world(world, filename).await
+                service.restore_world(world, filename, start_after).await
             })
             .await
             .map_err(anyhow::Error::from)??;
@@ -137,7 +155,7 @@ pub(super) async fn backups(
         }
         ["backups", "scheduler"] if read => {
             s.require_for(u, "BACKUPS_VIEW", svc).await?;
-            svc.backups.settings()["auto"].clone()
+            svc.backups.scheduler_status()
         }
         ["backups", "scheduler"] if write => {
             s.require_for(u, "SETTINGS_EDIT", svc).await?;

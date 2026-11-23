@@ -392,20 +392,21 @@ export const api = {
 
   // Backups
   listWorlds: () => request<string[]>('/backups/worlds'),
-  listBackups: (world?: string) => request<{ backups: Backup[]; total: number }>(`/backups/${world ? `?world=${world}` : ''}`),
+  listBackups: (world?: string) => request<{ backups: Backup[]; total: number }>(`/backups/${world ? `?world=${encodeURIComponent(world)}` : ''}`),
   createBackup: (data: {
     world: string; tag?: string; full_backup?: boolean; zip_prefix?: string;
-    export_folder?: string; compression?: string; include_items?: string[]; dry_run?: boolean;
+    export_folder?: string; compression?: 'deflate' | 'store'; include_items?: string[]; dry_run?: boolean; verify?: boolean;
   }) =>
-    request<{ success: boolean; filename?: string }>('/backups/create', {
+    request<{ success: boolean; filename?: string | null; message: string }>('/backups/create', {
       method: 'POST',
       body: JSON.stringify(data),
     }),
   deleteBackup: (world: string, filename: string) =>
-    request<{ success: boolean }>(`/backups/${world}/${filename}`, { method: 'DELETE' }),
+    request<{ success: boolean }>(`/backups/${encodeURIComponent(world)}/${encodeURIComponent(filename)}`, { method: 'DELETE' }),
+  /** Move a trashed backup back into the list. */
   restoreBackup: (world: string, filename: string) =>
-    request<{ success: boolean }>(`/backups/restore/${world}/${filename}`, { method: 'POST' }),
-  listTrash: (world?: string) => request<Array<any>>(`/backups/trash${world ? `?world=${world}` : ''}`),
+    request<{ success: boolean }>(`/backups/restore/${encodeURIComponent(world)}/${encodeURIComponent(filename)}`, { method: 'POST' }),
+  listTrash: (world?: string) => request<Backup[]>(`/backups/trash${world ? `?world=${encodeURIComponent(world)}` : ''}`),
   downloadBackup: async (world: string, filename: string) => {
     const dt = await getDownloadToken();
     const url = `${API_BASE}/backups/${encodeURIComponent(world)}/${encodeURIComponent(filename)}/download?dt=${encodeURIComponent(dt)}&instance=${encodeURIComponent(activeInstance || 'default')}`;
@@ -416,10 +417,17 @@ export const api = {
     a.click();
     document.body.removeChild(a);
   },
-  restoreToWorld: (world: string, filename: string) =>
+  restoreToWorld: (world: string, filename: string, startAfter = false) =>
     request<{ success: boolean; message: string }>(`/backups/${encodeURIComponent(world)}/${encodeURIComponent(filename)}/restore-to-world`, {
       method: 'POST',
+      body: JSON.stringify({ start_after: startAfter }),
     }),
+  verifyBackup: (world: string, filename: string) =>
+    request<{ ok: boolean; entries?: number; bytes?: number; elapsed_ms?: number; error?: string }>(
+      `/backups/${encodeURIComponent(world)}/${encodeURIComponent(filename)}/verify`, { method: 'POST' }),
+  emptyTrash: (world?: string) =>
+    request<{ success: boolean; files: number; bytes: number; message: string }>(
+      `/backups/trash${world ? `?world=${encodeURIComponent(world)}` : ''}`, { method: 'DELETE' }),
   getBackupSettings: () => request<BackupSettings>('/backups/settings'),
   updateBackupSettings: (data: Partial<BackupSettings>) =>
     request<{ success: boolean }>('/backups/settings', {

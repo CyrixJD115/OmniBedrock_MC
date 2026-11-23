@@ -7,38 +7,73 @@ use uuid::Uuid;
 use walkdir::WalkDir;
 use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 
+use super::live::Snapshot;
 use super::types::BackupRequest;
 
+/// What one archive run wrote.
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ArchiveStats {
+    pub files: u64,
+    /// Uncompressed bytes written into the archive.
+    pub bytes: u64,
+    /// Files cut to the length `save query` reported (live backups).
+    pub truncated: u64,
+    /// LevelDB files present on disk but not part of the held snapshot.
+    pub skipped: u64,
+}
+
+fn collect_roots(source: &Path, r: &BackupRequest) -> Vec<std::path::PathBuf> {
+    if r.full_backup {
+        vec![source.to_path_buf()]
+    } else {
+        r.include_items
+            .as_ref()
+            .unwrap_or(&vec![])
+            .iter()
+            .map(|p| source.join(p))
+            .collect()
+    }
+}
+
+/// Zip `source` (a world folder) into `destination`. With a `snapshot` from
+/// `save query`, listed files are copied only up to their reported length and
+/// unlisted `db/` files are skipped, giving a consistent LevelDB image while
+/// the server keeps running. `progress(done, total)` reports bytes.
 pub(super) fn create_zip(
     source: &Path,
     destination: &Path,
     r: &BackupRequest,
-) -> anyhow::Result<()> {
+    snapshot: Option<&Snapshot>,
+    progress: &dyn Fn(u64, u64),
+) -> anyhow::Result<ArchiveStats> {
     ensure!(source.is_dir(), "World not found");
+    let roots = collect_roots(source, r);
+    let total: u64 = roots
+        .iter()
+        .flat_map(|root| WalkDir::new(root).follow_links(false).into_iter().flatten())
+        .filter(|e| e.file_type().is_file())
+        .filter_map(|e| e.metadata().ok())
+        .map(|m| m.len())
+        .sum();
     let temp = destination.with_extension(format!("{}.part", Uuid::new_v4()));
+    let mut stats = ArchiveStats::default();
     let result = || -> anyhow::Result<()> {
         let file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&temp)?;
-        let mut archive = ZipWriter::new(file);
-        let options =
-            SimpleFileOptions::default().compression_method(if r.compression == "deflate" {
+        let mut archive = ZipWriter::new(std::io::BufWriter::with_capacity(1 << 20, file));
+        let options = SimpleFileOptions::default()
+            .compression_method(if r.compression == "deflate" {
                 CompressionMethod::Deflated
             } else {
                 CompressionMethod::Stored
-            });
-        let roots = if r.full_backup {
-            vec![source.to_path_buf()]
-        } else {
-            r.include_items
-                .as_ref()
-                .unwrap_or(&vec![])
-                .iter()
-                .map(|p| source.join(p))
-                .collect()
-        };
+            })
+            .large_file(true);
+        let parent = source.parent().context("missing parent")?;
         let mut seen = std::collections::BTreeSet::new();
+        let mut last_report = 0u64;
+        progress(0, total);
         for root in roots {
             if !root.exists() {
                 continue;
@@ -50,31 +85,91 @@ pub(super) fn create_zip(
                     "Symlinks cannot be archived"
                 );
                 let path = entry.path();
-                let relative = path.strip_prefix(source.parent().context("missing parent")?)?;
-                let name = relative.to_string_lossy().replace('\\', "/");
+                let name = path
+                    .strip_prefix(parent)?
+                    .to_string_lossy()
+                    .replace('\\', "/");
                 if !seen.insert(name.clone()) {
                     continue;
                 }
                 if entry.file_type().is_dir() {
                     archive.add_directory(format!("{name}/"), options)?;
-                } else if entry.file_type().is_file() {
-                    archive.start_file(name, options)?;
-                    let mut file = std::fs::File::open(path)?;
-                    std::io::copy(&mut file, &mut archive)?;
+                    continue;
+                }
+                if !entry.file_type().is_file() {
+                    continue;
+                }
+                let in_world = path
+                    .strip_prefix(source)
+                    .map(|p| p.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_default();
+                let limit = snapshot.and_then(|s| s.get(&in_world).copied());
+                if snapshot.is_some() && limit.is_none() && in_world.starts_with("db/") {
+                    stats.skipped += 1;
+                    continue;
+                }
+                archive.start_file(name, options)?;
+                let mut input = std::fs::File::open(path)?;
+                let copied = match limit {
+                    Some(len) => {
+                        let on_disk = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                        if on_disk > len {
+                            stats.truncated += 1;
+                        }
+                        std::io::copy(&mut (&mut input).take(len), &mut archive)?
+                    }
+                    None => std::io::copy(&mut input, &mut archive)?,
+                };
+                stats.files += 1;
+                stats.bytes += copied;
+                if stats.bytes - last_report >= 8 * 1024 * 1024 {
+                    last_report = stats.bytes;
+                    progress(stats.bytes, total);
                 }
             }
         }
-        let file = archive.finish()?;
+        let writer = archive.finish()?;
+        let file = writer.into_inner().map_err(|e| e.into_error())?;
         file.sync_all()?;
         ensure!(!destination.exists(), "Backup destination already exists");
         std::fs::rename(&temp, destination)?;
+        progress(total, total);
         Ok(())
     }();
     if result.is_err() {
         let _ = std::fs::remove_file(&temp);
     }
-    result
+    result.map(|()| stats)
 }
+
+/// Read every entry back (the zip reader checks each CRC-32) and confirm the
+/// archive holds a restorable world. Returns (entries, uncompressed bytes).
+pub(super) fn verify_archive(archive: &Path, world: &str) -> anyhow::Result<(u64, u64)> {
+    let mut zip = ZipArchive::new(std::fs::File::open(archive)?)?;
+    let (mut entries, mut bytes) = (0u64, 0u64);
+    let mut has_world_data = false;
+    let mut sink = std::io::sink();
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i)?;
+        let name = entry.name().to_owned();
+        ensure!(
+            name.split('/').next() == Some(world),
+            "Entry {name} is outside the world folder"
+        );
+        if name == format!("{world}/level.dat") || name.starts_with(&format!("{world}/db/")) {
+            has_world_data = true;
+        }
+        bytes += std::io::copy(&mut entry, &mut sink)
+            .with_context(|| format!("{name} is corrupt (CRC or data error)"))?;
+        entries += 1;
+    }
+    ensure!(
+        has_world_data,
+        "Archive has no level.dat or db/ for {world}"
+    );
+    Ok((entries, bytes))
+}
+
 pub(super) fn restore_archive(archive: &Path, target: &Path, world: &str) -> anyhow::Result<()> {
     let mut zip = ZipArchive::new(std::fs::File::open(archive)?)?;
     let parent = target.parent().context("missing world root")?;
@@ -126,10 +221,10 @@ pub(super) fn restore_archive(archive: &Path, target: &Path, world: &str) -> any
             stage.join("level.dat").exists() || stage.join("db").is_dir(),
             "Archive is not a restorable world (missing level.dat/db)"
         );
+        // Hidden, so world listings and "all worlds" backups skip it.
         let previous = parent.join(format!(
-            "{world}.bak.{}.{}",
-            chrono::Utc::now().format("%Y%m%d-%H%M%S"),
-            Uuid::new_v4().simple()
+            ".{world}.pre-restore-{}",
+            chrono::Utc::now().format("%Y%m%d-%H%M%S")
         ));
         let existed = target.exists();
         if existed {

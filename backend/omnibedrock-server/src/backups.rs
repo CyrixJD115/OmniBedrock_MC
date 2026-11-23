@@ -3,8 +3,13 @@
 //! automatic runs.
 
 mod archive;
+mod hooks;
+mod live;
+mod schedule;
 mod service;
 mod settings;
+#[cfg(test)]
+mod tests;
 mod types;
 
 pub use service::Backups;

@@ -16,6 +16,8 @@ pub struct BackupRequest {
     pub include_items: Option<Vec<String>>,
     pub dry_run: bool,
     pub run_hooks: bool,
+    /// Re-read the finished archive (CRC check) before reporting success.
+    pub verify: bool,
 }
 impl Default for BackupRequest {
     fn default() -> Self {
@@ -29,6 +31,7 @@ impl Default for BackupRequest {
             include_items: None,
             dry_run: false,
             run_hooks: true,
+            verify: true,
         }
     }
 }

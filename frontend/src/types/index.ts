@@ -41,11 +41,32 @@ export interface Metrics {
   limits?: { memory_mb: number | null; cpus: number | null; enforcement: string };
 }
 
+export interface BackupMeta {
+  world: string;
+  tag: string;
+  created_at: string;
+  duration_ms: number;
+  /** Taken while the server ran (save hold + snapshot). */
+  live: boolean;
+  files: number;
+  bytes: number;
+  size_bytes: number;
+  truncated: number;
+  skipped: number;
+  compression: string;
+  full_backup: boolean;
+  verified: boolean | null;
+  verified_at?: string;
+  server_version: string | null;
+}
+
 export interface Backup {
   filename: string;
   world: string;
   size_bytes: number;
   modified: string;
+  kind: 'auto' | 'manual';
+  meta: BackupMeta | null;
 }
 
 export interface AddonList {
@@ -160,9 +181,17 @@ export interface SchedulerConfig {
   enabled: boolean;
   interval_minutes?: number;
   keep_count?: number;
+  /** Trash scheduled archives older than this (0 = off; newest always kept). */
+  keep_days?: number;
+  /** Permanently delete trash older than this (0 = never). */
+  trash_days?: number;
+  /** Skip worlds whose files did not change while the server was stopped. */
+  skip_if_idle?: boolean;
+  verify?: boolean;
   full_backup?: boolean;
-  compression?: string;
+  compression?: 'deflate' | 'store';
   worlds?: string[];
+  status?: { last_run: string | null; next_run: string | null; last_result: string | null; deferred: boolean };
 }
 
 export interface UserInfo {
